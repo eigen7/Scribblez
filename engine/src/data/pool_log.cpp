@@ -65,6 +65,13 @@ PoolOppRack pool_opp_rack(const belief::OppRackSummary& s) {
 
 }  // namespace
 
+belief::OppRackSummary opp_rack_summary(const PoolOppRack& r) {
+  return {.presence = r.presence,
+          .modelled = r.modelled != 0,
+          .leave_value_mean = r.leave_value_mean,
+          .leave_value_sd = r.leave_value_sd};
+}
+
 PoolSources PoolSources::of(const PoolFileHeader& h) {
   return {.leaf_model = get_model(h.leaf_model_hash, h.leaf_model_tag, h.leaf_model_generation,
                                   h.leaf_model_format_version),

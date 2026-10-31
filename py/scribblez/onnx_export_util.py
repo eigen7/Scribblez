@@ -85,16 +85,31 @@ def load_onnx_initializers(model: nn.Module, path: Path):
     model.load_state_dict(weights, strict=False)
 
 
-def architecture_signature(model: torch.nn.Module, opset: int) -> str:
-    """A fingerprint of the model's architecture, independent of its weights:
-    the module tree's repr plus the opset and torch/onnx versions, which all
-    shape the emitted graph.
+def architecture_signature(path: Path) -> str:
+    """A fingerprint of the exported graph at `path` without its weights: every
+    node (constants' values included), input and output, and each
+    initializer's name, type and shape, but not its values, nor the nodes'
+    own names (the tensors they write carry the names that matter).
 
     The C++ loaders key their engine-plan cache on it, so checkpoints of one
     architecture share a cached plan and load by refitting their own weights
-    onto it (engine/include/nn/trt_util.h)."""
-    components = [str(model), f"opset={opset}", torch.__version__, onnx.__version__]
-    return hashlib.md5("\n".join(components).encode()).hexdigest()
+    onto it (engine/include/nn/trt_util.h). It is taken from the graph, not
+    the module, because the refit matches weights and constants by name: an
+    exporter change that reorders the traced ops renames them, and a plan from
+    the old graph would take the new one's values under the wrong names.
+    The weights also decide which initializers undo_initializer_dedup
+    materializes, which moves them in the list and shifts the tracer's node
+    numbering, so initializers are taken in name order and node names
+    dropped."""
+    m = onnx.load(str(path), load_external_data=False)
+    weights = sorted((i.name, i.data_type, tuple(i.dims)) for i in m.graph.initializer)
+    del m.graph.initializer[:]
+    for node in m.graph.node:
+        node.ClearField("name")
+    m.ClearField("metadata_props")
+    h = hashlib.md5(m.SerializeToString(deterministic=True))
+    h.update(repr(weights).encode())
+    return h.hexdigest()
 
 
 def weight_fingerprint(model: torch.nn.Module) -> str:
@@ -352,7 +367,7 @@ def export_graph(
             postprocess(tmp_path)
         write_metadata(
             tmp_path,
-            {"model-architecture-signature": architecture_signature(graph, opset), **metadata},
+            {"model-architecture-signature": architecture_signature(tmp_path), **metadata},
         )
         inputs = _check_inputs(args, input_names, dynamic_axes)
         check_against_module(tmp_path, graph, inputs, input_names, output_names)

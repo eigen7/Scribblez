@@ -15,6 +15,7 @@ position's pre-move differential from its encoded row.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -27,13 +28,13 @@ from scribblez.ffi import (
     move_encoding_version,
     move_set_positions,
     score_diff_input_layout,
-    task_row_floats,
 )
 
 BOARD = 15
 
 __all__ = [
     "BOARD",
+    "batch_by_file",
     "batch_move_set_positions",
     "encode_moves",
     "gcg_cross_checks",
@@ -46,55 +47,63 @@ __all__ = [
 ]
 
 
-def batch_move_set_positions(
+def batch_by_file(
+    call: Callable[..., dict[str, np.ndarray]],
     slogs: list[Path],
     positions: list[tuple[int, int, int]],
     moves: list[np.ndarray],
-    equities: bool = False,
-    transposes: np.ndarray | None = None,
+    position_args: dict[str, np.ndarray | None],
+    position_keys: set[str],
 ) -> dict[str, np.ndarray]:
-    """move_set_positions for a batch whose positions span several .slog files.
+    """A one-file replay call (ffi.move_set_positions or
+    ffi.policy_set_positions) over a batch whose positions span several .slog
+    files.
 
     Position j is `positions[j]` = (file_id, game_index, turn_index), its
-    .slog `slogs[file_id]`, and its candidates `moves[j]`. One call per file;
-    "rows" follow the batch's position order, and "cells" / "letters" its
-    flattened moves, position-major, as do "equities" when asked for and
-    "moves", each position's candidates in its frame (transposed where
-    `transposes` is set)."""
+    .slog `slogs[file_id]`, and its candidates `moves[j]`. `call` runs once per
+    file as call(slog, games, turns, counts, moves, **args), each of
+    `position_args` (P, ...) sliced to the file's positions (None passes
+    through). Its outputs named in `position_keys` follow the batch's position
+    order; the others its flattened moves, position-major."""
     counts = np.array([len(m) for m in moves], dtype=np.int64)
     starts = np.cumsum(counts) - counts
-    total = int(counts.sum())
-    slots = move_cross_slots()
-    out = {
-        "rows": np.empty((len(positions), task_row_floats()), dtype=np.float32),
-        "cells": np.zeros((total, slots), dtype=np.int64),
-        "letters": np.zeros((total, slots * 26), dtype=np.uint8),
-    }
-    if equities:
-        out["equities"] = np.zeros(total, dtype=np.float32)
-    out["moves"] = np.concatenate(moves)
-    flips = None if transposes is None else np.asarray(transposes)
     by_file: dict[int, list[int]] = defaultdict(list)
     for j, (file_id, _, _) in enumerate(positions):
         by_file[file_id].append(j)
+    out: dict[str, np.ndarray] = {}
     for file_id, js in by_file.items():
-        got = move_set_positions(
+        got = call(
             slogs[file_id],
             np.array([positions[j][1] for j in js], dtype=np.int64),
             np.array([positions[j][2] for j in js], dtype=np.int64),
             counts[js],
             np.concatenate([moves[j] for j in js]),
-            equities=equities,
-            transposes=None if flips is None else flips[js],
+            **{k: None if v is None else np.asarray(v)[js] for k, v in position_args.items()},
         )
-        out["rows"][js] = got["rows"]
         move_rows = np.concatenate([np.arange(starts[j], starts[j] + counts[j]) for j in js])
-        out["cells"][move_rows] = got["cells"]
-        out["letters"][move_rows] = got["letters"]
-        if equities:
-            out["equities"][move_rows] = got["equities"]
-        if flips is not None:
-            out["moves"][move_rows] = got["moves"]
+        for key, value in got.items():
+            rows = js if key in position_keys else move_rows
+            total = len(positions) if key in position_keys else int(counts.sum())
+            if key not in out:
+                out[key] = np.zeros((total, *value.shape[1:]), dtype=value.dtype)
+            out[key][rows] = value
+    return out
+
+
+def batch_move_set_positions(
+    slogs: list[Path],
+    positions: list[tuple[int, int, int]],
+    moves: list[np.ndarray],
+    transposes: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """move_set_positions over a batch spanning several .slog files
+    (batch_by_file): "rows" in the batch's position order, and "cells",
+    "letters" and "moves" over its flattened moves, "moves" each position's
+    candidates in its frame (transposed where `transposes` is set)."""
+    out = batch_by_file(
+        move_set_positions, slogs, positions, moves, {"transposes": transposes}, {"rows"}
+    )
+    out.setdefault("moves", np.concatenate(moves))
     return out
 
 

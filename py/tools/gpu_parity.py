@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check that the engine's TensorRT inference matches PyTorch, for every model
 family: position evaluation, move set evaluation, move proposal, leave
-inference, and the DeepBot leaf eval; and that the GPU rollout kernel matches
-its CPU reference rollout for rollout, with the leaf eval rows it builds on
-the device.
+inference, the DeepBot leaf eval, and the policy-set model; and that the GPU
+rollout kernel matches its CPU reference rollout for rollout, with the leaf
+eval rows it builds on the device.
 
 py/tools/gpu_parity.py
 
@@ -42,6 +42,7 @@ FAMILIES = [
     ("test_proposal_inference_parity", ["scripts.move_set_eval.gen_proposal_parity_fixture"]),
     ("test_leave_inference_parity", ["scripts.leave_inference.gen_parity_fixture"]),
     ("test_leaf_eval_parity", ["scripts.deep_bot_leaf_eval.gen_parity_fixture"]),
+    ("test_policy_set_inference_parity", ["scripts.policy_set.gen_parity_fixture"]),
 ]
 # The rollout check: gpu_rollout_demo over a few candidates, with the leaf
 # family's fixture model, at an early, a middle and a late position (with

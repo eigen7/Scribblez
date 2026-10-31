@@ -322,8 +322,9 @@ void NeuralNetBase::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   const bool clean =
     parser_refitter->refitFromBytes(onnx_bytes.data(), onnx_bytes.size(), params.onnx_path.c_str());
   // TensorRT 10.11's parser-refitter can count one more ONNX weight than the
-  // engine has a slot for (an anonymous fusion product; the move-set graph has
-  // one), and then fails its own strict count on a refit that missed nothing.
+  // engine has a slot for (anonymous fusion products; the move-set graph has
+  // one, the policy-set graph four), and then fails its own strict count on a
+  // refit that missed nothing.
   // So a false return is tolerated when the engine reports no missing weights.
   //
   // Neither signal proves a refit complete: a deserialized plan already holds a

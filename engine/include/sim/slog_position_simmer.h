@@ -77,12 +77,8 @@ SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_set
 // variants of each other. High-value setups are highlighted. Never declines.
 SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays);
 
-// The policy-set model's label pool (docs/plans/deep_bot.md, "Labels"): every
-// legal play, every distinct exchange, and the pass, minus the blank moves (a
-// play that places the blank, or an exchange that returns it) that score
-// `blank_prune_points` or more below the greedy move, the highest-scoring
-// play. An exchange scores 0 under this rule. A blank multiplies the moves
-// through its designations; the prune keeps the ones that could be best.
+// The policy-set model's label pool (docs/plans/deep_bot.md, "Labels"):
+// policy_set::pool_candidates, the candidates PolicyBot chooses among too.
 // Never declines.
 SimCandidateSelector pool_selector(int blank_prune_points);
 

@@ -5,11 +5,13 @@
 
 import math
 import shutil
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import onnx
+import onnxruntime as ort
 import pytest
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
@@ -33,6 +35,7 @@ from scribblez.policy_set import (  # noqa: E402
     greedy,
     metrics,
     model,
+    onnx_export,
     policy,
     pools,
     slot,
@@ -44,6 +47,7 @@ from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
 from scribblez.workloads.worker import WorkerFatal  # noqa: E402
 
 LEAVES = Path("/workspace/mount/macondo/data/strategy/NWL23/leaves.klv2")
+EQUITY_FLOOR = ffi.format_layout()["constants"]["policy_set"]["equity_floor"]
 
 
 def _pool(q, win, rank, values=None) -> pools.Pool:
@@ -58,10 +62,7 @@ def _pool(q, win, rank, values=None) -> pools.Pool:
         game=0,
         turn=0,
         num_legal_moves=n,
-        opp_rack_presence=np.zeros(27, np.float32),
-        opp_leave_modelled=False,
-        opp_leave_value_mean=0.0,
-        opp_leave_value_sd=0.0,
+        opp_rack=np.zeros((), ffi.struct_dtype("PoolOppRack"))[()],
         moves=moves,
         win_prob=np.array(win, np.float32),
         paired_se=np.zeros(n, np.float32),
@@ -181,7 +182,7 @@ def test_the_equity_input_is_relative_to_each_pools_best(chunk):
     eq, pos_id = batch["move_equity"].numpy(), batch["move_pos_id"].numpy()
     for j in range(len(items)):
         mine = eq[pos_id == j]
-        assert mine.max() == 0 and mine.min() >= dataset.EQUITY_FLOOR
+        assert mine.max() == 0 and mine.min() >= EQUITY_FLOOR
         # The best equity is the pool's equity rank 0, where the pool has one.
         ranks = items[j].pool.equity_rank
         if (ranks == 0).any():
@@ -337,7 +338,8 @@ def _one_generation_setup(chunk, tmp_path, monkeypatch):
     staged = []
     monkeypatch.setattr(recorder, "deliver_staged", staged.append)
     ctx = {
-        "config": {**trainer.versions()},
+        "config": {**asdict(TINY), **trainer.versions()},
+        "tag": paths.tag,
         "sink": LocalSink(paths.root),
         "device": device,
         "batcher": dataset.PoolBatcher(),
@@ -384,6 +386,65 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
             assert key in record or int(key.rsplit("_", 1)[1]) > TINY.slots, key
     assert paths.rolling_checkpoint.exists()
     assert lifecycle.read_train_state(paths) == {"generation_index": 1, "rows_trained": 2}
+    # The policy form's export for PolicyBot, stamped with what it must match.
+    meta = {p.key: p.value for p in onnx.load(paths.onnx_path(0)).metadata_props}
+    assert (meta["graph"], meta["tag"], meta["generation"]) == ("policy_set", "t", "0")
+    assert meta["blank_prune_points"] == str(TINY.blank_prune_points)
+
+
+# The export inputs whose engine dtype differs from the batch's.
+_ENGINE_DTYPES = {
+    "move_letters": np.int32,
+    "move_squares": np.int32,
+    "move_cross_cells": np.int32,
+    "move_blanks": np.uint8,
+    "move_tile_mask": np.uint8,
+}
+
+
+def _engine_feed(batch: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:
+    """One position's batch as the engine stages it: the export's inputs in
+    their native dtypes (move_set_encoder.h), the equity a column."""
+    feed = {name: batch[name].numpy() for name in onnx_export.input_names()}
+    feed |= {name: feed[name].astype(dtype) for name, dtype in _ENGINE_DTYPES.items()}
+    feed["move_equity"] = feed["move_equity"].reshape(-1, 1)
+    return feed
+
+
+def test_the_export_scores_a_pool_as_the_policy_form_does(chunk, tmp_path):
+    """PolicyBot's graph, run on a pool's inputs as the engine stages them,
+    gives the policy form's own logits."""
+    torch.manual_seed(0)
+    m = trainer.build_models(only("policy"))["policy"].eval()
+    # The cross-check encoder's output starts at zero; perturbed, so its
+    # inputs are read.
+    with torch.no_grad():
+        for p in m.encoder.cross_check_encoder.out.parameters():
+            p.add_(0.1 * torch.randn_like(p))
+    path = tmp_path / "policy.onnx"
+    config = {**asdict(only("policy")), **trainer.versions()}
+    onnx_export.export_onnx(m, path, config, {"tag": "t", "generation": 0})
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    for item in dataset.read_items([chunk]):
+        batch = dataset.PoolBatcher().build([item])
+        with torch.no_grad():
+            want, _ = m(batch)
+        (got,) = session.run([onnx_export.OUTPUT], _engine_feed(batch))
+        np.testing.assert_allclose(got[:, 0], want[0].numpy(), rtol=1e-4, atol=1e-4)
+
+
+def test_a_checkpoint_exports_its_policy_form(chunk, tmp_path):
+    """The script's path: a rolling checkpoint's policy form, rebuilt from its
+    config, has the trained weights."""
+    torch.manual_seed(0)
+    models = trainer.build_models(only("policy"))
+    ckpt = {
+        "model_state_dict": models.state_dict(),
+        "config": {**asdict(only("policy")), **trainer.versions()},
+    }
+    rebuilt = onnx_export.policy_model(ckpt)
+    for name, value in models["policy"].state_dict().items():
+        assert torch.equal(rebuilt.state_dict()[name], value), name
 
 
 def test_a_non_finite_step_stops_the_trainer_before_its_checkpoint(chunk, tmp_path, monkeypatch):

@@ -3,10 +3,12 @@ data/pool_log.h, which owns the format) and the model inputs its positions
 replay to.
 
 A pool names its position by (game, turn) in the companion .slog, so the
-inputs are rebuilt by replay, as move_set_eval's are: ffi.move_set_positions
-returns each position's pre-move board row and its candidates' cross-check
-features. The pool lists the candidates, so no legal-move enumeration is
-needed. Pools are hidden-leaves only, so the FFI session must be in that arm
+inputs are rebuilt by replay, as move_set_eval's are. Training reads every
+input through ffi.policy_set_positions (dataset.py, over the engine's
+training/policy_set_inputs.h); pool_inputs here covers only the board row and
+the candidates' cross-check features, through ffi.move_set_positions. The pool
+lists the candidates, so no legal-move enumeration is needed. Pools are
+hidden-leaves only, so the FFI session must be in that arm
 (ffi.set_opp_leave_input(False), the default).
 """
 
@@ -26,17 +28,18 @@ PASS = ffi.format_layout()["constants"]["move_type"]["pass"]
 @dataclass
 class Pool:
     """One position's pool: its address in the .slog, the chooser's belief
-    about the opponent's rack as the sims drew it (engine
-    belief/opp_rack_summary.h), and per candidate (parallel arrays) the move
-    and its labels (engine sim/pool_labels.h)."""
+    about the opponent's rack as the sims drew it (its PoolOppRack record,
+    engine belief/opp_rack_summary.h's summary), and per candidate (parallel
+    arrays) the move and its labels (engine sim/pool_labels.h)."""
 
     game: int
     turn: int
     num_legal_moves: int
-    opp_rack_presence: np.ndarray  # (27,) float32, P(the rack holds at least one), by tile
-    opp_leave_modelled: bool  # the leave came from the leave inference model's belief
-    opp_leave_value_mean: float  # points; 0 unless modelled
-    opp_leave_value_sd: float
+    # presence (27,) float32, P(the rack holds at least one) by tile;
+    # modelled, whether the leave came from the leave inference model's
+    # belief; leave_value_mean and leave_value_sd, in points (0 unless
+    # modelled).
+    opp_rack: np.void
     moves: np.ndarray  # (M,) Move records
     win_prob: np.ndarray  # (M,) float32
     paired_se: np.ndarray  # (M,) float32, against the leader
@@ -103,10 +106,7 @@ def _pool(ph: np.void, rack: np.void, c: np.ndarray, values: np.ndarray) -> Pool
         game=int(ph["game_index"]),
         turn=int(ph["turn_index"]),
         num_legal_moves=int(ph["num_legal_moves"]),
-        opp_rack_presence=rack["presence"].copy(),
-        opp_leave_modelled=bool(rack["modelled"]),
-        opp_leave_value_mean=float(rack["leave_value_mean"]),
-        opp_leave_value_sd=float(rack["leave_value_sd"]),
+        opp_rack=rack.copy(),
         moves=c["move"].copy(),
         win_prob=c["win_prob"].copy(),
         paired_se=c["paired_se"].copy(),

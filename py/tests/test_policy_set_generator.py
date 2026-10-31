@@ -148,9 +148,10 @@ def test_a_chunk_labels_into_pools_that_read_back_as_model_inputs(surveyed_chunk
         assert len(pool.moves) > 1
         np.testing.assert_allclose(pool.q.sum(), 1.0, atol=1e-5)
         # Uniform beliefs: a full rack drawn uniformly, holding 1 to 7 kinds.
-        assert not pool.opp_leave_modelled and pool.opp_leave_value_mean == 0
-        assert ((pool.opp_rack_presence >= 0) & (pool.opp_rack_presence <= 1)).all()
-        assert 1 <= pool.opp_rack_presence.sum() <= 7
+        rack = pool.opp_rack
+        assert not rack["modelled"] and rack["leave_value_mean"] == 0
+        assert ((rack["presence"] >= 0) & (rack["presence"] <= 1)).all()
+        assert 1 <= rack["presence"].sum() <= 7
         # The stored rollout values are what each candidate's win_prob averages.
         assert len(pool.rollout_values) == pool.rollouts.sum()
         n = pool.rollouts.astype(np.int64)
@@ -185,15 +186,15 @@ def test_a_tool_failure_fails_the_cycle(tmp_path):
 
 
 def test_replayed_equities_order_the_pool_as_its_equity_ranks_do(surveyed_chunk):
-    """ffi.move_set_positions' equities are the pool's static equities: along
-    each pool's equity ranks they never increase."""
+    """ffi.policy_set_positions' equity inputs are the pool's static
+    equities: along each pool's equity ranks they never increase."""
     (slog,) = surveyed_chunk.glob("*.slog")
     _, read = pools.read_pools(slog.with_suffix(pools.SUFFIX))
     for pool in read:
-        got = ffi.move_set_positions(
+        got = ffi.policy_set_positions(
             slog, np.array([pool.game]), np.array([pool.turn]), np.array([len(pool.moves)]),
-            pool.moves, equities=True,
-        )["equities"]  # fmt: skip
+            pool.moves, np.array([pool.opp_rack]),
+        )["equity"]  # fmt: skip
         ranked = pool.equity_rank >= 0
         along = got[ranked][np.argsort(pool.equity_rank[ranked])]
-        assert (np.diff(along) <= 1e-4).all()
+        assert (np.diff(along) <= 1e-6).all()
