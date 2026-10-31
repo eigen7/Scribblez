@@ -34,24 +34,6 @@ void stage_call(NeuralNet<MoveSetEvaluationSpec>& net, const MoveSetEvaluationSp
   stage_board_row(net, batch.board_row, 0);
 }
 
-// One chunk of a per-move tensor, copied from the MoveFeatureArrays field its
-// descriptor names (kBatchSource).
-template <typename Tensor>
-void stage_move_rows(NeuralNet<MoveSetEvaluationSpec>& net,
-                     const move_set::MoveFeatureArrays& moves, int start, int rows) {
-  using Elem = typename Tensor::Elem;
-  const std::vector<Elem>& src = moves.*Tensor::kBatchSource;
-  std::memcpy(net.host<Tensor>(), src.data() + size_t(start) * Tensor::kRowElems,
-              sizeof(Elem) * rows * Tensor::kRowElems);
-}
-
-template <typename... Ts>
-void stage_move_tensors(NeuralNet<MoveSetEvaluationSpec>& net,
-                        const move_set::MoveFeatureArrays& moves, int start, int rows,
-                        TensorList<Ts...>) {
-  (stage_move_rows<Ts>(net, moves, start, rows), ...);
-}
-
 // Stage rows [start, start + chunk) of the batch.
 void stage_chunk(NeuralNet<PositionEvaluationSpec>& net, const PositionEvaluationSpec::Batch& batch,
                  int start, int chunk) {
