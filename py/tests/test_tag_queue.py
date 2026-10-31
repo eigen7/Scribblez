@@ -38,9 +38,9 @@ ENDS = {
 @pytest.fixture
 def queued(tmp_path, monkeypatch):
     """A TagQueue over a WorkerManager rooted at tmp_path (pool, queue and task
-    records under it), localhost in the pool (16 GiB), and tags listed only as
+    records under it), localhost in the pool (12 GiB), and tags listed only as
     the test creates them."""
-    monkeypatch.setattr(pool_mod, "local_hardware", lambda: Hardware(28, 1, 16.0))
+    monkeypatch.setattr(pool_mod, "local_hardware", lambda: Hardware(28, 1, 12.0))
     monkeypatch.setattr(pool_mod, "canonical_host", lambda h: h.split("@", 1)[-1].lower())
     manager = WorkerManager(tmp_path)
     created: list = []
@@ -143,12 +143,12 @@ def _placement(manager) -> tuple:
 
 def test_a_tag_that_does_not_fit_waits_with_its_reason(queued):
     q, manager, make = queued
-    make("big", match_every_generations=5)  # trainer + match eval: 16.6 GiB > 14.5
+    make("big", match_every_generations=5)  # trainer + match eval: 13.6 GiB > 12
     q.enqueue("position_eval", "big", confirm=True)
     q.tick()
     assert _lease(manager) is None
     (row,) = q.status()["entries"]
-    assert "needs 16.6 GiB" in row["refusals"]["localhost"]
+    assert "needs 13.6 GiB" in row["refusals"]["localhost"]
 
 
 def test_a_busy_machine_is_not_placed_on(queued):
@@ -463,9 +463,9 @@ def test_a_hand_placed_trainer_is_checked_against_the_pool_machine(queued):
     """The asus-laptop OOM by hand: the same measured need refuses a slot the
     machine cannot fit. An unmeasured configuration is not refused."""
     q, manager, make = queued
-    _local_gpu(manager, 13.0)  # < 14.03
+    _local_gpu(manager, 10.0)  # < 11.03
     task = make("hand")
-    with pytest.raises(AssertionError, match="would need 14.0 GiB"):
+    with pytest.raises(AssertionError, match="would need 11.0 GiB"):
         manager.add_local(SPEC, task, "train", None)
     _local_gpu(manager, 16.0)
     manager.add_local(SPEC, task, "train", None)
@@ -626,7 +626,7 @@ def test_a_hand_placed_trainer_counts_other_tags_on_the_gpu(queued):
     w = manager.add_local(SPEC, first, "train", None)
     w.desired_state = "running"
     second = make("second")
-    with pytest.raises(AssertionError, match="would need 28.1 GiB"):
+    with pytest.raises(AssertionError, match="would need 22.1 GiB"):
         manager.add_local(SPEC, second, "train", None)
     w.desired_state = "paused"
     manager.add_local(SPEC, second, "train", None)
@@ -649,7 +649,7 @@ def test_the_plan_shows_the_roles_and_each_machines_slots(queued):
     make("b", match_every_generations=5)
     plan = q.plan("position_eval", "b")
     assert plan["roles"] == ["train", "generate", "match_eval"]
-    assert "needs 16.6 GiB" in plan["machines"][0]["refusal"]
+    assert "needs 13.6 GiB" in plan["machines"][0]["refusal"]
     q.enqueue("position_eval", "a", confirm=True)
     manager.remove_pool_machine("localhost")
     assert q.plan("position_eval", "a")["machines"] == []  # still answers once queued
@@ -661,7 +661,7 @@ def test_an_ssh_machine_added_after_enqueueing_gets_the_tag_built(queued, monkey
     build, or the tag waits on 'its bundle is none' forever."""
     q, manager, make = queued
     monkeypatch.setattr(q, "_submit_build", lambda spec, task, e, pool: None)
-    make("a", match_every_generations=5)  # 16.6 GiB: not localhost's 16
+    make("a", match_every_generations=5)  # 13.6 GiB: not localhost's 12
     q.enqueue("position_eval", "a", confirm=True)
     assert manager.queue_store.load().entry("position_eval", "a").bundle == queue_mod.BUNDLE_NONE
     q.tick()
