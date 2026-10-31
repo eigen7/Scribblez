@@ -40,55 +40,35 @@ po::options_description policybot_options(PolicyBot::Params& p) {
   return desc;
 }
 
-// The leave inference generation `meta` says the model's pools drew their
-// beliefs from, as an identity to compare; an empty tag for uniform beliefs.
-nn::ModelIdentity trained_leave_model(const nn::OnnxMetadata& meta) {
+PolicyBot::TrainedOn trained_on(const nn::OnnxMetadata& meta) {
   const auto tag = meta.entries.find(kLeaveTagKey);
-  return {.hash = {},
-          .tag = tag == meta.entries.end() ? std::string() : tag->second,
-          .generation = meta.int_entry(kLeaveGenerationKey, -1)};
+  return {.blank_prune_points = meta.int_entry(kBlankPruneKey, -1),
+          .leave_model = {.hash = {},
+                          .tag = tag == meta.entries.end() ? std::string() : tag->second,
+                          .generation = meta.int_entry(kLeaveGenerationKey, -1)}};
 }
 
-// The leave model `p` names, checked against the one the model trained on.
-belief::AgentLeaveModel leave_model(const PolicyBot::Params& p, const nn::ModelIdentity& trained) {
-  if (trained.tag.empty()) {
-    if (!p.leave_inference.empty()) {
-      throw util::CleanException("policybot: {} trained on uniform beliefs; drop --leave-inference",
-                                 p.service.model);
-    }
-    return {};
-  }
-  if (p.leave_inference.empty()) {
-    throw util::CleanException(
-      "policybot: {} trained on the beliefs of leave_inference tag {} generation {}; pass "
-      "--leave-inference=<that export>",
-      p.service.model, trained.tag, trained.generation);
-  }
-  belief::AgentLeaveModel leave =
-    belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
-  if (leave.identity.tag != trained.tag || leave.identity.generation != trained.generation) {
-    throw util::CleanException(
-      "policybot: {} is leave_inference tag {} generation {}, but {} trained on generation {} "
-      "of tag {}",
-      p.leave_inference, leave.identity.tag, leave.identity.generation, p.service.model,
-      trained.generation, trained.tag);
-  }
-  return leave;
+// The --leave-inference export's identity, read from its file without
+// building its engine.
+nn::ModelIdentity leave_identity(const PolicyBot::Params& p) {
+  return nn::read_model_identity(p.leave_inference, "leave_inference_format_version");
 }
 
 PolicyBot::Backend make_backend(const PolicyBot::Params& p) {
   if (p.service.model.empty()) throw util::CleanException("policybot: --model is required");
-  // Metadata first, so a mismatch fails before the TensorRT engine build.
-  const nn::OnnxMetadata meta = nn::parse_onnx_metadata(util::read_file_bytes(p.service.model));
+  const PolicyBot::TrainedOn trained =
+    trained_on(nn::parse_onnx_metadata(util::read_file_bytes(p.service.model)));
+  const nn::ModelIdentity leave =
+    p.leave_inference.empty() ? nn::ModelIdentity{} : leave_identity(p);
+  PolicyBot::check_trained_on(p, trained, p.leave_inference.empty() ? nullptr : &leave);
   PolicyBot::Backend b;
-  b.blank_prune_points = meta.int_entry(kBlankPruneKey, -1);
-  if (b.blank_prune_points < 0) {
-    throw util::CleanException("policybot: {} records no {}; is it a policy_set export?",
-                               p.service.model, kBlankPruneKey);
+  b.blank_prune_points = trained.blank_prune_points;
+  if (!p.leave_inference.empty()) {
+    belief::AgentLeaveModel model =
+      belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
+    b.predict = std::move(model.predict);
+    b.table = std::move(model.table);
   }
-  belief::AgentLeaveModel leave = leave_model(p, trained_leave_model(meta));
-  b.predict = std::move(leave.predict);
-  b.table = std::move(leave.table);
   b.policy = nn::PolicySetEvalService::create(p.service.net_params<nn::PolicySetSpec>(0));
   return b;
 }

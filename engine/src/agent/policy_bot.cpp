@@ -24,12 +24,6 @@ const Dictionary& require_dict(const Dictionary* dict) {
   return *dict;
 }
 
-bool all_finite(const std::vector<float>& xs) {
-  for (float x : xs)
-    if (!std::isfinite(x)) return false;
-  return true;
-}
-
 InputEncodingSpec hidden_leaves_spec(const Dictionary& dict, const PolicyBot::Backend& backend) {
   if (!backend.policy) throw util::Exception("policybot: a policy-set model is required");
   InputEncodingSpec spec = derive_input_spec(dict, *backend.policy, "policybot");
@@ -39,7 +33,42 @@ InputEncodingSpec hidden_leaves_spec(const Dictionary& dict, const PolicyBot::Ba
   return spec;
 }
 
+// Throws unless `leave` (nullptr without --leave-inference) is the leave model
+// `trained` names.
+void check_leave_model(const PolicyBot::Params& p, const nn::ModelIdentity& trained,
+                       const nn::ModelIdentity* leave) {
+  if (trained.tag.empty()) {
+    if (leave != nullptr) {
+      throw util::CleanException("policybot: {} trained on uniform beliefs; drop --leave-inference",
+                                 p.service.model);
+    }
+    return;
+  }
+  if (leave == nullptr) {
+    throw util::CleanException(
+      "policybot: {} trained on the beliefs of leave_inference tag {} generation {}; pass "
+      "--leave-inference=<that export>",
+      p.service.model, trained.tag, trained.generation);
+  }
+  if (leave->tag != trained.tag || leave->generation != trained.generation) {
+    throw util::CleanException(
+      "policybot: {} is leave_inference tag {} generation {}, but {} trained on generation {} "
+      "of tag {}",
+      p.leave_inference, leave->tag, leave->generation, p.service.model, trained.generation,
+      trained.tag);
+  }
+}
+
 }  // namespace
+
+void PolicyBot::check_trained_on(const Params& p, const TrainedOn& trained,
+                                 const nn::ModelIdentity* leave) {
+  if (trained.blank_prune_points < 0) {
+    throw util::CleanException("policybot: {} records no blank prune; is it a policy_set export?",
+                               p.service.model);
+  }
+  check_leave_model(p, trained.leave_model, leave);
+}
 
 PolicyBot::PolicyBot(const Params& params, Backend backend)
     : Agent(params.thread_id, params.name),
@@ -104,7 +133,8 @@ size_t PolicyBot::best_candidate() {
   logits_.resize(size_t(candidates_.count()));
   float* const head_out[] = {logits_.data()};
   backend_.policy->evaluate({board_row_.data(), opp_rack_.data(), &candidates_}, head_out);
-  if (!all_finite(logits_)) throw util::Exception("policybot: the model gave a non-finite logit");
+  if (!std::ranges::all_of(logits_, [](float x) { return std::isfinite(x); }))
+    throw util::Exception("policybot: the model gave a non-finite logit");
   return size_t(std::max_element(logits_.begin(), logits_.end()) - logits_.begin());
 }
 

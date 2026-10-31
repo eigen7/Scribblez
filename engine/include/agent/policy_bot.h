@@ -24,6 +24,7 @@
 #include "encoding/input_encoder.h"
 #include "lexicon/leave_value_arrays.h"
 #include "nn/eval_service.h"
+#include "nn/onnx_metadata.h"
 #include "training/policy_set_inputs.h"
 
 #include <boost/program_options/options_description.hpp>
@@ -66,6 +67,23 @@ class PolicyBot : public Agent {
     belief::LeaveParamsFn predict;
     std::shared_ptr<const LeaveValueArrays> table;
   };
+
+  // What the model's export metadata says its pools were built with: the
+  // blank prune they were cut with (-1 for an export without it), and the
+  // leave inference generation they drew their beliefs from (an empty tag for
+  // uniform beliefs).
+  struct TrainedOn {
+    int blank_prune_points = -1;
+    nn::ModelIdentity leave_model;
+  };
+
+  // Throws util::CleanException unless `p` can play the model `trained`
+  // describes: the export records a blank prune, and `leave`, the identity of
+  // p.leave_inference's export (nullptr when p names none), is the leave
+  // inference generation the model trained on. The factory runs it before
+  // building either TensorRT engine.
+  static void check_trained_on(const Params& p, const TrainedOn& trained,
+                               const nn::ModelIdentity* leave);
 
   // Builds the backend Params names (policy_bot_factory.cpp, which reaches
   // CUDA and TensorRT).

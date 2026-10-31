@@ -27,6 +27,7 @@
 #include "sim/slog_position_simmer.h"
 #include "temp_dir.h"
 #include "training/policy_set_inputs.h"
+#include "util/exception.h"
 #include "util/io.h"
 #include "util/progress.h"
 
@@ -38,6 +39,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace scribblez;
@@ -66,16 +68,18 @@ struct ScoredPosition {
 
 // A scripted policy-set model that keeps its inputs. Its logits favour
 // candidate `favourite` (the first when the pool is shorter), or follow
-// `logits` when set; it declares the hidden-leaves layout.
+// `logits` when set; it declares the hidden-leaves layout, or the face-up one
+// with `face_up`.
 class StubPolicySetService : public nn::PolicySetEvalService {
  public:
   int favourite = 1;
+  bool face_up = false;
   std::vector<float> logits;
   std::vector<ScoredPosition> calls;
 
-  bool opp_leave_input() const override { return false; }
+  bool opp_leave_input() const override { return face_up; }
   int spatial_planes() const override { return scribblez::spatial_planes(); }
-  int scalar_floats() const override { return scribblez::scalar_floats({nullptr}); }
+  int scalar_floats() const override { return scribblez::scalar_floats({nullptr, face_up}); }
 
  protected:
   void do_evaluate(const SpecBatch& batch, std::span<float* const> head_out) override;
@@ -284,4 +288,87 @@ TEST_F(PolicyBotTest, RefusesAFaceUpOpponentRack) {
   const Rack opp = Rack::from_string("EO");
   const MoveRequest req{board, dict_, rack, opp, 0, 0, /*bag_size=*/86};
   EXPECT_THROW(bot.make_move(req), std::exception);
+}
+
+TEST_F(PolicyBotTest, RefusesANonFiniteLogit) {
+  PolicyBot bot = make_bot();
+  bot.begin_game({});
+  const Board board;
+  const Rack rack = Rack::from_string("AERSTIN");
+  const Rack hidden;
+  const MoveRequest req{board, dict_, rack, hidden, 0, 0, /*bag_size=*/86};
+  const size_t pool =
+    policy_set::pool_candidates(equity_top_k(req, std::numeric_limits<int>::max()), kBlankPrune)
+      .moves.size();
+  stub_->logits.assign(pool, 0.0f);
+  stub_->logits[1] = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_THROW(bot.make_move(req), util::Exception);
+}
+
+TEST_F(PolicyBotTest, RefusesAFaceUpLeavesModel) {
+  auto stub = std::make_shared<StubPolicySetService>();
+  stub->face_up = true;
+  PolicyBot::Backend backend;
+  backend.policy = stub;
+  backend.blank_prune_points = kBlankPrune;
+  PolicyBot::Params params;
+  params.dict = &dict_;
+  EXPECT_THROW(PolicyBot(params, std::move(backend)), util::CleanException);
+}
+
+namespace {
+
+// The factory's metadata checks, on what it reads before building an engine:
+// a PolicyBot naming a model and a leave inference export, and models trained
+// on uniform beliefs and on the beliefs of tag "li" generation 7.
+PolicyBot::Params named_params() {
+  PolicyBot::Params p;
+  p.service.model = "policy.onnx";
+  p.leave_inference = "leave.onnx";
+  return p;
+}
+
+nn::ModelIdentity leave_model(const std::string& tag, int generation) {
+  nn::ModelIdentity id;
+  id.tag = tag;
+  id.generation = generation;
+  return id;
+}
+
+PolicyBot::TrainedOn trained_on(const nn::ModelIdentity& leave) {
+  PolicyBot::TrainedOn t;
+  t.blank_prune_points = kBlankPrune;
+  t.leave_model = leave;
+  return t;
+}
+
+}  // namespace
+
+TEST(PolicyBotTrainedOn, AcceptsTheLeaveModelItTrainedOn) {
+  const nn::ModelIdentity leave = leave_model("li", 7);
+  EXPECT_NO_THROW(PolicyBot::check_trained_on(named_params(), trained_on(leave), &leave));
+  EXPECT_NO_THROW(PolicyBot::check_trained_on(named_params(), trained_on({}), nullptr));
+}
+
+TEST(PolicyBotTrainedOn, RefusesAnotherLeaveModelGeneration) {
+  const PolicyBot::TrainedOn trained = trained_on(leave_model("li", 7));
+  const nn::ModelIdentity other_generation = leave_model("li", 8);
+  const nn::ModelIdentity other_tag = leave_model("other", 7);
+  EXPECT_THROW(PolicyBot::check_trained_on(named_params(), trained, &other_generation),
+               util::CleanException);
+  EXPECT_THROW(PolicyBot::check_trained_on(named_params(), trained, &other_tag),
+               util::CleanException);
+}
+
+TEST(PolicyBotTrainedOn, RefusesAMissingOrUnwantedLeaveModel) {
+  const nn::ModelIdentity leave = leave_model("li", 7);
+  EXPECT_THROW(PolicyBot::check_trained_on(named_params(), trained_on(leave), nullptr),
+               util::CleanException);
+  EXPECT_THROW(PolicyBot::check_trained_on(named_params(), trained_on({}), &leave),
+               util::CleanException);
+}
+
+TEST(PolicyBotTrainedOn, RefusesAnExportWithoutABlankPrune) {
+  EXPECT_THROW(PolicyBot::check_trained_on(named_params(), PolicyBot::TrainedOn{}, nullptr),
+               util::CleanException);
 }
