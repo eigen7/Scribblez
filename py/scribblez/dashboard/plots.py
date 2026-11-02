@@ -386,10 +386,6 @@ POLICY_SET_QUALITY = (
             "Policy form: stakes-weighted cross-entropy against q (held-out)",
             ["policy_eval_stakes_ce"],
         ),
-        (
-            "ms to build 256 sets of 8",
-            ["slot_eval_set_ms", "greedy_eval_set_ms", "policy_eval_set_ms"],
-        ),
         # Per form: each form's gradient is clipped on its own.
         (
             "Gradient norm before clipping, by form",
