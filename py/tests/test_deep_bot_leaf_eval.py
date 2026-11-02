@@ -25,6 +25,7 @@ from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
     SCALAR_FEATURES,
     LeafEvalModel,
     LeafEvalShape,
+    OwnershipHead,
     SquarePointsHead,
 )
 from scribblez.leave_inference import win_table  # noqa: E402
@@ -169,6 +170,32 @@ def test_square_points_loss_reads_only_empty_squares():
     empty = 225 - 2
     assert reported["square_points_mean"].item() == pytest.approx(0.3**2 / empty)
     assert reported["square_points_var"].item() == pytest.approx(0.3**4 / empty)
+
+
+def test_ownership_loss_and_square_sums_read_only_empty_squares():
+    """The training cross-entropy and the eval's per-row sums average and sum
+    over the empty squares; a filled square's confidently wrong prediction
+    counts for nothing."""
+    fate = torch.full((1, 15, 15), 4.0)
+    fate[0, 0, :2] = FILLED
+    points = torch.zeros(1, 15, 15)
+    points[0, 1, 1] = 30.0
+    logits = torch.zeros(1, 5, 15, 15)
+    logits[0, 1:, 0, :2] = 50.0  # filled squares: every class but 0, gathered there
+    square_points = torch.zeros(1, 2, 15, 15)
+    square_points[0, 1] = 1.0 / POINTS_SCALE**2  # variance of 1 point squared
+    square_points[0, :, 0, :2] = 9.0
+    targets = {"ownership": fate, "square_points": points}
+    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    ce = OwnershipHead(8).loss({"ownership": logits}, targets, cfg).reported["ownership"]
+    assert ce.item() == pytest.approx(np.log(5))
+    out = {"ownership": logits, "square_points": square_points}
+    sums = evaluation._square_sums(out, targets)
+    empty = 225 - 2
+    assert sums["empty_squares"][0] == empty
+    assert sums["own_nll_sum"][0] == pytest.approx(empty * np.log(5))
+    assert sums["points_sq_err_sum"][0] == pytest.approx(30.0**2)
+    assert sums["points_var_sum"][0] == pytest.approx(empty * 1.0)
 
 
 def test_expected_score_logloss():

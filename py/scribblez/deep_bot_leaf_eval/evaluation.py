@@ -70,6 +70,11 @@ def expected_score_logloss(expected: np.ndarray, outcome: np.ndarray) -> np.ndar
     return -(outcome * np.log(e) + (1 - outcome) * np.log(1 - e))
 
 
+def _empty_sum(per_square: torch.Tensor, empty: torch.Tensor) -> np.ndarray:
+    """Per row, the sum of (B, 15, 15) `per_square` over the empty squares."""
+    return (per_square * empty).sum(dim=(1, 2)).numpy()
+
+
 def _square_sums(out: dict, raw: dict) -> dict[str, np.ndarray]:
     """Per row, the per-square heads' sums over its empty squares: the
     ownership NLL, the points mean's squared error and the predicted variance
@@ -78,17 +83,12 @@ def _square_sums(out: dict, raw: dict) -> dict[str, np.ndarray]:
     empty = fate != FILLED
     log_probs = torch.log_softmax(out["ownership"].float().cpu(), dim=1)
     nll = -log_probs.gather(1, fate.clamp(min=0)[:, None])[:, 0]
-    mean, var = (out["square_points"].float().cpu() * POINTS_SCALE).unbind(dim=1)
-    var = var * POINTS_SCALE
-    sq_err = (mean - raw["square_points"]) ** 2
-
-    def total(per_square: torch.Tensor) -> np.ndarray:
-        return (per_square * empty).sum(dim=(1, 2)).numpy()
-
+    mean, var = out["square_points"].float().cpu().unbind(dim=1)
+    sq_err = (mean * POINTS_SCALE - raw["square_points"]) ** 2
     return {
-        "own_nll_sum": total(nll),
-        "points_sq_err_sum": total(sq_err),
-        "points_var_sum": total(var),
+        "own_nll_sum": _empty_sum(nll, empty),
+        "points_sq_err_sum": _empty_sum(sq_err, empty),
+        "points_var_sum": _empty_sum(var * POINTS_SCALE**2, empty),
         "empty_squares": empty.sum(dim=(1, 2)).numpy(),
     }
 
