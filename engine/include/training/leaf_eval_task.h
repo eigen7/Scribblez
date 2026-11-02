@@ -1,12 +1,14 @@
 #pragma once
 
 // The DeepBot leaf evaluation training task: a post-move row from the mover's
-// side, LeafEvalInputEncoder's input, labelled with the game's outcome. The
-// mover's leave is their rack before drawing, and the opponent's is what they
-// kept at their last move, so the row is a rollout leaf: the opponent's draw
-// after that move is back in the pool, a uniform draw from it like the refill
-// the model averages over. Before the opponent's first move their leave is
-// empty and their whole rack is that draw.
+// side, LeafEvalInputEncoder's input, labelled with the game's outcome and
+// each empty square's fate over the rest of the game, which the task declares
+// kRecordsSquareFates to receive (encoding/square_fates.h). The mover's leave
+// is their rack before drawing, and the opponent's is what they kept at their
+// last move, so the row is a rollout leaf: the opponent's draw after that move
+// is back in the pool, a uniform draw from it like the refill the model
+// averages over. Before the opponent's first move their leave is empty and
+// their whole rack is that draw.
 //
 // The static leave values are HastyBot's (HastyEquity), the rollout policy's.
 
