@@ -32,13 +32,15 @@ moved on. New plans go here, not in `docs/` proper.
   inform any decision. Built as a learned reader over fixed probes first
   (gated against shrinkage on face-up leaves, then repeated in standard
   Scrabble), then learned move choices, then learned draws.
-- **[deep_bot.md](deep_bot.md)**: *proposed, not built.* A two-level
+- **[deep_bot.md](deep_bot.md)**: *proposed, partly built.* A two-level
   simulation agent for standard Scrabble. For each candidate and each sampled
   opponent rack, the opponent's reply is chosen in a subtree run on the
-  opponent's own beliefs, over a diverse candidate set from a policy-set model
-  that picks N moves to maximize the expected best value. Mechanical
-  continuations, solved endgames, and a generational rack-inference network.
-  Starts with policy-set labels and policy-set recall.
+  opponent's own beliefs. Sims are two mechanical moves ending at a leaf
+  network, with racks from a generational leave inference model. Each sim's
+  residuals against a search network (value, per-square ownership and
+  points, and the opponent's searched reply) are read by a reader that
+  steers which moves get sims, across racks and candidates, and budgets
+  the opponent's subtrees.
 - **[deep_bot_v0.md](deep_bot_v0.md)**: *proposed, not built.* The
   implementation plan for DeepBot's first two models, trained from
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave
