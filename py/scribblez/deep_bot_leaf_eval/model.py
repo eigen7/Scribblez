@@ -30,7 +30,12 @@ leave values and the pool size.
 each trunk.
 
 Outputs, with position_eval's heads and losses: wld (B, 3) logits, the value
-used at inference, and score_diff (B, 2) [mean, std].
+used at inference, and score_diff (B, 2) [mean, std]. Two per-square heads read
+the trunk's cell features: ownership (B, 5, 15, 15) logits over what becomes of
+each empty square (engine encoding/square_fates.h), and square_points
+(B, 2, 15, 15), the mean and variance of the signed points of the move that
+fills it. docs/plans/deep_bot.md ("The search network") gives their purpose:
+sims complete their maps with them, and residuals against them are evidence.
 """
 
 from dataclasses import dataclass
@@ -40,7 +45,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
-from scribblez.position_eval.model import HeadedModel, ScoreDiffHead, WldHead
+from scribblez.position_eval.model import (
+    Head,
+    HeadedModel,
+    HeadLoss,
+    LossConfig,
+    ScoreDiffHead,
+    WldHead,
+)
 from scribblez.spatial_trunk import SpatialTrunk, mean_max_pool
 from scribblez.supply_registers import N_TILES, TILE_COUNTS
 from scribblez.trunk_arms import TRUNK_TRANSFORMER
@@ -54,6 +66,11 @@ SEAT_FEATURES = 2 * NUM_SEATS * N_TILES  # normalized counts, then zero flags
 SCALAR_FEATURES = SEAT_FEATURES + GLOBAL_SCALARS
 # The transformer's MLP hidden width, as a multiple of its width.
 MLP_RATIO = 3
+SQUARE_FATE_CLASSES = 5
+# A filled square's ownership label: it has no fate to predict.
+FILLED = -1
+# Points are learned in units of 100, the row's score-differential scale.
+POINTS_SCALE = 100.0
 
 
 @dataclass(frozen=True)
@@ -107,8 +124,8 @@ class TransformerLayer(nn.Module):
 
 
 class TransformerTrunk(nn.Module):
-    """(spatial, features) -> (B, 3C): the mean and max of the cell tokens, and
-    the global token."""
+    """(spatial, features) -> the cell tokens as a (B, C, 15, 15) map, and
+    (B, 3C): the mean and max of the cell tokens, and the global token."""
 
     def __init__(self, shape: LeafEvalShape):
         super().__init__()
@@ -134,19 +151,22 @@ class TransformerTrunk(nn.Module):
         global_token = self.global_embed + self.global_proj(features[:, SEAT_FEATURES:])
         return torch.cat([cells, self._registers(features), global_token[:, None]], dim=1)
 
-    def forward(self, spatial: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, spatial: torch.Tensor, features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x = self._tokens(spatial, features)
         for layer in self.layers:
             x = layer(x)
         x = self.final_norm(x)
         cells = x[:, :BOARD_CELLS]
         # max(dim).values, not amax: see spatial_trunk.mean_max_pool.
-        return torch.cat([cells.mean(dim=1), cells.max(dim=1).values, x[:, -1]], dim=1)
+        pooled = torch.cat([cells.mean(dim=1), cells.max(dim=1).values, x[:, -1]], dim=1)
+        return cells.transpose(1, 2).unflatten(2, spatial.shape[2:]), pooled
 
 
 class ConvTrunk(nn.Module):
-    """(spatial, features) -> (B, 3C): the conv tower's pooled map and its
-    projection of the features."""
+    """(spatial, features) -> the conv tower's (B, C, 15, 15) map, and
+    (B, 3C): that map pooled and the tower's projection of the features."""
 
     def __init__(self, shape: LeafEvalShape):
         super().__init__()
@@ -158,9 +178,80 @@ class ConvTrunk(nn.Module):
             normalize_scalar=shape.normalize_scalar,
         )
 
-    def forward(self, spatial: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, spatial: torch.Tensor, features: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x, s = self.tower(spatial, features)
-        return torch.cat([mean_max_pool(x), s], dim=1)
+        return x, torch.cat([mean_max_pool(x), s], dim=1)
+
+
+@dataclass
+class LeafLossConfig(LossConfig):
+    """position_eval's loss config plus the per-square heads' weights."""
+
+    lambda_ownership: float
+    lambda_points: float
+
+
+def _masked_mean(per_square: torch.Tensor, empty: torch.Tensor) -> torch.Tensor:
+    """The mean of (B, 15, 15) `per_square` over the empty squares."""
+    return (per_square * empty).sum() / empty.sum().clamp(min=1)
+
+
+class OwnershipHead(Head):
+    """(B, 5, 15, 15) logits over each square's fate, trained by cross-entropy
+    on the empty squares."""
+
+    name = "ownership"
+    loss_keys = ("ownership",)
+    target_keys = ("ownership",)
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, SQUARE_FATE_CLASSES, 1)
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        return self.conv(x)
+
+    def loss(self, outputs, targets, cfg):
+        ce = F.cross_entropy(outputs["ownership"], targets["ownership"].long(), ignore_index=FILLED)
+        return HeadLoss(cfg.lambda_ownership * ce, {"ownership": ce})
+
+
+class SquarePointsHead(Head):
+    """(B, 2, 15, 15): per square, the mean and variance of the signed points
+    of the move that fills it (zero if none does), in POINTS_SCALE units.
+
+    Both fit moments by squared error on the empty squares: the mean against
+    the points, the variance against the squared deviation from the detached
+    mean. Each is consistent whatever the target's shape, a spike at zero plus
+    scattered large values, where a Gaussian likelihood is not."""
+
+    name = "square_points"
+    loss_keys = ("square_points", "square_points_mean", "square_points_var")
+    target_keys = ("square_points", "ownership")
+
+    def __init__(self, channels: int):
+        super().__init__()
+        self.conv = nn.Conv2d(channels, 2, 1)
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        out = self.conv(x)
+        return torch.stack([out[:, 0], F.softplus(out[:, 1])], dim=1)
+
+    def loss(self, outputs, targets, cfg):
+        empty = (targets["ownership"] != FILLED).to(outputs["square_points"].dtype)
+        mean, var = outputs["square_points"].unbind(dim=1)
+        points = targets["square_points"] / POINTS_SCALE
+        loss_mean = _masked_mean((mean - points) ** 2, empty)
+        loss_var = _masked_mean((var - (points - mean.detach()) ** 2) ** 2, empty)
+        total = loss_mean + loss_var
+        reported = {
+            "square_points": total,
+            "square_points_mean": loss_mean,
+            "square_points_var": loss_var,
+        }
+        return HeadLoss(cfg.lambda_points * total, reported)
 
 
 class LeafEvalModel(HeadedModel):
@@ -173,13 +264,17 @@ class LeafEvalModel(HeadedModel):
         trunk_cls = TransformerTrunk if shape.trunk == TRUNK_TRANSFORMER else ConvTrunk
         self.trunk = trunk_cls(shape)
         value_in = 3 * shape.width
-        self.heads = nn.ModuleDict(
-            {h.name: h for h in (WldHead(value_in), ScoreDiffHead(value_in))}
+        heads = (
+            WldHead(value_in),
+            ScoreDiffHead(value_in),
+            OwnershipHead(shape.width),
+            SquarePointsHead(shape.width),
         )
+        self.heads = nn.ModuleDict({h.name: h for h in heads})
 
     def forward(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         spatial = input_spatial[:, : self.shape.spatial_planes_used()]
-        value_in = self.trunk(spatial, scalar_features(input_scalar, self.tile_counts))
-        return {name: head(None, value_in) for name, head in self.heads.items()}
+        x, value_in = self.trunk(spatial, scalar_features(input_scalar, self.tile_counts))
+        return {name: head(x, value_in) for name, head in self.heads.items()}

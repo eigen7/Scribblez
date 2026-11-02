@@ -26,7 +26,12 @@ import torch
 from scribblez import params as params_mod
 from scribblez.dataset import SlogDataset
 from scribblez.deep_bot_leaf_eval.evaluation import evaluate
-from scribblez.deep_bot_leaf_eval.model import LAYOUT, LeafEvalModel, LeafEvalShape
+from scribblez.deep_bot_leaf_eval.model import (
+    LAYOUT,
+    LeafEvalModel,
+    LeafEvalShape,
+    LeafLossConfig,
+)
 from scribblez.deep_bot_leaf_eval.onnx_export import export_onnx
 from scribblez.ffi import LeaveValueArrays
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
@@ -37,7 +42,7 @@ from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.leave_inference import holdout, win_table
 from scribblez.leave_inference.trainer import FaceUpGuard
 from scribblez.paths import TagPaths
-from scribblez.position_eval.train_loop import LossConfig, run_epoch
+from scribblez.position_eval.train_loop import run_epoch
 from scribblez.position_eval.trainer import (
     OutputDeliverer,
     ensure_window,
@@ -66,16 +71,29 @@ def model_shape(params) -> LeafEvalShape:
     )
 
 
-def loss_config(params) -> LossConfig:
-    """position_eval's loss config, without its placement heads."""
-    return LossConfig(
+def loss_config(params) -> LeafLossConfig:
+    """position_eval's loss config, without its placement heads, plus the
+    per-square heads'."""
+    return LeafLossConfig(
         lambda_wld=params.lambda_wld,
         lambda_sd=params.lambda_sd,
         lambda_next_placement=0.0,
         lambda_win_placement=0.0,
         huber_delta_mean=params.huber_delta_mean,
         huber_delta_std=params.huber_delta_std,
+        lambda_ownership=params.lambda_ownership,
+        lambda_points=params.lambda_points,
     )
+
+
+def loss_weights(params) -> dict[str, float]:
+    """Each recorded loss's weight in the total, for the run record."""
+    return {
+        "loss_wld": params.lambda_wld,
+        "loss_score_diff": params.lambda_sd,
+        "loss_ownership": params.lambda_ownership,
+        "loss_square_points": params.lambda_points,
+    }
 
 
 def check_resumable(paths: TagPaths, config: dict):
@@ -152,6 +170,10 @@ def _record(state, gen, result, elapsed, optim_arm) -> dict:
         "loss_score_diff": losses["score_diff"],
         "loss_score_diff_mean": losses["score_diff_mean"],
         "loss_score_diff_std": losses["score_diff_std"],
+        "loss_ownership": losses["ownership"],
+        "loss_square_points": losses["square_points"],
+        "loss_square_points_mean": losses["square_points_mean"],
+        "loss_square_points_var": losses["square_points_var"],
         "wld_acc": result.wld_acc,
         "lr": optim_arm.current,
         **result.grad_norm,
@@ -303,7 +325,7 @@ def run(ctx: WorkerContext) -> int:
         ctx.tag,
         asdict(params),
         n_params,
-        {"loss_wld": params.lambda_wld, "loss_score_diff": params.lambda_sd},
+        loss_weights(params),
         default_controls(),
     )
     run_ctx = {

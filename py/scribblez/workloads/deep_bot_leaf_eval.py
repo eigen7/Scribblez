@@ -69,6 +69,12 @@ class DeepBotLeafEvalParams:
     lambda_sd: float = param(0.0002, "score-diff loss weight")
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
+    lambda_ownership: float = param(
+        1.0, "ownership loss weight (per-square cross-entropy over the empty squares)"
+    )
+    lambda_points: float = param(
+        1.0, "square-points loss weight (per-square mean and variance, in units of 100 points)"
+    )
     # Model (deep_bot_leaf_eval/model.py).
     trunk: str = param(
         TRUNK_TRANSFORMER,

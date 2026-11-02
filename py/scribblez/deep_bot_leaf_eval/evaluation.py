@@ -4,7 +4,10 @@ The win table is what DeepBot's sims value a leaf with today (docs/plans/
 deep_bot.md, "The leaf: a win table"), so it is the baseline the model has to
 beat. Both are scored by the log loss of the mover's expected score (a win 1,
 a draw 1/2) against the outcome, overall and by pool size. The model's
-three-way WLD cross-entropy and its score-differential error are recorded too.
+three-way WLD cross-entropy and its score-differential error are recorded too,
+and the per-square heads' reads over the rows' empty squares: the ownership
+cross-entropy, the points mean's RMSE in points, and the ratio of the
+predicted points variance to the realized squared error (1 when calibrated).
 
 The table reads the leaf as the side to move (the opponent, who replies next)
 sees it once both refills are drawn: their spread plus their leave's static
@@ -20,7 +23,7 @@ import numpy as np
 import torch
 
 from scribblez import ffi
-from scribblez.deep_bot_leaf_eval.model import LAYOUT
+from scribblez.deep_bot_leaf_eval.model import FILLED, LAYOUT, POINTS_SCALE
 
 RACK_SIZE = 7
 SCORE_DIFF_SCALE = 100.0  # the row's score differential scale (input_encoder.h)
@@ -67,6 +70,29 @@ def expected_score_logloss(expected: np.ndarray, outcome: np.ndarray) -> np.ndar
     return -(outcome * np.log(e) + (1 - outcome) * np.log(1 - e))
 
 
+def _square_sums(out: dict, raw: dict) -> dict[str, np.ndarray]:
+    """Per row, the per-square heads' sums over its empty squares: the
+    ownership NLL, the points mean's squared error and the predicted variance
+    (both in points squared), and the count of empty squares."""
+    fate = raw["ownership"].long()
+    empty = fate != FILLED
+    log_probs = torch.log_softmax(out["ownership"].float().cpu(), dim=1)
+    nll = -log_probs.gather(1, fate.clamp(min=0)[:, None])[:, 0]
+    mean, var = (out["square_points"].float().cpu() * POINTS_SCALE).unbind(dim=1)
+    var = var * POINTS_SCALE
+    sq_err = (mean - raw["square_points"]) ** 2
+
+    def total(per_square: torch.Tensor) -> np.ndarray:
+        return (per_square * empty).sum(dim=(1, 2)).numpy()
+
+    return {
+        "own_nll_sum": total(nll),
+        "points_sq_err_sum": total(sq_err),
+        "points_var_sum": total(var),
+        "empty_squares": empty.sum(dim=(1, 2)).numpy(),
+    }
+
+
 def _model_rows(model, raw: dict, device) -> dict[str, np.ndarray]:
     out = model(raw["input_spatial"].to(device), raw["input_scalar"].to(device))
     probs = torch.softmax(out["wld"].float(), dim=1).cpu().numpy()
@@ -80,6 +106,7 @@ def _model_rows(model, raw: dict, device) -> dict[str, np.ndarray]:
         "outcome": wld[:, 0] + 0.5 * wld[:, 1],
         "pool": _seat_sizes(raw["input_scalar"].numpy())[2],
         "features": win_table_features(raw["input_scalar"].numpy()),
+        **_square_sums(out, raw),
     }
 
 
@@ -109,9 +136,14 @@ def evaluate(
 
 
 def eval_metrics(rows: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> dict[str, float]:
+    squares = max(float(rows["empty_squares"].sum()), 1.0)
+    sq_err = float(rows["points_sq_err_sum"].sum())
     m = {
         "eval_wld_nll": float(rows["wld_nll"].mean()),
         "eval_sd_mean_mae": float(rows["sd_error"].mean()),
+        "eval_ownership_nll": float(rows["own_nll_sum"].sum()) / squares,
+        "eval_points_rmse": (sq_err / squares) ** 0.5,
+        "eval_points_var_ratio": float(rows["points_var_sum"].sum()) / max(sq_err, 1e-9),
     }
     for name, e in expected.items():
         loss = expected_score_logloss(e, rows["outcome"])

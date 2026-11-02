@@ -309,7 +309,8 @@ LEAVE_INFERENCE_QUALITY = [
 # The leaf eval read (deep_bot_leaf_eval/evaluation.py): on the held-out games'
 # rows, the model's log loss of the mover's expected score beside the win
 # tables' (the one fitted from the window, and Macondo's), overall and by pool
-# size, and the model's own WLD and score-differential errors.
+# size, the model's own WLD and score-differential errors, and its per-square
+# heads' errors.
 # deep_bot_leaf_eval/evaluation.py's POOL_BANDS, copied: importing it would
 # load the engine library. A leaf's pool is never empty (its bag outlasts both
 # refills), so the first band starts at 1.
@@ -329,6 +330,9 @@ LEAF_EVAL_QUALITY = [
     ),
     ("Held-out WLD cross-entropy", ["eval_wld_nll"]),
     ("Held-out score-differential MAE (points)", ["eval_sd_mean_mae"]),
+    ("Held-out ownership cross-entropy per empty square", ["eval_ownership_nll"]),
+    ("Held-out square points RMSE (points)", ["eval_points_rmse"]),
+    ("Square points: predicted variance / squared error", ["eval_points_var_ratio"]),
 ]
 # The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
 # from policy_set/metrics.py): on the held-out pools, each form's sets against
