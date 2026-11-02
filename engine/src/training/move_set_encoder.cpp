@@ -3,6 +3,7 @@
 #include "encoding/input_encoder.h"  // kScoreDiffInputScale
 
 #include <algorithm>
+#include <vector>
 
 namespace scribblez {
 namespace move_set {
@@ -54,31 +55,48 @@ void encode_moves(const Move* moves, int64_t n, const int32_t* pre_move_score_di
   }
 }
 
-void encode_move_cross_checks(Board& board, const Move& m, BoardUndo& undo, int32_t* cells,
-                              uint8_t* letters) {
-  uint8_t axes[kMoveCrossSlots];
-  int32_t squares[kMoveCrossSlots];
-  uint32_t old_masks[kMoveCrossSlots];
-  uint32_t new_masks[kMoveCrossSlots];
-  uint8_t real[kMoveCrossSlots];
-  encode_cross_check_deltas(board, m, undo, axes, squares, old_masks, new_masks, real);
+void write_cross_check_features(const cross_check_abi::MoveDeltas& deltas, int32_t* cells,
+                                uint8_t* letters) {
   std::fill_n(cells, kMoveCrossSlots, 0);
   std::fill_n(letters, kMoveCrossLetters, uint8_t(0));
-  // Real entries lead (encode_cross_check_deltas).
-  for (int i = 0; i < kMoveCrossSlots && real[i]; ++i) {
-    cells[i] = 1 + axes[i] * kMoveCells + squares[i];
-    for (int l = 0; l < 26; ++l) letters[i * 26 + l] = (new_masks[i] >> l) & 1u;
+  for (int i = 0; i < deltas.count; ++i) {
+    const cross_check_abi::Delta& d = deltas.deltas[i];
+    cells[i] = 1 + d.axis * kMoveCells + d.square;
+    for (int l = 0; l < 26; ++l) letters[i * 26 + l] = (d.new_mask >> l) & 1u;
   }
 }
 
-void encode_moves_cross_checks(const Board& board, const Dictionary& dict, const Move* moves,
-                               int64_t n, int32_t* cells, uint8_t* letters) {
+namespace {
+
+class CpuCrossCheckDeltas : public CrossCheckDeltaSource {
+ public:
+  void deltas(const Board& board, const Dictionary& dict, const Move* moves, int64_t n,
+              cross_check_abi::MoveDeltas* out) override;
+};
+
+void CpuCrossCheckDeltas::deltas(const Board& board, const Dictionary& dict, const Move* moves,
+                                 int64_t n, cross_check_abi::MoveDeltas* out) {
   Board scratch = board;
   scratch.ensure_movegen_caches(dict);
   BoardUndo undo;
+  for (int64_t i = 0; i < n; ++i) out[i] = cross_check_deltas(scratch, moves[i], undo);
+}
+
+}  // namespace
+
+CrossCheckDeltaSource& cpu_cross_check_deltas() {
+  static CpuCrossCheckDeltas source;
+  return source;
+}
+
+void encode_moves_cross_checks(const Board& board, const Dictionary& dict, const Move* moves,
+                               int64_t n, int32_t* cells, uint8_t* letters,
+                               CrossCheckDeltaSource& source) {
+  std::vector<cross_check_abi::MoveDeltas> deltas(static_cast<size_t>(n));
+  source.deltas(board, dict, moves, n, deltas.data());
   for (int64_t i = 0; i < n; ++i) {
-    encode_move_cross_checks(scratch, moves[i], undo, cells + i * kMoveCrossSlots,
-                             letters + i * kMoveCrossLetters);
+    write_cross_check_features(deltas[size_t(i)], cells + i * kMoveCrossSlots,
+                               letters + i * kMoveCrossLetters);
   }
 }
 
@@ -94,14 +112,15 @@ void MoveFeatureArrays::resize(int n) {
 }
 
 void MoveFeatureArrays::encode(const Board& board, const Dictionary& dict, const Move* moves, int n,
-                               int pre_move_score_diff) {
+                               int pre_move_score_diff, CrossCheckDeltaSource& cross_checks) {
   resize(n);
   for (int i = 0; i < n; ++i) {
     encode_move(moves[i], pre_move_score_diff, letters.data() + i * kMoveMaxPlaced,
                 blanks.data() + i * kMoveMaxPlaced, squares.data() + i * kMoveMaxPlaced,
                 tile_mask.data() + i * kMoveMaxPlaced, scalars.data() + i * kMoveScalars);
   }
-  encode_moves_cross_checks(board, dict, moves, n, cross_cells.data(), cross_letters.data());
+  encode_moves_cross_checks(board, dict, moves, n, cross_cells.data(), cross_letters.data(),
+                            cross_checks);
 }
 
 }  // namespace move_set

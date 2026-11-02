@@ -2,34 +2,18 @@
 
 #include "util/assert.h"
 
-#include <algorithm>
-#include <array>
-#include <compare>
-
 namespace scribblez {
 namespace move_set {
 namespace {
 
-struct Entry {
-  uint8_t axis;
-  int32_t square;
-  uint32_t old_mask;
-  uint32_t new_mask;
-
-  auto operator<=>(const Entry&) const = default;
-};
-
-// Fills the unused tail of the entry array, so it sorts after every real entry
-// and the whole fixed-size array can be sorted (a sort of a variable-length
-// prefix draws a false -Warray-bounds from gcc).
-constexpr Entry kPadding{0xFF, INT32_MAX, UINT32_MAX, UINT32_MAX};
+using cross_check_abi::MoveDeltas;
 
 // The cross-check caches index squares in view coordinates (the transposed view
 // swaps row and column); an entry's square is in the board's own frame.
-int32_t board_square(const BoardUndo::CrossRec& rec) {
+uint16_t board_square(const BoardUndo::CrossRec& rec) {
   const int vr = rec.idx / BOARD_SIZE;
   const int vc = rec.idx % BOARD_SIZE;
-  return rec.transposed ? vc * BOARD_SIZE + vr : rec.idx;
+  return uint16_t(rec.transposed ? vc * BOARD_SIZE + vr : rec.idx);
 }
 
 // The changed entries among the cache writes `undo` recorded, read off the
@@ -37,44 +21,25 @@ int32_t board_square(const BoardUndo::CrossRec& rec) {
 // filled or leaves the mask unchanged. The second test also drops the repeat
 // writes to the ends of the move's own word (one per placed tile): only the
 // first record holds the true pre-move mask, and the later ones compare equal.
-int collect_entries(const Board& board, const BoardUndo& undo, Entry* out) {
-  int n = 0;
+void collect_entries(const Board& board, const BoardUndo& undo, MoveDeltas& out) {
   for (const BoardUndo::CrossRec& rec : undo.crosses) {
-    const int32_t square = board_square(rec);
+    const uint16_t square = board_square(rec);
     if (!board.at(square / BOARD_SIZE, square % BOARD_SIZE).is_empty()) continue;
     const uint32_t new_mask = board.cross_checks(rec.transposed != 0)[rec.idx].mask;
     if (new_mask == rec.old.mask) continue;
-    DEBUG_ASSERT(n < kMoveMaxCrossDeltas);
-    out[n++] = {rec.transposed, square, rec.old.mask, new_mask};
+    DEBUG_ASSERT(out.count < kMoveMaxCrossDeltas);
+    cross_check_abi::insert_sorted(out, {rec.old.mask, new_mask, square, rec.transposed, 0});
   }
-  return n;
 }
 
 }  // namespace
 
-void encode_cross_check_deltas(Board& board, const Move& m, BoardUndo& undo, uint8_t* axes,
-                               int32_t* squares, uint32_t* old_masks, uint32_t* new_masks,
-                               uint8_t* delta_mask) {
-  std::fill_n(axes, kMoveMaxCrossDeltas, uint8_t(0));
-  std::fill_n(squares, kMoveMaxCrossDeltas, 0);
-  std::fill_n(old_masks, kMoveMaxCrossDeltas, 0u);
-  std::fill_n(new_masks, kMoveMaxCrossDeltas, 0u);
-  std::fill_n(delta_mask, kMoveMaxCrossDeltas, uint8_t(0));
-
-  std::array<Entry, kMoveMaxCrossDeltas> entries;
-  entries.fill(kPadding);
+MoveDeltas cross_check_deltas(Board& board, const Move& m, BoardUndo& undo) {
+  MoveDeltas out;
   board.apply(m, &undo);
-  const int n = collect_entries(board, undo, entries.data());
+  collect_entries(board, undo, out);
   board.unapply(undo);
-
-  std::sort(entries.begin(), entries.end());
-  for (int i = 0; i < n; ++i) {
-    axes[i] = entries[i].axis;
-    squares[i] = entries[i].square;
-    old_masks[i] = entries[i].old_mask;
-    new_masks[i] = entries[i].new_mask;
-    delta_mask[i] = 1;
-  }
+  return out;
 }
 
 }  // namespace move_set

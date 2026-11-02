@@ -68,16 +68,23 @@ void put_back_all(const Rack& tiles, rollout_abi::Bag& bag, int p, uint64_t seed
 
 }  // namespace
 
-PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
-  start.board.ensure_movegen_caches(dict);
-  PositionAbi abi;
-  for (int i = 0; i < rollout_abi::kSquares; ++i) {
-    abi.squares[i] = start.board.at(i / BOARD_SIZE, i % BOARD_SIZE).code();
+void board_abi(const Board& board, const Dictionary& dict, uint8_t* squares,
+               uint32_t (*cross_mask)[rollout_abi::kSquares]) {
+  board.ensure_movegen_caches(dict);
+  for (int i = 0; i < rollout_abi::kSquares; ++i)
+    squares[i] = board.at(i / BOARD_SIZE, i % BOARD_SIZE).code();
+  for (int t = 0; t < 2; ++t) {
+    const auto& cross = board.cross_checks(t == 1);
+    for (int i = 0; i < rollout_abi::kSquares; ++i) cross_mask[t][i] = cross[i].mask;
   }
+}
+
+PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
+  PositionAbi abi;
+  board_abi(start.board, dict, abi.squares, abi.cross_mask);
   for (int t = 0; t < 2; ++t) {
     const auto& cross = start.board.cross_checks(t == 1);
     for (int i = 0; i < rollout_abi::kSquares; ++i) {
-      abi.cross_mask[t][i] = cross[i].mask;
       abi.cross_score[t][i] = int16_t(cross[i].score);
       abi.cross_has_neighbor[t][i] = cross[i].has_neighbor ? 1 : 0;
     }

@@ -893,7 +893,7 @@ def move_set_positions(
     """A move set batch's inputs from one .slog, one replay per position: each
     position's pre-move training row, and the cross-check features of its
     candidate moves on that board in the move set model's layout (engine
-    move_set_encoder.h encode_move_cross_checks).
+    move_set_encoder.h encode_moves_cross_checks).
 
     Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
     .slog at `path`; its candidates are the next move_counts[j] records of the

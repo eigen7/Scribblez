@@ -4,8 +4,9 @@
 // it finds, and reduces to HastyBot's argmax under hasty_move_better's total
 // order; then applies the play, redraws, and recomputes the cross-checks the
 // play changed. It replicates movegen.cpp's WordMap generator
-// (wmp_emit_leftmost_anchor / wmp_try_word / build_play), HastyEquity::equity
-// and Board::cross_check_at; where a line here has a counterpart there, the
+// (wmp_emit_leftmost_anchor / wmp_try_word / build_play) and
+// HastyEquity::equity, and keeps the cross-checks through
+// cross_check_device.cuh; where a line here has a counterpart there, the
 // names match. With tiles in the bag, a ply runs in two passes and skips the
 // spans and items whose equity bound cannot reach the best move found so far
 // (see "The span bound"); the bound is exact, so the moves are unchanged.
@@ -16,6 +17,8 @@
 // work queue and the slow ones (a blank hit returns dozens of words) stop
 // stalling the block at a chunk barrier.
 
+#include "cross_check_device.cuh"
+#include "cuda_buffers.cuh"
 #include "rollout_kernel.h"
 
 #include <chrono>
@@ -26,14 +29,12 @@
 namespace scribblez::rollout_gpu {
 
 using namespace rollout_abi;
+using gpu::cuda_check;
+using gpu::DeviceBuffer;
+using gpu::kAllLetters;
+using gpu::upload;
 
 namespace {
-
-void cuda_check(cudaError_t e, const char* what) {
-  if (e != cudaSuccess) {
-    throw std::runtime_error(std::string("CUDA ") + what + ": " + cudaGetErrorString(e));
-  }
-}
 
 constexpr int kThreads = 256;
 constexpr int kWarps = kThreads / 32;
@@ -44,10 +45,6 @@ constexpr int kLanes = 2 * kBoardSize;
 constexpr int kMaxSpans = kLanes * 120;
 // Scratch slots: more than the blocks a device can keep resident.
 constexpr int kScratchSlots = 512;
-constexpr uint32_t kAllLetters = (1u << 26) - 1u;
-constexpr uint32_t kArcMask = 0x003fffffu;
-constexpr uint32_t kIsEndBit = 0x00400000u;
-constexpr uint32_t kAcceptsBit = 0x00800000u;
 constexpr int kMaxBlanks = 2;
 
 // A word span of one lane: the play covers view-row `row`, columns [wl, wr],
@@ -225,89 +222,27 @@ __device__ inline bool is_vowel(int letter) {
   return letter == 0 || letter == 4 || letter == 8 || letter == 14 || letter == 20;
 }
 
-// ---- The DAWG ----
+// ---- Cross-checks ----
 
-struct DStep {
-  uint32_t next;
-  bool valid;
-  bool accepts;
+// Smem's board as cross_check_device.cuh reads it.
+struct SmemSquares {
+  const Smem& s;
+  __device__ uint8_t operator()(int view, int r, int c) const { return sq_view(s, view, r, c); }
 };
 
-__device__ inline DStep dict_step(uint32_t node, uint8_t tile_value) {
-  if (node == 0) return {0, false, false};
-  for (uint32_t i = node;; ++i) {
-    const uint32_t a = c_tables.arcs[i];
-    if ((a >> 24) == tile_value) return {a & kArcMask, true, (a & kAcceptsBit) != 0};
-    if (a & kIsEndBit) return {0, false, false};
-  }
-}
-
-// Board::cross_check_letter_mask by a warp: lane L walks the run below with
-// letter L placed, and a ballot collects the mask.
-__device__ uint32_t cross_check_letter_mask(const Smem& s, int view, int c, uint32_t prefix_node,
-                                            int r, int bot, int lane) {
-  bool fits = false;
-  if (lane < 26) {
-    const DStep tr = dict_step(prefix_node, uint8_t(lane + 1));
-    if (tr.valid) {
-      bool acc = tr.accepts;
-      uint32_t node = tr.next;
-      bool ok = true;
-      for (int rr = r + 1; rr <= bot; ++rr) {
-        const DStep st = dict_step(node, uint8_t(glyph_letter(sq_view(s, view, rr, c)) + 1));
-        if (!st.valid) {
-          ok = false;
-          break;
-        }
-        acc = st.accepts;
-        node = st.next;
-      }
-      fits = ok && acc;
-    }
-  }
-  return __ballot_sync(0xffffffffu, fits);
-}
+struct GlyphValue {
+  __device__ int operator()(uint8_t g) const { return tile_value_of_glyph(g); }
+};
 
 // Board::cross_check_at by a warp, written into the view's arrays.
 __device__ void recompute_cross_check(Smem& s, int view, int r, int c, int lane) {
+  const gpu::CrossCheck cc = gpu::cross_check_at(
+    SmemSquares{s}, GlyphValue{}, {c_tables.arcs, c_tables.dawg_root}, view, r, c, lane);
+  if (lane != 0) return;
   const int i = r * kBoardSize + c;
-  if (sq_view(s, view, r, c) != 0) {
-    s.xmask[view][i] = kAllLetters;
-    s.xscore[view][i] = 0;
-    s.xnb[view][i] = 0;
-    return;
-  }
-  int top = r;
-  while (top - 1 >= 0 && sq_view(s, view, top - 1, c) != 0) --top;
-  int bot = r;
-  while (bot + 1 < kBoardSize && sq_view(s, view, bot + 1, c) != 0) ++bot;
-  if (top == r && bot == r) {
-    s.xmask[view][i] = kAllLetters;
-    s.xscore[view][i] = 0;
-    s.xnb[view][i] = 0;
-    return;
-  }
-  uint32_t prefix_node = c_tables.dawg_root;
-  int score = 0;
-  bool prefix_ok = true;
-  for (int rr = top; rr <= r - 1; ++rr) {
-    const uint8_t g = sq_view(s, view, rr, c);
-    const DStep tr = dict_step(prefix_node, uint8_t(glyph_letter(g) + 1));
-    if (!tr.valid) {
-      prefix_ok = false;
-      break;
-    }
-    prefix_node = tr.next;
-    score += tile_value_of_glyph(g);
-  }
-  for (int rr = r + 1; rr <= bot; ++rr) score += tile_value_of_glyph(sq_view(s, view, rr, c));
-  const uint32_t mask =
-    prefix_ok ? cross_check_letter_mask(s, view, c, prefix_node, r, bot, lane) : 0;
-  if (lane == 0) {
-    s.xscore[view][i] = int16_t(score);
-    s.xnb[view][i] = 1;
-    s.xmask[view][i] = mask;
-  }
+  s.xmask[view][i] = cc.mask;
+  s.xscore[view][i] = int16_t(cc.score);
+  s.xnb[view][i] = cc.has_neighbor ? 1 : 0;
 }
 
 // ---- The tables ----
@@ -1144,15 +1079,11 @@ __device__ void update_cross_checks(Smem& s, int tid) {
   __syncthreads();
   const int warp = tid >> 5, lane = tid & 31;
   for (int task = warp; task < 4 * n; task += kWarps) {
-    const int view = task / (2 * n), rest = task % (2 * n), i = rest / 2, end = rest % 2;
-    const int vr = view ? s.placed_c[i] : s.placed_r[i];
-    const int vc = view ? s.placed_r[i] : s.placed_c[i];
-    int top = vr;
-    while (top - 1 >= 0 && sq_view(s, view, top - 1, vc) != 0) --top;
-    int bot = vr;
-    while (bot + 1 < kBoardSize && sq_view(s, view, bot + 1, vc) != 0) ++bot;
-    const int r = end == 0 ? top - 1 : bot + 1;
-    if (r >= 0 && r < kBoardSize) recompute_cross_check(s, view, r, vc, lane);
+    const gpu::RunEndTask t = gpu::run_end_task(task, n);
+    const int vr = t.view ? s.placed_c[t.placed] : s.placed_r[t.placed];
+    const int vc = t.view ? s.placed_r[t.placed] : s.placed_c[t.placed];
+    const int r = gpu::run_end_row(SmemSquares{s}, t.view, vr, vc, t.end);
+    if (r >= 0) recompute_cross_check(s, t.view, r, vc, lane);
   }
   __syncthreads();
 }
@@ -1548,36 +1479,6 @@ __global__ void __launch_bounds__(kEncodeThreads)
   }
   write_leaf_scalars(leaf, s, scalar + size_t(b) * kLeafScalars);
 }
-
-template <typename T>
-T* upload(const std::vector<T>& v, size_t* bytes) {
-  T* d = nullptr;
-  const size_t n = v.size() * sizeof(T);
-  cuda_check(cudaMalloc(&d, n == 0 ? 1 : n), "malloc");
-  if (n) cuda_check(cudaMemcpy(d, v.data(), n, cudaMemcpyHostToDevice), "memcpy");
-  *bytes += n;
-  return d;
-}
-
-// A device array that only grows.
-template <typename T>
-struct DeviceBuffer {
-  T* data = nullptr;
-  size_t cap = 0;
-
-  void reserve(size_t n) {
-    if (n <= cap) return;
-    cudaFree(data);
-    cuda_check(cudaMalloc(&data, sizeof(T) * n), "malloc batch buffer");
-    cap = n;
-  }
-  // Copies v to the device, growing as needed.
-  void upload(const T* v, size_t n) {
-    reserve(n == 0 ? 1 : n);
-    if (n) cuda_check(cudaMemcpy(data, v, sizeof(T) * n, cudaMemcpyHostToDevice), "batch upload");
-  }
-  ~DeviceBuffer() { cudaFree(data); }
-};
 
 }  // namespace
 

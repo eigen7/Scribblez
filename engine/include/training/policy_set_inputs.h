@@ -74,10 +74,12 @@ struct CandidateInputs {
   int count() const { return features.count; }
 
   // Encode `moves` at the decision point `position` replays to, its active
-  // player to move holding `rack` with `bag_size` tiles in the bag. The equity
-  // is HastyBot's with the opponent's leave hidden.
+  // player to move holding `rack` with `bag_size` tiles in the bag, their
+  // cross-check entries from `cross_checks`. The equity is HastyBot's with the
+  // opponent's leave hidden.
   void encode(const GameStateEncoder& position, const Dictionary& dict, const Rack& rack,
-              int bag_size, const std::vector<Move>& moves);
+              int bag_size, const std::vector<Move>& moves,
+              move_set::CrossCheckDeltaSource& cross_checks = move_set::cpu_cross_check_deltas());
 };
 
 // The training side's inputs at a pool position: `decoder`'s (on `dict`)

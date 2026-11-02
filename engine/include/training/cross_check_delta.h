@@ -21,34 +21,20 @@
 
 #include "game/board.h"
 #include "game/move.h"
-#include "game/rack.h"
-
-#include <cstdint>
+#include "gpu/cross_check_abi.h"
 
 namespace scribblez {
 
 namespace move_set {
 
-// n placed tiles extend n perpendicular runs (two ends each), plus the two ends
-// of the word along the play axis.
-inline constexpr int kMoveMaxCrossDeltas = 2 * RACK_SIZE + 2;
+inline constexpr int kMoveMaxCrossDeltas = cross_check_abi::kMaxDeltas;
 
 // The cross-check entries `m` changes on `board`. The move must be legal on
 // `board` and share its frame, and the board's move-generation caches must be
 // valid. The move is applied and then undone, so `board` is unchanged on
-// return. Entries are sorted by (axis, square); EXCHANGE and PASS have none.
-//   axes       uint8[kMoveMaxCrossDeltas]   0: the horizontal-play cross-check
-//                                           block, 1: the vertical-play one
-//                                           (the kCrossChecks plane halves)
-//   squares    int32[kMoveMaxCrossDeltas]   r*BOARD_SIZE+c, board frame
-//   old_masks  uint32[kMoveMaxCrossDeltas]  the pre-move CrossCheck::mask
-//   new_masks  uint32[kMoveMaxCrossDeltas]  the post-move CrossCheck::mask
-//   delta_mask uint8[kMoveMaxCrossDeltas]   1 for real entries, else 0 (and the
-//                                           other four arrays are 0 there)
-// `undo` is scratch, passed in so a batch reuses its allocations.
-void encode_cross_check_deltas(Board& board, const Move& m, BoardUndo& undo, uint8_t* axes,
-                               int32_t* squares, uint32_t* old_masks, uint32_t* new_masks,
-                               uint8_t* delta_mask);
+// return. EXCHANGE and PASS have none. `undo` is scratch, passed in so a batch
+// reuses its allocations.
+cross_check_abi::MoveDeltas cross_check_deltas(Board& board, const Move& m, BoardUndo& undo);
 
 }  // namespace move_set
 }  // namespace scribblez
