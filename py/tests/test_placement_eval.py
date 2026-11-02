@@ -84,6 +84,20 @@ def test_large_set_ground_truth_carries_placement_planes():
     assert np.all(planes[:, h["self_win_placement"]] <= planes[:, h["self_next_placement"]] + 1e-6)
 
 
+def test_predict_is_the_same_in_batches():
+    """Batching the forward changes no row's prediction."""
+    items = analysis._dataset_items(analysis.LARGE_DATASET)[:5]
+    inputs = np.stack(
+        [analysis.analyze_position_eval_gcg(t, session_input_arm()) for _, t in items]
+    )
+    planes = {s.name: s.dims for s in task_input_shapes()}["input_spatial"][0]
+    model = _tiny_model().eval()
+    whole = analysis.predict(model, inputs, planes, _CPU, batch_size=len(items))
+    batched = analysis.predict(model, inputs, planes, _CPU, batch_size=2)
+    for key, v in whole.items():
+        np.testing.assert_allclose(batched[key], v, rtol=1e-5, atol=1e-6)
+
+
 def test_collapse_over_dataset_positions():
     """predict() carries the raw placement logits; collapsed through the engine
     they are per-cell probabilities that live only on legal cells and, for the

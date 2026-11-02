@@ -203,15 +203,17 @@ class PositionEvalParams:
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
 
 
-# The trainer's peak GPU memory in GiB, measured 2026-09-28 on the RTX 5000
+# The trainer's peak GPU memory in GiB, measured 2026-10-31 on the RTX 5000
 # Ada: the whole process as nvidia-smi sees it (the CUDA context included),
-# over a generation's training on transformer-clipped data (compiled, bf16)
-# and the quality eval that follows it. The eval, not the training step, sets
-# the peak. The figure in the table is that peak plus TRAINER_GPU_HEADROOM_GB.
+# over 30 training steps on transformer-clipped data (compiled, bf16; the
+# shapes are static, so the peak is reached by then) and the quality eval
+# that follows it. The eval, in batches of analysis.PREDICT_BATCH, adds
+# nothing to the training step's peak. gpu_need is that peak plus
+# TRAINER_GPU_HEADROOM_GB.
 #
-#   transformer, activation checkpointing off  13.53 GiB  (training alone 10.58)
-#   transformer, activation checkpointing on    8.46 GiB  (training alone  4.94)
-#   conv                                        2.86 GiB  (training alone  1.46)
+#   transformer, activation checkpointing off  10.53 GiB
+#   transformer, activation checkpointing on    4.99 GiB
+#   conv                                        1.77 GiB
 #
 # Measured at the default architecture and batch size only (TRAINER_GPU_KEY);
 # any other configuration has no figure, and the queue refuses to place it.
@@ -224,10 +226,10 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 # is a bound from the cap, not a measurement.
 MATCH_EVAL_GPU_GB = 1.06 + 1.0 + TRAINER_GPU_HEADROOM_GB
 _MEASURED_GB = {
-    (TRUNK_TRANSFORMER, False): 13.53,
-    (TRUNK_TRANSFORMER, True): 8.46,
-    (TRUNK_CONV, False): 2.86,
-    (TRUNK_CONV, True): 2.86,  # checkpointing only affects the transformer tower
+    (TRUNK_TRANSFORMER, False): 10.53,
+    (TRUNK_TRANSFORMER, True): 4.99,
+    (TRUNK_CONV, False): 1.77,
+    (TRUNK_CONV, True): 1.77,  # checkpointing only affects the transformer tower
 }
 # The params the measurements held fixed, at their defaults.
 TRAINER_GPU_KEY = (

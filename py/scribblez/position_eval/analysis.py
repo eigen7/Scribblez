@@ -41,6 +41,11 @@ DEFAULT_DATASET, LARGE_DATASET = EVAL_POSITIONS_DIRS
 GCG_MARKER = "#character-encoding UTF-8"
 
 BOARD_SIZE = 15
+# Rows per forward in predict. The eval runs in FP32, so at the training
+# batch (256) it still topped the bf16 training step's peak GPU memory; at 128
+# it adds nothing to it (workloads/position_eval.py's measured table). One
+# forward over the whole large set was the trainer's peak by up to 3.5 GiB.
+PREDICT_BATCH = 128
 
 
 def ground_truth_path(dataset_dir: str | Path, face_up_leaves: bool) -> Path:
@@ -105,9 +110,11 @@ def split_input(inputs: np.ndarray, spatial_planes: int) -> tuple[np.ndarray, np
     return spatial, scalar
 
 
-@torch.no_grad()
-def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
-    """Run `model` over the dataset inputs and decode its outputs:
+def predict(
+    model, inputs: np.ndarray, spatial_planes: int, device, batch_size: int = PREDICT_BATCH
+) -> dict:
+    """Run `model` over the dataset inputs, `batch_size` rows per forward, and
+    decode its outputs:
 
         wld               (N, 3)     float32  win/draw/loss probabilities
         sd_mean           (N,)       float32  final score-differential mean (points)
@@ -116,6 +123,16 @@ def predict(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
 
     Placement logits stay raw; collapse_placement turns them into per-cell planes.
     """
+    parts = [
+        _predict_batch(model, inputs[i : i + batch_size], spatial_planes, device)
+        for i in range(0, len(inputs), batch_size)
+    ]
+    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]}
+
+
+@torch.no_grad()
+def _predict_batch(model, inputs: np.ndarray, spatial_planes: int, device) -> dict:
+    """predict's outputs for one batch of rows."""
     spatial, scalar = split_input(inputs, spatial_planes)
     sp = torch.from_numpy(np.ascontiguousarray(spatial)).to(device)
     sc = torch.from_numpy(np.ascontiguousarray(scalar)).to(device)

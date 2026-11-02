@@ -30,9 +30,9 @@ def _entry(tag="t", **kw) -> QueueEntry:
 
 
 def test_the_campaign_trainer_needs_its_measured_peak_plus_headroom():
-    assert pe.gpu_need(CAMPAIGN, "train") == 13.53 + pe.TRAINER_GPU_HEADROOM_GB
+    assert pe.gpu_need(CAMPAIGN, "train") == 10.53 + pe.TRAINER_GPU_HEADROOM_GB
     checkpointed = replace(CAMPAIGN, activation_checkpointing=True)
-    assert pe.gpu_need(checkpointed, "train") == 8.46 + pe.TRAINER_GPU_HEADROOM_GB
+    assert pe.gpu_need(checkpointed, "train") == 4.99 + pe.TRAINER_GPU_HEADROOM_GB
     assert pe.gpu_need(CAMPAIGN, "generate") == 0.0
     assert pe.gpu_need(CAMPAIGN, "match_eval") == pe.MATCH_EVAL_GPU_GB
     # Unmeasured: a batch size other than the one measured.
@@ -49,16 +49,16 @@ def test_the_layout_gives_the_generator_the_machine():
 
 def test_gpu_memory_decides_eligibility():
     """The asus-laptop OOM: a 4 GiB GPU cannot take the campaign trainer, an
-    L4 can, and so can the 16 GiB laptop, but not a 12.3 GiB one."""
+    L4 can, and so can the 16 GiB laptop, but not a 10.8 GiB one."""
     params = CAMPAIGN
-    assert "needs 14.0 GiB" in placement.refusal(
+    assert "needs 11.0 GiB" in placement.refusal(
         SPEC, params, _entry(), _machine("asus", gpu_gb=4.0)
     )
     assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
     local = _machine("localhost", "local", gpu_gb=16.0)
     assert placement.refusal(SPEC, params, _entry(), local) is None
-    small = _machine("localhost", "local", gpu_gb=12.3)
-    assert "has 12.3" in placement.refusal(SPEC, params, _entry(), small)
+    small = _machine("localhost", "local", gpu_gb=10.8)
+    assert "has 10.8" in placement.refusal(SPEC, params, _entry(), small)
 
 
 def test_an_unmeasured_config_waits_for_an_override():
@@ -69,12 +69,13 @@ def test_an_unmeasured_config_waits_for_an_override():
 
 
 def test_match_eval_shares_the_gpu():
-    """Trainer and match eval sum on one GPU: 16.6 GiB fits an L4 but not the
-    16 GiB laptop, which fits the trainer alone."""
+    """Trainer and match eval sum on one GPU: 13.6 GiB fits an L4 but not a
+    12 GiB GPU, which fits the trainer alone."""
     params = replace(CAMPAIGN, match_every_generations=5)
     assert placement.refusal(SPEC, params, _entry(), _machine("l4")) is None
-    laptop = _machine("localhost", "local", gpu_gb=16.0)
-    assert "needs 16.6 GiB" in placement.refusal(SPEC, params, _entry(), laptop)
+    small = _machine("localhost", "local", gpu_gb=12.0)
+    assert "needs 13.6 GiB" in placement.refusal(SPEC, params, _entry(), small)
+    assert placement.refusal(SPEC, CAMPAIGN, _entry(), small) is None
 
 
 def test_named_machines_and_bundles():
