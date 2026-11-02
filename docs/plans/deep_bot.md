@@ -387,12 +387,20 @@ Why the targets have this shape:
   moving its mean ([supreme_bot_m1a.md](supreme_bot_m1a.md)).
 
 **The reply-policy head.** `π_B(b | board after a, r, Bob's belief)`: the
-probability that Bob's subtree chooses `b`. It is the
-[policy form](#form-3-a-policy) of the policy-set model, trained on the
-replies Bob's subtree actually chose, rather than on pools with a hasty
-reply. It is where the searching Bob lives in the network. Every value
-in the design is a continuation after fixed moves; searching changes only
-which moves are fixed. So Alice's prediction for a candidate decomposes as
+probability that Bob's subtree chooses `b`. Bob's subtree is a one-level
+search from his information set: sim each candidate with hasty replies to
+the leaf, take the best. That is the decision any player to move makes at a
+position under this design, and it is what the policy-set pools label. So
+the head is the [policy form](#form-3-a-policy) of the policy-set model,
+trained on pools from self-play positions, from the side of the player to
+move. There is no model of Bob as such. Alice poses the question from his
+side: his rack `r`, and his belief about her given `a`, read through the
+reply view that hides his private past ([Beliefs](#beliefs)), as the leave
+inference model trains to.
+
+This head is where the searching Bob lives in the network. Every value in
+the design is a continuation after fixed moves; searching changes only which
+moves are fixed. So Alice's prediction for a candidate decomposes as
 
 `q̂(a) = mean_r Σ_b π_B(b | a, r) · V(a, b)`
 
@@ -403,17 +411,30 @@ predicted map of the post-move board, which is a spatial decode per
 candidate. Moves that get sims need it to form their residuals; moves that
 don't need only the reader's scalar predictions.
 
+**v0: the leaf network predicts.** The leaf network already values a
+position right after a fixed move under the hasty continuation, and gets the
+ownership and points heads ([Sims](#sims)). Until the search network is
+built, a simmed move's prediction is the leaf network's on the post-move
+position, averaged over the racks the sims sampled. The residual is then
+the difference between the network's value after two mechanical moves and
+its value before them, as in temporal-difference learning: what those two
+moves revealed that the network did not see.
+
 **Labels.** Two sources, both exact for what they label:
 
 - **Game records.** A `.slog` replay knows who placed every tile, in which
   move, for how many points, whether the move was a bingo, and who won. The
   continuation heads pretrain on that for free, as KataGo trains its
   ownership head on finished games.
-- **The agent's search records.** Each turn yields, for every simmed
-  `(a, r, b)`, Bob's sim results and maps; for every `(a, r)`, his choice
-  and each contender's chance of being best; and Alice's sim results and
-  maps after his contenders. These train the continuation heads on the
-  positions search actually visits, and `π_B` on searched replies.
+- **Pools.** Self-play positions with every legal move simmed from the
+  mover's side ([Labels](#labels)) train the reply-policy head. Grouped
+  pools ([below](#the-evidence-store-and-the-reader)) train the reader.
+
+**Coverage grows with generations.** Bob decides after Alice's candidates,
+including setups and exchanges that self-play rarely plays, so at generation
+0 (HastyBot self-play) the positions after them are thin in the data. Each
+generation's self-play comes from a stronger agent, which plays such moves
+when they win, so the positions after them fill in, as in AlphaZero.
 
 ### Residuals
 
@@ -468,16 +489,34 @@ under one candidate therefore informs Bob's racks under every candidate
 that leaves its region intact in a similar context. Most of the redundancy
 between subtrees lies there.
 
-**Training: masked prediction on the search records.** Hide whole candidate
-contexts, or racks within one, and predict their residuals and replies from
-the rest of the turn's evidence. That is the reader's task in search,
-including the cases where transfer should fail (a lane blocked, a different
-bag count). The value loss is a likelihood (beta-NLL, as in the transfer
-test), so the predicted variance is calibrated: the [budget](#budget) relies
-on it.
+**Training data: grouped pools.** The reader learns from the same kind of
+decision Bob's subtrees make, a player to move choosing by hasty-reply sims,
+grouped the way a turn's evidence is. A generator on the pool labeler takes a
+self-play position, the parent, and several of the moves available there;
+at each resulting position it samples several racks for the player to move,
+and labels each rack's pool. It writes:
+
+- per (move from the parent, rack, reply): the value residual and the
+  reply's chance of being best;
+- per (move from the parent, reply): one map, averaged over the racks that
+  played the reply. The map describes the board after both moves, which is
+  the same for every such rack; whether a rack can use it is the per-rack
+  scalars' part.
+
+Maps are written only for each rack's leading replies, the ones a search
+would sim, in a sidecar beside the pools. Moves, racks and replies per
+group are the generator's parameters, and they set the size of a group's
+record.
+
+**Training: masked prediction on the grouped pools.** Hide whole moves from
+the parent, or racks within one, and predict their residuals and replies
+from the rest of the group. That is the reader's task in search, including
+the cases where transfer should fail (a lane blocked, a different bag
+count). The value loss is a likelihood (beta-NLL, as in the transfer test),
+so the predicted variance is calibrated: the [budget](#budget) relies on it.
 
 **Generations.** The search network learns to predict the agent's own
-search, and the next agent searches with it, as in AlphaZero. Over
+choices, and the next agent searches with it, as in AlphaZero. Over
 generations the heads absorb the common lessons, and the reader is left
 with what is new in each position.
 
@@ -970,14 +1009,17 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    maps).
 8. **Maps from sims.** The kernel and the CPU reference return each
    candidate's summed maps, completed by the leaf network's maps, and the
-   agent forms residuals. *Measure:* the noise of a square's residual
-   against the rollout count.
-9. **Search records.** The agent writes its sims, maps and Bob's choices as
-   training records, from a dashboard workload. *Measure:* records per
-   GPU-hour.
-10. **The reply-policy head,** trained on searched replies. *Measure:* how
-    often its top move is the subtree's choice, against equity's top move.
-11. **The reader,** trained by masked prediction on the search records.
+   agent forms residuals against the leaf network's prediction on the
+   post-move position (v0, [The search network](#the-search-network)).
+   *Measure:* the noise of a square's residual against the rollout count.
+9. **Grouped pools.** The generator on the pool labeler, as a dashboard
+   workload, writing the reader's scalars and maps beside the pools.
+   *Measure:* bytes and GPU time per group.
+10. **The reply-policy head:** the policy form, trained on self-play pools
+    from the mover's side. *Measure:* how often its top move is the pool's
+    best, against equity's ([Candidates](#candidates)), and how often it is
+    the subtree's choice at the agent's positions.
+11. **The reader,** trained by masked prediction on the grouped pools.
     *Measure:* its residual predictions against no evidence, split by
     evidence from the same candidate and from other candidates, and the
     calibration of its variance.
@@ -985,9 +1027,9 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
     decisions with audits, Alice's payoffs after each of Bob's contenders,
     and the single allocator. *Measure:* sims per turn and strength at
     equal time against fixed counts, and the audit disagreement rate.
-13. **Generations.** DeepBot labels positions for the policy-set model, and
-    its games and search records train the next leave inference model, leaf
-    network, search network and reader.
+13. **Generations.** DeepBot's self-play games, and the pools and grouped
+    pools labeled from them, train the next leave inference model, leaf
+    network, search network, reply-policy head and reader.
 
 ## Limits
 
@@ -1045,8 +1087,10 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
   two changes: the bingo classes, and per-square points of the whole move
   through the square rather than a share of the score, since a move places a
   varying number of tiles.
-- **AlphaZero** trains its network on its own search. The reply-policy and
-  continuation heads do the same with DeepBot's search records.
+- **AlphaZero** trains its network on positions from its own self-play, with
+  its search's results as targets. The reply-policy head does the same: the
+  positions come from DeepBot's self-play, and the targets from the pools'
+  one-level search, the search Bob's subtree runs.
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
   never tries a setup that equity ranks low, and his rack is drawn
