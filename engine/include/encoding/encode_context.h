@@ -8,6 +8,7 @@ namespace scribblez {
 
 class GameStateEncoder;
 struct LeaveHistory;
+struct SquareFates;
 
 // Everything a TrainingTask may read to encode one row for a replayed
 // position: its inputs and its targets. A task uses only the fields it needs.
@@ -29,6 +30,11 @@ struct EncodeContext {
   // The moves before the position, in `enc`'s board frame. Recorded only for a
   // task that reads it (one declaring kRecordsLeaveHistory); null otherwise.
   const LeaveHistory* leave_history = nullptr;
+
+  // What becomes of each square for the rest of the game, in `enc`'s board
+  // frame. Recorded only for a post-move row of a task that reads it (one
+  // declaring kRecordsSquareFates); null otherwise.
+  const SquareFates* square_fates = nullptr;
 
   // Target data: each player's next move after the sampled position, in
   // `enc`'s board frame (see Board::transpose), and the final scores. A next

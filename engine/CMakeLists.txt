@@ -37,6 +37,8 @@ add_library(scribblez_core STATIC
   src/encoding/leaf_eval_input_encoder.cpp
   src/encoding/leave_inference_input_encoder.cpp
   src/training/leaf_eval_task.cpp
+  src/training/square_fate_targets.cpp
+  src/encoding/square_fates.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp

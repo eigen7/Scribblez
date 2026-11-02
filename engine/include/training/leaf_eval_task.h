@@ -12,16 +12,20 @@
 
 #include "encoding/encode_context.h"
 #include "encoding/leaf_eval_input_encoder.h"
+#include "training/square_fate_targets.h"
 #include "training/training_targets.h"
 
 namespace scribblez {
 
 struct LeafEvalTask {
+  static constexpr bool kRecordsSquareFates = true;
   static constexpr int kInputFloats = LeafEvalInputEncoder::kInputFloats;
-  // WldTarget, then ScoreDiffTarget.
+  // WldTarget, ScoreDiffTarget, OwnershipTarget, then SquarePointsTarget.
   static constexpr int kWldOffset = 0;
   static constexpr int kScoreDiffOffset = kWldOffset + WldTarget::kDims[0];
-  static constexpr int kLabelFloats = kScoreDiffOffset + ScoreDiffTarget::kDims[0];
+  static constexpr int kOwnershipOffset = kScoreDiffOffset + ScoreDiffTarget::kDims[0];
+  static constexpr int kSquarePointsOffset = kOwnershipOffset + kBoardCells;
+  static constexpr int kLabelFloats = kSquarePointsOffset + kBoardCells;
   static constexpr int kRowFloats = kInputFloats + kLabelFloats;
 
   // Reads HastyEquity's leave values, which must be initialized.

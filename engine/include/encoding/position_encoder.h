@@ -10,6 +10,7 @@
 #include "encoding/encode_context.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/leave_inference_input_encoder.h"
+#include "encoding/square_fates.h"
 #include "game/game_log.h"
 #include "game/rack.h"
 
@@ -92,6 +93,7 @@ class PositionEncoder {
   GameStateEncoder enc_;
   std::array<Rack, 2> racks_{};
   LeaveHistory history_{};
+  SquareFates fates_{};
 };
 
 // Writes one post-move input row per candidate, input_floats(spec) floats
