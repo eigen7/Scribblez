@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 namespace scribblez {
 
@@ -39,24 +40,40 @@ std::vector<Move> mover_candidates(const SimPosition& pos, const SubtreeParams& 
   return equity_top_k(req, bag <= params.late_bag ? params.late_candidates : params.candidates);
 }
 
-SubtreeMove chosen_move(const std::vector<Move>& moves, const PoolPosition& labeled) {
+std::vector<SubtreeMove> contenders(const std::vector<Move>& moves, const PoolPosition& labeled,
+                                    const ContenderRule& rule) {
   const std::vector<PoolLabel>& labels = labeled.labels;
-  const auto best = std::max_element(
-    labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
-  const size_t k = size_t(best - labels.begin());
-  return {.move = moves[k], .equity_rank = int(k), .candidates = int(moves.size()), .q = best->q};
+  std::vector<size_t> order(moves.size());
+  std::iota(order.begin(), order.end(), size_t(0));
+  std::stable_sort(order.begin(), order.end(),
+                   [&](size_t a, size_t b) { return labels[a].q > labels[b].q; });
+  std::vector<SubtreeMove> out;
+  double total = 0;
+  for (const size_t k : order) {
+    if (!out.empty() && (labels[k].q < rule.min_q || int(out.size()) >= rule.max)) break;
+    out.push_back(
+      {.move = moves[k], .equity_rank = int(k), .candidates = int(moves.size()), .q = labels[k].q});
+    total += labels[k].q;
+  }
+  for (SubtreeMove& m : out) m.weight = m.q / total;
+  return out;
 }
 
-PoolJob after_reply_job(const RolloutStart& applied, const Rack& rack, const Move& reply, int sims,
-                        const Dictionary& dict, uint64_t seed) {
-  PoolJob job = position_job(mover_position(applied, rack), {reply}, seed, nullptr, dict, sims);
+SubtreeMove chosen_move(const std::vector<Move>& moves, const PoolPosition& labeled) {
+  return contenders(moves, labeled, {.min_q = 0, .max = 1}).front();
+}
+
+PoolJob after_reply_job(const RolloutStart& applied, const Rack& rack,
+                        const std::vector<Move>& replies, int sims, const Dictionary& dict,
+                        uint64_t seed) {
+  PoolJob job = position_job(mover_position(applied, rack), replies, seed, nullptr, dict, sims);
   // The replier's unseen pool less the leave, which the sims seat, and the
   // exchanged tiles, which went back only after the refill: the bag as the
   // mover of `applied` found it.
   const bool unseen = job.group.pool.remove(applied.returned.counts());
   DEBUG_ASSERT(unseen, "an exchange's tiles are unseen to the replier");
   job.group.opp_leaves.assign(size_t(sims), applied.leave);
-  job.starts[0].opp_returned = applied.returned;
+  for (RolloutStart& start : job.starts) start.opp_returned = applied.returned;
   return job;
 }
 
@@ -71,12 +88,13 @@ std::optional<PoolJob> ChunkedJobs::next() {
   return std::move(job);
 }
 
-void label_all(RolloutValues& values, const PoolLabeler::Params& params, ChunkedJobs& jobs,
-               const std::function<void(size_t, const PoolPosition&)>& done) {
+long long label_all(RolloutValues& values, const PoolLabeler::Params& params, ChunkedJobs& jobs,
+                    const std::function<void(size_t, const PoolPosition&)>& done) {
   PoolLabeler labeler(values, params);
   size_t emitted = 0;
   labeler.run([&] { return jobs.next(); },
               [&](PoolPosition&& p) { done(jobs.keys()[emitted++], p); });
+  return labeler.stats().tasks;
 }
 
 }  // namespace scribblez

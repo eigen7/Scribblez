@@ -167,7 +167,7 @@ std::vector<double> values_after_second_moves(const SecondMoves& second,
     std::vector<std::pair<size_t, PoolJob>> made(racks);
     util::parallel_for(racks, [&](size_t i) {
       const SecondTurn& t = second.turns[c][i];
-      made[i] = {c * racks + i, after_reply_job(t.bob, t.alice_rack, second.chosen[c][i], sims,
+      made[i] = {c * racks + i, after_reply_job(t.bob, t.alice_rack, {second.chosen[c][i]}, sims,
                                                 dict, rack_seed(seed, kAfterSecondDomain, i))};
     });
     return made;

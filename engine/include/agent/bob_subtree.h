@@ -8,9 +8,13 @@
 // Bob samples Alice's leave from his belief (belief::ReplyView: the leave
 // inference row of his position, Alice's private past hidden), sims his
 // static-equity top moves on those samples (Alice and Bob reply by HastyBot,
-// the leaf network at the end), and plays the one most likely best. Only the
-// move crosses back: Alice then sims each (a, r) after β(a, r) with her own
-// leave known and her replenishment drawn per sim, and values `a` by the mean.
+// the leaf network at the end), and his reply is the moves his sims leave a
+// real chance of being his best, each with that chance (ContenderRule): at
+// R_B racks his sims separate close moves poorly, so a near-tie does not snap
+// to one move. Only the moves cross back: Alice then sims each (a, r) after
+// each contender with her own leave known and her replenishment drawn per
+// sim, and values `a` by the mean over racks of her payoffs weighted by the
+// contenders' chances.
 //
 // Every subtree of a turn races through one PoolLabeler, so their rounds share
 // launches; so do Alice's sims. Jobs are built a candidate at a time, in
@@ -45,22 +49,40 @@ struct AliceTurn {
   const RolloutGroup& group;
 };
 
-// replies[c][i] = β(candidates[c], bob_racks[i]), for each c in `which`; the
-// other rows stay empty. `seed` keys Bob's samples and draws, by rack index.
-std::vector<std::vector<SubtreeMove>> bob_replies(const AliceTurn& turn,
-                                                  const std::vector<size_t>& which,
-                                                  const BeliefModel& model, RolloutValues& values,
-                                                  const SubtreeParams& params,
-                                                  const Dictionary& dict, uint64_t seed);
+// Bob's reply at one rack, as Alice's sims use it: his contenders, the
+// likeliest first, so the front is β(a, r); each one's weight is its share
+// of her value at the rack.
+using BobReply = std::vector<SubtreeMove>;
 
-// Alice's value of each candidate c in `which` from her sims after Bob's
-// replies: the mean over racks i of her win probability (a draw counting
-// half) over `sims` rollouts after β(c, i), each drawing her replenishment.
-// Other entries are kPruned.
-std::vector<double> values_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
-                                         const std::vector<std::vector<SubtreeMove>>& replies,
-                                         RolloutValues& values, int sims, const Dictionary& dict,
-                                         uint64_t seed);
+// replies[c][i] = Bob's reply to candidates[c] at bob_racks[i], for each c in
+// `which`; the other rows stay empty. `sims` counts the rollouts run.
+struct BobReplies {
+  std::vector<std::vector<BobReply>> replies;
+  long long sims = 0;
+};
+
+// `seed` keys Bob's samples and draws, by rack index.
+BobReplies bob_replies(const AliceTurn& turn, const std::vector<size_t>& which,
+                       const BeliefModel& model, RolloutValues& values, const SubtreeParams& params,
+                       const ContenderRule& rule, const Dictionary& dict, uint64_t seed);
+
+// Alice's sims after Bob's replies to each candidate c in `which`.
+struct ReplyPayoffs {
+  // payoffs[c][i][k]: Alice's win probability (a draw counting half) over
+  // `sims` rollouts after contender k of replies[c][i], each drawing her
+  // replenishment; one rack's contenders share draws. The other candidates'
+  // rows stay empty.
+  std::vector<std::vector<std::vector<double>>> payoffs;
+  // Alice's value of c: the mean over racks of her payoffs weighted by the
+  // contenders' weights; kPruned for the rest.
+  std::vector<double> values;
+  long long sims = 0;  // the rollouts run
+};
+
+ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
+                                   const std::vector<std::vector<BobReply>>& replies,
+                                   RolloutValues& values, int sims, const Dictionary& dict,
+                                   uint64_t seed);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).

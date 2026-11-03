@@ -9,6 +9,10 @@
 //     equity ranks of the others;
 //   - how sure Bob's sims were (the leader's q), and how many distinct replies
 //     the racks drew;
+//   - how many contenders his reply holds, at how many racks more than one,
+//     and how far apart Alice's payoffs after them lie, which is where the
+//     budget's stop rule reads whether his choice matters to her;
+//   - the rollouts each stage of the turn ran;
 //   - how often a second run of the subtrees, on fresh samples and draws, picks
 //     the same reply: β's stability in R_B and the seed;
 //   - Alice's value of each candidate under each reply model (null for the
@@ -21,6 +25,13 @@
 #include <vector>
 
 namespace scribblez {
+
+// The rollouts a turn ran, by stage.
+struct TurnSims {
+  long long first_pass = 0;  // the hasty sims of every candidate
+  long long subtrees = 0;    // Bob's
+  long long after_replies = 0;
+};
 
 struct SubtreeTurn {
   // Which game: DeepBot `agent` on game thread `thread` plays its games in
@@ -35,8 +46,10 @@ struct SubtreeTurn {
   std::vector<bool> searched;  // by candidate: Bob's subtree ran
   std::vector<double> subtree_values;
   std::vector<double> hasty_values;
-  const std::vector<std::vector<SubtreeMove>>* replies = nullptr;
-  const std::vector<std::vector<SubtreeMove>>* rerun = nullptr;  // the second seed's
+  const std::vector<std::vector<BobReply>>* replies = nullptr;
+  const std::vector<std::vector<BobReply>>* rerun = nullptr;  // the second seed's
+  const ReplyPayoffs* payoffs = nullptr;
+  TurnSims sims;
 };
 
 std::string subtree_turn_json(const SubtreeTurn& t);

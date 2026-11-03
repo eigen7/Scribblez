@@ -2,8 +2,9 @@
 // leaf (the suites hide the GPU): it plays whole games, deterministically for a
 // seed; asks the leave inference model for Alice's belief from her own view
 // and, in Bob's subtrees, for Bob's with her private past hidden; Bob replies
-// from his own equity top N; and --subtree-dump writes a line per turn. Skips
-// without the NWL23 lexicon and HastyBot's leave values.
+// from his own equity top N, as contenders weighted by their chance of being
+// his best; and --subtree-dump writes a line per turn. Skips without the NWL23
+// lexicon and HastyBot's leave values.
 
 #include "agent/alice_subtree.h"
 #include "agent/bob_subtree.h"
@@ -147,6 +148,7 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   std::ifstream in(p.subtree_dump);
   int lines = 0;
   int emptying = 0;
+  int with_choice = 0;
   for (std::string line; std::getline(in, line); ++lines) {
     const boost::json::object turn = boost::json::parse(line).as_object();
     EXPECT_EQ(turn.at("agent").as_string(), "DeepBot");
@@ -160,18 +162,40 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
         ++emptying;
         continue;
       }
+      // A weighted mean of win probabilities, within rounding of the weights.
       const double value = c.at("subtree_value").as_double();
-      EXPECT_TRUE(value >= 0.0 && value <= 1.0);
+      EXPECT_TRUE(value >= 0.0 && value <= 1.0 + 1e-9) << line;
       const boost::json::object& r = c.at("replies").as_object();
       const boost::json::array& ranks = r.at("rank_hist").as_array();
       EXPECT_LE(ranks.size(), size_t(p.subtree.late_candidates));
       int64_t racks = 0;
       for (const boost::json::value& n : ranks) racks += n.as_int64();
       EXPECT_EQ(racks, int64_t(p.bob_racks));
+      const double contenders = r.at("contenders_mean").as_double();
+      EXPECT_GE(contenders, 1.0);
+      EXPECT_LE(contenders, double(p.contenders.max));
+      const double choice = r.at("choice_share").as_double();
+      EXPECT_GE(choice, 0.0);
+      EXPECT_LE(choice, 1.0);
+      // Two of Bob's moves at a rack can also be worth the same to Alice.
+      EXPECT_GE(r.at("payoff_range_mean").as_double(), 0.0);
+      with_choice += choice > 0;
     }
+    // A turn whose candidates all empty the bag runs only the first pass.
+    const boost::json::object& sims = turn.at("sims").as_object();
+    const bool searched_any =
+      turn.at("subtree_pick").as_int64() >= 0 &&
+      std::any_of(
+        turn.at("candidates").as_array().begin(), turn.at("candidates").as_array().end(),
+        [](const boost::json::value& v) { return v.as_object().at("searched").as_bool(); });
+    EXPECT_GT(sims.at("first_pass").as_int64(), 0);
+    EXPECT_EQ(sims.at("subtrees").as_int64() > 0, searched_any) << line;
+    EXPECT_EQ(sims.at("after_replies").as_int64() > 0, searched_any) << line;
   }
   EXPECT_GT(lines, 5);
   EXPECT_GT(emptying, 0);  // this seed's game reaches one
+  // Three samples per rack leave Bob's sims unsure somewhere.
+  EXPECT_GT(with_choice, 0);
   std::filesystem::remove_all(dir);
 }
 
@@ -295,7 +319,7 @@ TEST(DeepBot, AliceNeverRedrawsTheTilesSheExchanged) {
   const RolloutStart exchanged = make_rollout_start(
     board, alice, 0, 0, Move::exchange(Rack::from_string("JKQXZ").counts()), /*group=*/0);
   const Rack bob = Rack::from_string("BCDFGHI");
-  const PoolJob job = after_reply_job(exchanged, bob, Move::pass(), /*sims=*/200, nwl23(), 1);
+  const PoolJob job = after_reply_job(exchanged, bob, {Move::pass()}, /*sims=*/200, nwl23(), 1);
   for (uint32_t k = 0; k < 200; ++k) {
     const TileCounts rack = after_reply_racks(job, k).opp.counts();
     ASSERT_EQ(rack.size(), RACK_SIZE);
@@ -327,7 +351,7 @@ TEST(DeepBot, AlicesCandidatesArePairedOnBothPlayersDrawsAfterBobsReply) {
   constexpr int kSims = 16;
   std::vector<PoolJob> jobs;
   for (const RolloutStart& a : applied)
-    jobs.push_back(after_reply_job(a, bob, reply, kSims, nwl23(), /*seed=*/5));
+    jobs.push_back(after_reply_job(a, bob, {reply}, kSims, nwl23(), /*seed=*/5));
   for (uint32_t k = 0; k < kSims; ++k) {
     const RolloutRacks first = after_reply_racks(jobs[0], k);
     const Rack bob_drew = without(first.mine, Rack::from_string("FGHI"));
@@ -402,5 +426,122 @@ TEST(DeepBot, TheSecondTurnIsTheRolloutsFirstPly) {
       EXPECT_EQ(second[i].reply, unpack_move(results[i].moves[0])) << c << " " << i;
       EXPECT_EQ(second[i].alice_rack, rollout_racks(batch, batch.tasks[i]).mine);
     }
+  }
+}
+
+namespace {
+
+// A labeled pool of `q.size()` moves, move k with chance q[k] of being best.
+PoolPosition labeled_pool(const std::vector<double>& q) {
+  PoolPosition out;
+  for (size_t k = 0; k < q.size(); ++k) {
+    out.moves.push_back(Move::exchange(Rack::from_string(std::string(k + 1, 'A')).counts()));
+    out.labels.push_back({.win_prob = 0.5, .paired_se = 0, .q = q[k], .rollouts = 1});
+  }
+  return out;
+}
+
+std::vector<int> ranks_of(const std::vector<SubtreeMove>& contenders) {
+  std::vector<int> out;
+  for (const SubtreeMove& m : contenders) out.push_back(m.equity_rank);
+  return out;
+}
+
+}  // namespace
+
+// Bob's contenders are the moves his sims leave at least the rule's chance
+// of being best, at most its count of them, likeliest first, with their
+// chances renormalized; the likeliest always stays, alone if nothing else
+// reaches the floor. chosen_move is the likeliest alone.
+TEST(DeepBot, ContendersAreTheMovesWithARealChanceOfBeingBobsBest) {
+  const PoolPosition pool = labeled_pool({0.05, 0.6, 0.3, 0.05});
+  const std::vector<SubtreeMove> two = contenders(pool.moves, pool, {.min_q = 0.1, .max = 3});
+  EXPECT_EQ(ranks_of(two), (std::vector<int>{1, 2}));
+  EXPECT_DOUBLE_EQ(two[0].weight, 0.6 / 0.9);
+  EXPECT_DOUBLE_EQ(two[1].weight, 0.3 / 0.9);
+  EXPECT_DOUBLE_EQ(two[0].q, 0.6);
+  EXPECT_EQ(two[0].candidates, 4);
+  EXPECT_EQ(ranks_of(contenders(pool.moves, pool, {.min_q = 0.1, .max = 1})),
+            (std::vector<int>{1}));
+  EXPECT_EQ(ranks_of(contenders(pool.moves, pool, {.min_q = 0, .max = 10})),
+            (std::vector<int>{1, 2, 0, 3}));
+  const SubtreeMove chosen = chosen_move(pool.moves, pool);
+  EXPECT_EQ(chosen.equity_rank, 1);
+  EXPECT_DOUBLE_EQ(chosen.weight, 1.0);
+  const PoolPosition flat = labeled_pool({0.08, 0.08, 0.08});
+  const std::vector<SubtreeMove> one = contenders(flat.moves, flat, {.min_q = 0.1, .max = 3});
+  EXPECT_EQ(ranks_of(one), (std::vector<int>{0}));
+  EXPECT_DOUBLE_EQ(one[0].weight, 1.0);
+}
+
+// Alice's value of a candidate is the mean over Bob's racks of her payoffs
+// after his contenders, weighted by their weights; with one contender per
+// rack it is the mean payoff.
+TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Midgame at = midgame(/*seed=*/5, /*plies=*/8);
+  const MoveRequest req{at.board,
+                        nwl23(),
+                        at.rack,
+                        Rack{},
+                        at.my_score,
+                        at.opp_score,
+                        at.board.pov_bag_size(at.rack.size())};
+  const std::vector<Move> moves = equity_top_k(req, 2);
+  constexpr int kRacks = 3;
+  const PoolJob root =
+    position_job(sim_position_from(req), moves, /*seed=*/11, nullptr, nwl23(), kRacks);
+  const std::vector<Rack> racks = bob_racks(root.group, root.starts[0], kRacks);
+  const belief::ReplyPosition position{.board = at.board,
+                                       .chooser_rack = at.rack,
+                                       .chooser_score = at.my_score,
+                                       .opp_score = at.opp_score,
+                                       .bag = req.bag_size,
+                                       .earlier = {}};
+  const AliceTurn turn{position, moves, root.starts, racks, root.group};
+  // Bob's reply at each rack: his equity top two, weighted 3 to 1.
+  std::vector<std::vector<BobReply>> replies(moves.size(), std::vector<BobReply>(kRacks));
+  for (size_t c = 0; c < moves.size(); ++c) {
+    for (size_t i = 0; i < kRacks; ++i) {
+      const std::vector<Move> his = mover_candidates(
+        mover_position(root.starts[c], racks[i]), {.candidates = 2, .late_candidates = 2}, nwl23());
+      ASSERT_EQ(his.size(), 2u);
+      replies[c][i] = {{.move = his[0], .weight = 0.75}, {.move = his[1], .weight = 0.25}};
+    }
+  }
+  CpuRolloutValues values(nwl23(), synthetic_leaf());
+  const std::vector<size_t> which{0, 1};
+  constexpr int kSims = 4;
+  const ReplyPayoffs weighted =
+    payoffs_after_replies(turn, which, replies, values, kSims, nwl23(), /*seed=*/2);
+  EXPECT_EQ(weighted.sims, int64_t(moves.size()) * kRacks * 2 * kSims);
+  for (size_t c : which) {
+    double expect = 0;
+    for (size_t i = 0; i < kRacks; ++i) {
+      ASSERT_EQ(weighted.payoffs[c][i].size(), 2u);
+      for (const double p : weighted.payoffs[c][i]) {
+        EXPECT_GE(p, 0.0);
+        EXPECT_LE(p, 1.0);
+      }
+      expect += (0.75 * weighted.payoffs[c][i][0] + 0.25 * weighted.payoffs[c][i][1]) / kRacks;
+    }
+    EXPECT_NEAR(weighted.values[c], expect, 1e-12);
+  }
+  // One contender, weight 1: the mean of its payoffs, the same sims.
+  for (auto& by_rack : replies)
+    for (BobReply& r : by_rack) {
+      r.resize(1);
+      r[0].weight = 1;
+    }
+  const ReplyPayoffs single =
+    payoffs_after_replies(turn, which, replies, values, kSims, nwl23(), /*seed=*/2);
+  for (size_t c : which) {
+    double expect = 0;
+    for (size_t i = 0; i < kRacks; ++i) {
+      ASSERT_EQ(single.payoffs[c][i].size(), 1u);
+      EXPECT_DOUBLE_EQ(single.payoffs[c][i][0], weighted.payoffs[c][i][0]);
+      expect += single.payoffs[c][i][0] / kRacks;
+    }
+    EXPECT_NEAR(single.values[c], expect, 1e-12);
   }
 }

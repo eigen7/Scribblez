@@ -7,8 +7,9 @@
 // draws the rest of both racks. How Bob replies is the reply model:
 //
 //   - `subtree`: Bob decides on his own information (agent/bob_subtree.h).
-//     For rack i, his own sims choose β, and Alice's sims after β, with her
-//     replenishment drawn, value the candidate. She plays the best mean.
+//     For rack i, his own sims leave his contenders with their chances of
+//     being his best, and Alice's sims after each, with her replenishment
+//     drawn, value the candidate by their weighted mean. She plays the best.
 //   - `hasty`: Bob and then Alice reply by HastyBot and the leaf network values
 //     the end state, BestBot's loop with inferred racks and the leaf network.
 //     The sims race the candidates in rounds (sim/pool_labeler.h), and she
@@ -72,9 +73,10 @@ class DeepBot : public Agent {
     // How many of Alice's candidates, the best by a first pass of hasty sims,
     // get the subtree; 0: all.
     int subtree_candidates = 8;
-    int sims_per_rack = 4;
-    SubtreeParams subtree{};  // Bob's, under `subtree`
-    SubtreeParams second{};   // Alice's second turn's, under `alice-subtree`
+    int sims_per_rack = 4;       // ... after each of Bob's contenders
+    SubtreeParams subtree{};     // Bob's, under `subtree`
+    ContenderRule contenders{};  // which of Bob's moves Alice sims after
+    SubtreeParams second{};      // Alice's second turn's, under `alice-subtree`
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
     // the hasty sims and a second run of the subtrees.
     std::string subtree_dump{};
@@ -115,10 +117,14 @@ class DeepBot : public Agent {
   // Alice's belief about Bob's leave, null where the model has none to give.
   std::shared_ptr<const belief::LeaveSampler> root_belief(const belief::LeaveQuery& q) const;
   uint64_t turn_seed() const;
-  // The hasty sims of `moves` over `rollouts` racks for Bob.
-  std::vector<PoolLabel> hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
-                                      const belief::LeaveSampler* belief, int rollouts,
-                                      bool race) const;
+  // The hasty sims of `moves` over `rollouts` racks for Bob, and the rollouts
+  // they ran.
+  struct HastySims {
+    std::vector<PoolLabel> labels;
+    long long sims = 0;
+  };
+  HastySims hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
+                         const belief::LeaveSampler* belief, int rollouts, bool race) const;
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
   // The candidates whose hasty first pass (`hasty`) ranks them among the best
@@ -129,14 +135,13 @@ class DeepBot : public Agent {
   // Alice's value of each candidate under the reply model's subtree, for the
   // `searched`; kPruned for the rest.
   std::vector<double> bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
-                                         const std::vector<PoolLabel>& hasty,
+                                         const HastySims& hasty,
                                          const std::vector<size_t>& searched);
   std::vector<double> second_turn_values(const MoveRequest& req, const AliceTurn& turn,
                                          const std::vector<size_t>& searched);
-  void dump_turn(const MoveRequest& req, const AliceTurn& turn, const std::vector<PoolLabel>& hasty,
-                 const std::vector<size_t>& searched,
-                 const std::vector<std::vector<SubtreeMove>>& replies,
-                 const std::vector<double>& values) const;
+  void dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
+                 const std::vector<size_t>& searched, const BobReplies& replies,
+                 const ReplyPayoffs& payoffs, const std::vector<double>& values) const;
   // What Alice's and her model of Bob's beliefs come from.
   BeliefModel belief_model() const { return {backend_.predict, backend_.table.get()}; }
 

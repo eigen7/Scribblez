@@ -25,10 +25,11 @@ json::value subtree_value(double v) {
   return v;
 }
 
-// Bob's most frequent replies over the racks, most frequent first.
-json::array top_replies(const std::vector<SubtreeMove>& replies, const Board& board) {
+// Bob's most frequent replies (β) over the racks, most frequent first.
+json::array top_replies(const std::vector<BobReply>& replies, const Board& board) {
   std::map<std::string, std::pair<int, int>> seen;  // move -> (count, equity rank)
-  for (const SubtreeMove& r : replies) {
+  for (const BobReply& reply : replies) {
+    const SubtreeMove& r = reply.front();
     auto& [count, rank] = seen[describe_move(r.move, board)];
     ++count;
     rank = r.equity_rank;
@@ -45,26 +46,41 @@ json::array top_replies(const std::vector<SubtreeMove>& replies, const Board& bo
   return out;
 }
 
+// The spread of Alice's payoffs after one rack's contenders: 0 with one.
+double payoff_range(const std::vector<double>& payoffs) {
+  const auto [lo, hi] = std::minmax_element(payoffs.begin(), payoffs.end());
+  return *hi - *lo;
+}
+
 // What Bob's replies to one of Alice's candidates looked like.
-json::object reply_summary(const std::vector<SubtreeMove>& replies,
-                           const std::vector<SubtreeMove>& rerun, const Board& board) {
+json::object reply_summary(const std::vector<BobReply>& replies, const std::vector<BobReply>& rerun,
+                           const std::vector<std::vector<double>>& payoffs, const Board& board) {
   json::array rank_hist;
   double mean_q = 0;
   int hasty = 0;
   int agree = 0;
+  int contenders = 0;
+  int with_choice = 0;
+  double range = 0;
   for (size_t i = 0; i < replies.size(); ++i) {
-    const SubtreeMove& r = replies[i];
+    const SubtreeMove& r = replies[i].front();
     if (size_t(r.equity_rank) >= rank_hist.size()) rank_hist.resize(size_t(r.equity_rank) + 1, 0);
     rank_hist[size_t(r.equity_rank)] = rank_hist[size_t(r.equity_rank)].as_int64() + 1;
     mean_q += r.q / double(replies.size());
     hasty += r.equity_rank == 0;
-    agree += r.move == rerun[i].move;
+    agree += r.move == rerun[i].front().move;
+    contenders += int(replies[i].size());
+    with_choice += replies[i].size() > 1;
+    range += payoff_range(payoffs[i]);
   }
   const double n = double(replies.size());
   return {{"hasty_share", hasty / n},
           {"rank_hist", std::move(rank_hist)},
           {"mean_q", mean_q},
           {"rerun_agree", agree / n},
+          {"contenders_mean", contenders / n},
+          {"choice_share", with_choice / n},
+          {"payoff_range_mean", range / n},
           {"top_replies", top_replies(replies, board)}};
 }
 
@@ -78,8 +94,10 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
                    {"subtree_value", subtree_value(t.subtree_values[c])},
                    {"hasty_value", t.hasty_values[c]},
                    {"searched", bool(t.searched[c])}};
-    if (t.searched[c])
-      o["replies"] = reply_summary((*t.replies)[c], (*t.rerun)[c], turn.applied[c].board);
+    if (t.searched[c]) {
+      o["replies"] =
+        reply_summary((*t.replies)[c], (*t.rerun)[c], t.payoffs->payoffs[c], turn.applied[c].board);
+    }
     candidates.push_back(std::move(o));
   }
   const json::object out{{"agent", t.agent},
@@ -90,6 +108,10 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
                          {"bob_racks", turn.bob_racks.size()},
                          {"subtree_pick", best_candidate(t.subtree_values)},
                          {"hasty_pick", best_candidate(t.hasty_values)},
+                         {"sims",
+                          {{"first_pass", t.sims.first_pass},
+                           {"subtrees", t.sims.subtrees},
+                           {"after_replies", t.sims.after_replies}}},
                          {"candidates", std::move(candidates)}};
   return json::serialize(out);
 }
