@@ -38,9 +38,10 @@ moved on. New plans go here, not in `docs/` proper.
   opponent's own beliefs. Sims are two mechanical moves ending at a leaf
   network, with racks from a generational leave inference model. Each sim's
   residuals against a search network (value, per-square ownership and
-  points, and the opponent's searched reply) are read by a reader that
-  steers which moves get sims, across racks and candidates, and budgets
-  the opponent's subtrees.
+  points, end-of-game outcomes, and the opponent's searched reply) are
+  stored for the turn and read back by the same network, which steers which
+  moves get sims, across racks and candidates, chooses the opponent's reply,
+  and budgets the opponent's subtrees.
 - **[deep_bot_v0.md](deep_bot_v0.md)**: *proposed, not built.* The
   implementation plan for DeepBot's first two models, trained from
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave

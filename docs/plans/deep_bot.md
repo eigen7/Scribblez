@@ -3,7 +3,10 @@
 **Status: proposed 2026-10-14; revised 2026-10-25 to build the agent first
 on static-equity candidates ([Candidates](#candidates)); revised 2026-11-02
 to carry each sim's evidence across the search ([Evidence across the
-search](#evidence-across-the-search), [Budget](#budget)); not yet placed in
+search](#evidence-across-the-search), [Budget](#budget)); revised
+2026-11-03 to make the search network one model that reads the evidence
+store, with end-of-game heads and a root correction head ([The search
+network](#the-search-network)); not yet placed in
 the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
@@ -39,9 +42,10 @@ Write **Alice** for the player to move and **Bob** for the opponent.
    his subtree leaves them [tied](#budget).
 5. **Evidence.** Every sim, at both levels, is compared with what the
    [search network](#the-search-network) predicted for it. The gaps are
-   collected for the turn, and a [reader](#the-evidence-store-and-the-reader)
-   carries them to the moves not yet simmed, under every candidate. They
-   decide which moves get sims next and where sims stop.
+   collected for the turn in an [evidence store](#the-evidence-store), and
+   the search network reads them to predict the moves not yet simmed, under
+   every candidate. They decide which moves get sims next, where sims stop,
+   and Bob's choice at each rack.
 6. **The pick.** Alice plays the candidate with the highest `q(a)`.
 
 ## Bob's subtree
@@ -64,8 +68,12 @@ holds `r`, what does Bob play?
 
    All of Bob's candidates use the same `R_B` racks and draws, so they are
    compared on paired samples.
-4. **The choice.** `score(b)` is the mean over Alice's sampled racks, and
-   `β(a, r) = argmax_b score(b)`. Where Bob's leading moves stay within
+4. **The choice.** `score(b)` is the mean over Alice's sampled racks. Bob's
+   move `β(a, r)` is the top of the [search network's
+   policy](#the-search-network) at `(a, r)` once it has read the turn's
+   evidence, these scores among it ([The evidence
+   store](#the-evidence-store)): the argmax of `score(b)` alone separates
+   close moves poorly at `R_B` racks. Where Bob's leading moves stay within
    noise of each other and Alice's payoffs after them differ, the
    [budget](#budget) keeps them all, weighted by their chance of being
    best, instead of paying to separate them.
@@ -168,9 +176,11 @@ reports, for every square empty after its fixed moves, the
 tile there, whether that move is a bingo, and the signed points of that
 move. Squares filled during the sim's mechanical moves are known exactly.
 Squares still empty at the leaf take the leaf network's predictions, which
-it makes with the same ownership and points heads. That is how the sim's
-value is completed too: what the sim played is exact, and the leaf network
-estimates the rest.
+it makes with the same ownership and points heads. The sim also reports
+who goes out and the net end-of-game rack adjustment: exact if the game
+ended inside it, otherwise the leaf network's going-out and end-of-game
+points heads predict them. That is how the sim's value is completed too:
+what the sim played is exact, and the leaf network estimates the rest.
 
 **The leaf network is versioned.** It is trained on `.slog` outcomes of the
 current policy by the `deep_bot_leaf_eval` workload, which exports each
@@ -328,35 +338,52 @@ well as dear:
 
 So a sim's result is also evidence about the rest of the tree. The evidence
 is the gap, the **residual**, between what a sim found and what a network
-predicted it would find. Three pieces carry it: the search network makes the
-predictions, the sims' residuals are stored for the turn, and a reader
-applies them to moves not yet simmed.
+predicted it would find. One network carries it: the search network makes
+the predictions with no evidence, the sims' residuals against them are
+stored for the turn, and the same network, reading that store, predicts the
+moves not yet simmed.
 
 ### The search network
 
-The search network predicts, for a move from a player's information set,
-what the sims after it will measure. It reads the board, the cross-checks,
-the unseen pool, the bag count, the scores, the evaluator's own rack and
-the evaluator's [belief](#beliefs) about the opponent's rack, summarized per
-letter. It builds on the move set model's trunk and move encoder, so the
-board is encoded once per position and each candidate adds only its own
-features.
+One network serves both levels. Given a position from the mover's
+information set, it predicts what the sims after each of the mover's moves
+will measure, and which move a one-level search would choose. It reads the
+board, the cross-checks, the unseen pool, the bag count, the scores, the
+mover's own rack and the mover's [belief](#beliefs) about the opponent's
+rack, summarized per letter. It builds on the move set model's trunk and
+move encoder, so the board is encoded once per position and each move adds
+only its own features.
 
 The **evaluator** is the player whose evaluation the sims belong to: Bob in
 his subtree, Alice in hers. Per-player targets are written from the
 evaluator's side.
 
+**The store is an optional input.** A store-attention block over the
+trunk's output reads the turn's [evidence store](#the-evidence-store). With
+an empty store the block is skipped, and the outputs are the network's
+prior; with evidence, the value and policy outputs are corrected by it. The
+trunk runs once per position, when the search first reaches it, and the
+store block runs again as evidence arrives, against the cached trunk
+output.
+
 **Continuation heads.** These predict what follows a fixed move (or moves)
 when play continues as the [sims](#sims) play it: the mechanical moves, then
 the leaf.
 
-- **Value:** the evaluator's win probability.
+- **Value:** the evaluator's win probability, as a mean and a variance.
 - **Ownership:** for every empty square, five classes: the evaluator places
   a tile there in a bingo, the evaluator places one in another move, the
   opponent does either, or the square stays empty to the game's end.
 - **Points:** for every empty square, the expected signed points of the move
   that places a tile there (positive for the evaluator, negative for the
   opponent, zero if it stays empty), and their variance.
+- **Going out:** three classes: the evaluator goes out, the opponent does,
+  or nobody does (the game ends on scoreless turns).
+- **End-of-game points:** the net end-of-game rack adjustment from the
+  evaluator's side, as a mean and a variance. When a player goes out, it is
+  what that player collects from the other's rack, signed by who did; when
+  nobody does, it is the opponent's remaining rack value minus the
+  evaluator's.
 
 Why the targets have this shape:
 
@@ -378,57 +405,119 @@ Why the targets have this shape:
   rare class on a given square is seldom. The variance separates a likely
   small move from an unlikely large one with the same mean; the ownership
   classes add who would make it.
-- **Losses fit moments, not a Gaussian.** The points target is a spike at
-  zero plus scattered large values. The mean trains on squared error, and
-  the variance on squared error against the squared deviation from the
-  predicted mean, with no gradient through that mean. Each is consistent
-  whatever the target's shape. In the transfer test, plain Gaussian
-  likelihood let a head lower its loss by widening its spread instead of
-  moving its mean ([supreme_bot_m1a.md](supreme_bot_m1a.md)).
+- **The end of the game is timing, not place.** Near the end, who goes out
+  first, and what the other player is left holding, can decide the game
+  while the board barely changes, and the maps do not show it. The
+  end-of-game points are unconditional for the same reason as the squares':
+  a game nobody goes out of still has a net adjustment, so every game labels
+  them.
+- **Losses fit moments, not a Gaussian.** The per-square points target is a
+  spike at zero plus scattered large values. The mean trains on squared
+  error, and the variance on squared error against the squared deviation
+  from the predicted mean, with no gradient through that mean. Each is
+  consistent whatever the target's shape, and the end-of-game points use the
+  same losses. In the transfer test, plain Gaussian likelihood let a head
+  lower its loss by widening its spread instead of moving its mean
+  ([supreme_bot_m1a.md](supreme_bot_m1a.md)).
 
-**The reply-policy head.** `π_B(b | board after a, r, Bob's belief)`: the
-probability that Bob's subtree chooses `b`. Bob's subtree is a one-level
-search from his information set: sim each candidate with hasty replies to
-the leaf, take the best. That is the decision any player to move makes at a
-position under this design, and it is what the policy-set pools label. So
-the head is the [policy form](#form-3-a-policy) of the policy-set model,
-trained on pools from self-play positions, from the side of the player to
-move. There is no model of Bob as such. Alice poses the question from his
-side: his rack `r`, and his belief about her given `a`, read through the
-reply view that hides his private past ([Beliefs](#beliefs)), as the leave
-inference model trains to.
+**The policy head.** `π(m | position, mover's rack, mover's belief)`: the
+probability that `m` is the mover's best move by a **one-level search**.
+That search sims each of the mover's moves with the opponent's rack drawn
+from the mover's belief, the opponent and then the mover replying hastily,
+and the leaf network at the end; the best move has the largest mean. Only
+the mover's own move is searched, so it is the mover's best against a hasty
+opponent. The pools label exactly that ([Labels](#labels)), so the head is
+the [policy form](#form-3-a-policy) of the policy-set model, trained on pools
+from self-play positions, from the mover's side.
+
+DeepBot uses it at Bob's level, where it is the right question: Bob's
+subtree is that search, with Alice replying hastily, so `π` predicts the
+move his subtree would choose with unlimited sims. There is no model of Bob
+as such. Alice poses the question from his side: his rack `r`, and his
+belief about her given `a`, read through the reply view that hides his
+private past ([Beliefs](#beliefs)), as the leave inference model trains to.
+At each `(a, r)`, the policy:
+
+- orders his moves for sims ([Steering](#steering));
+- is his reply at a rack the [budget](#budget) gives no sims, as a
+  distribution, so that a near-tie does not snap to one move;
+- is his choice at a rack that has sims, once it has read them
+  ([The evidence store](#the-evidence-store));
+- weights his replies in Alice's value for a candidate, below.
+
+Alice's decision at the root is made by search, from values, and does not
+read `π`. At her position, `π` would answer "her best move against a hasty
+Bob", which is the question the subtree is there to improve on.
+
+Two choices shape the head:
+
+- **A policy, not the value head's chance of being best.** Moves' sim
+  outcomes are strongly correlated through shared racks and draws: the
+  per-rollout spread is far larger than the margins between moves
+  ([Evidence across the search](#evidence-across-the-search)). Per-move
+  means and variances cannot recover the chance that a move is best; a head
+  trained on the pools' paired chance of best can.
+- **One level, by design.** Bob models Alice as hasty, which is where the
+  design's recursion stops. A Bob who models Alice as a searcher would be a
+  further level of subtrees, a setting of the [reply model](#candidates),
+  not a head.
 
 This head is where the searching Bob lives in the network. Every value in
 the design is a continuation after fixed moves; searching changes only which
 moves are fixed. So Alice's prediction for a candidate decomposes as
 
-`q̂(a) = mean_r Σ_b π_B(b | a, r) · V(a, b)`
+`q̂(a) = mean_r Σ_b π(b | a, r) · V(a, b)`
 
 with `V` the value head from Alice's side after `a` and `b`.
+
+**The root correction head.** At Alice's position, the value head values
+each of her moves against a hasty Bob, as the pools label it. What modeling
+Bob as a searcher changes is `Δ(a) = q_subtree(a) − q_hasty(a)`: her value
+for `a` with Bob's subtree as the [reply model](#candidates), minus her
+value with `hasty`. The head predicts `Δ` as a mean and a variance, and
+`V(a) + Δ̂(a)` is her prior for `q(a)`, which [steering](#steering) uses to
+admit and order candidates before their children are evaluated. After that,
+`q̂(a)` is composed from the children, so the head reads no store.
+
+- **Its labels come from DeepBot's own turns.** Successive halving values
+  every candidate with `hasty` first and runs the subtree for the survivors
+  ([Budget](#budget)), over the same Bob racks, so each survivor's `Δ` is a
+  paired difference, less noisy than either value alone. Self-play logs it
+  per candidate with its sample count, and the loss is masked to the logged
+  candidates.
+- **A value correction, not a two-level policy.** The root admits
+  candidates by expected improvement, from means and variances, so
+  `V + Δ̂` and its spread carry what Alice needs. A kind of move DeepBot has
+  not searched keeps a correction near zero, and its one-level value
+  stands, where a two-level policy would extrapolate freely.
 
 **Maps are computed only for simmed moves.** A residual map needs the
 predicted map of the post-move board, which is a spatial decode per
 candidate. Moves that get sims need it to form their residuals; moves that
-don't need only the reader's scalar predictions.
+don't need only the network's scalar outputs.
 
 **v0: the leaf network predicts.** The leaf network already values a
-position right after a fixed move under the hasty continuation, and gets the
-ownership and points heads ([Sims](#sims)). Until the search network is
-built, a simmed move's prediction is the leaf network's on the post-move
+position right after a fixed move under the hasty continuation, and gets
+the other continuation heads too ([Sims](#sims)). Until the search network
+is built, a simmed move's prediction is the leaf network's on the post-move
 position, averaged over the racks the sims sampled. The residual is then
 the difference between the network's value after two mechanical moves and
 its value before them, as in temporal-difference learning: what those two
 moves revealed that the network did not see.
 
-**Labels.** Two sources, both exact for what they label:
+**Training data.** Four sources, each exact for what it labels:
 
 - **Game records.** A `.slog` replay knows who placed every tile, in which
-  move, for how many points, whether the move was a bingo, and who won. The
-  continuation heads pretrain on that for free, as KataGo trains its
-  ownership head on finished games.
+  move, for how many points, whether the move was a bingo, who went out,
+  the end-of-game rack adjustment, and who won. The continuation heads
+  pretrain on that for free, as KataGo trains its ownership head on finished
+  games.
 - **Pools.** Self-play positions with every legal move simmed from the
-  mover's side ([Labels](#labels)) train the reply-policy head. Grouped
-  pools ([below](#the-evidence-store-and-the-reader)) train the reader.
+  mover's side ([Labels](#labels)) train the policy and value heads with
+  an empty store.
+- **Grouped pools** ([below](#the-evidence-store)) train the value and
+  policy outputs with a store.
+- **DeepBot's root records** train the root correction head.
 
 **Coverage grows with generations.** Bob decides after Alice's candidates,
 including setups and exchanges that self-play rarely plays, so at generation
@@ -438,20 +527,28 @@ when they win, so the positions after them fill in, as in AlphaZero.
 
 ### Residuals
 
-Every sim yields, against the search network's prediction for its fixed
-moves:
+Every sim yields, against the search network's prior for its fixed moves:
 
 - **a value residual:** the sim's value minus the predicted value;
 - **map residuals:** for each square, the realized class minus the predicted
   class probabilities, and the realized signed points minus the predicted
-  mean (and the squared deviation minus the predicted variance).
+  mean (and the squared deviation minus the predicted variance);
+- **end-of-game residuals:** who went out minus the predicted classes, and
+  the net rack adjustment minus its predicted mean (and the squared
+  deviation minus the predicted variance). A sim that stops at the leaf
+  completes them with the leaf network's predictions, as it completes the
+  maps.
 
 At Bob's level, each rack also yields a **reply residual**: his subtree's
-choice, or its chance-of-best weights, against `π_B`. That is the lesson
+chance-of-best weights from its sims, against `π`. That is the lesson
 "after this candidate, a rack like this one replies there", and it is keyed
 by the squares the reply uses, which is what lets it travel.
 
-### The evidence store and the reader
+**Residuals are taken against the prior.** The prediction is always the
+network's empty-store output, never its store-informed one, so an item
+means the same thing whatever enters the store later.
+
+### The evidence store
 
 The **evidence store** holds the turn's residuals. Each item records:
 
@@ -465,12 +562,14 @@ The **evidence store** holds the turn's residuals. Each item records:
 
 There is one store per turn, not one per candidate.
 
-The **reader** is a network that, given a target (one of Alice's moves not
-yet simmed, or one of Bob's moves at one rack under any candidate), predicts
-a correction to the search network's prediction for it: the value residual,
-as a mean and a variance, and at Bob's level a correction to `π_B`. With no
-evidence its correction is zero, so a search starts from the search
-network's predictions. It attends over the store by two kinds of match:
+**The search network reads it.** For a target, one of Bob's moves at one
+rack under any candidate, the store-attention block attends over the store.
+The value output becomes a corrected mean and variance, and the policy a
+corrected distribution over the rack's moves. Their gap from the
+empty-store pass is the correction; with no evidence it is zero, so a
+search starts from the prior. The ownership, points and end-of-game heads
+stay store-free: they exist to form residuals. The block attends by two
+kinds of match:
 
 - **Region:** whether the target places tiles on, or changes the hooks of,
   the squares an item's residuals concern, and whether the target's
@@ -483,18 +582,27 @@ network's predictions. It attends over the store by two kinds of match:
   an S fills pays for a rack holding the S, or likely to draw it. So both
   sides' context is an input.
 
+**A rack's own sims are evidence too.** Once some of Bob's moves at
+`(a, r)` have sims, their residuals are in the store, so the policy at that
+rack combines its own sims with every other rack's evidence. Its top move
+is Bob's choice there, in place of the argmax of his sims alone, which
+separates close moves poorly at `R_B = 20` ([Evidence across the
+search](#evidence-across-the-search)). The policy's target is the choice his
+subtree would make with unlimited sims, and the rest of the turn's evidence
+is what brings a few sims closer to it.
+
 **Evidence crosses candidates.** Bob's racks are shared by every candidate,
 and any one candidate leaves most of the board unchanged. A reply found
 under one candidate therefore informs Bob's racks under every candidate
 that leaves its region intact in a similar context. Most of the redundancy
 between subtrees lies there.
 
-**Training data: grouped pools.** The reader learns from the same kind of
-decision Bob's subtrees make, a player to move choosing by hasty-reply sims,
-grouped the way a turn's evidence is. A generator on the pool labeler takes a
-self-play position, the parent, and several of the moves available there;
-at each resulting position it samples several racks for the player to move,
-and labels each rack's pool. It writes:
+**Training data: grouped pools.** The store input learns from the same kind
+of decision Bob's subtrees make, a player to move choosing by hasty-reply
+sims, grouped the way a turn's evidence is. A generator on the pool labeler
+takes a self-play position, the parent, and several of the moves available
+there; at each resulting position it samples several racks for the player
+to move, and labels each rack's pool. It writes:
 
 - per (move from the parent, rack, reply): the value residual and the
   reply's chance of being best;
@@ -508,28 +616,45 @@ would sim, in a sidecar beside the pools. Moves, racks and replies per
 group are the generator's parameters, and they set the size of a group's
 record.
 
-**Training: masked prediction on the grouped pools.** Hide whole moves from
-the parent, or racks within one, and predict their residuals and replies
-from the rest of the group. That is the reader's task in search, including
-the cases where transfer should fail (a lane blocked, a different bag
-count). The value loss is a likelihood (beta-NLL, as in the transfer test),
-so the predicted variance is calibrated: the [budget](#budget) relies on it.
+**The evidence has a search's noise.** A search's store holds a few
+rollouts per move, and only for the moves it admitted; a pool labels every
+legal move with many. So the visible evidence is a subsample of each pool's
+paired rollouts, at the counts a search runs and only for each rack's
+leading moves, while the targets are the full labels. Maps are evidence
+only, never targets, so the generator writes each one over rollout slices
+of those sizes. Trained on clean, complete evidence, the network would trust
+the noisy, partial evidence of a search too much.
 
-**Generations.** The search network learns to predict the agent's own
-choices, and the next agent searches with it, as in AlphaZero. Over
-generations the heads absorb the common lessons, and the reader is left
-with what is new in each position.
+**Training: masked prediction on the grouped pools.** Hide whole moves from
+the parent, or racks within one, and predict their full-label value
+residuals and chances of being best from the rest of the group. A hidden
+rack keeps a subsample of its own rollouts visible, from none to a search's
+full count, so the network learns the whole range from no sims to many;
+with everything hidden, the target is the empty-store prior. That is the
+store input's task in search, including the cases where transfer should
+fail (a lane blocked, a different bag count). The value loss is a
+likelihood (beta-NLL, as in the transfer test), so the predicted variance is
+calibrated: the [budget](#budget) relies on it.
+
+**Generations.** Each generation's search network trains on positions from
+the previous agent's self-play, and its root correction head on that
+agent's root records. Over generations the prior absorbs the common
+lessons, and the store input is left with what is new in each position.
 
 ### Steering
 
-A move is admitted for sims by its expected improvement over the current
-best: Alice's leader at the root, the rack's leader at Bob's level. Its
-mean is the search network's prediction plus the reader's correction, and
-its spread is the reader's variance. A move the evidence lifts enters
-whatever the proposer thought of it; a move predicted to be far below
-the leader is never simmed. A small floor on admission keeps a wrong
-prediction from going uncorrected forever: a move that is never simmed
-never produces the evidence that would correct it.
+A move is admitted for sims by its prospects against the current leader:
+
+- **at Bob's level,** by its chance of being his best at the rack, from the
+  store-informed policy;
+- **at the root,** by its expected improvement over Alice's leader, from her
+  prior `V + Δ̂` and its spread until the candidate's children are
+  evaluated, and from `q̂(a)` after.
+
+A move the evidence lifts enters whatever the proposer thought of it; a
+move predicted to be far below the leader is never simmed. A small floor on
+admission keeps a wrong prediction from going uncorrected forever: a move
+that is never simmed never produces the evidence that would correct it.
 
 ## The policy-set model
 
@@ -917,9 +1042,9 @@ The round schedule is re-tuned there by measurement.
 Fixed counts give every `(a, r)` the same `N_B · R_B` sims, whatever the
 turn has already learned. With the [evidence](#evidence-across-the-search),
 each of Bob's moves at each rack carries a belief about its value to him:
-the search network's prediction plus the reader's correction, with the
-reader's variance, updated by the move's own sims as they arrive. Three
-decisions read those beliefs.
+the search network's store-informed value, with its variance, and its
+store-informed policy, both updated as the move's own sims enter the store.
+Three decisions read those beliefs.
 
 1. **Which of Bob's moves get sims.** At each rack, the moves with a real
    chance of being his best, which replaces a fixed `N_B`
@@ -937,8 +1062,9 @@ decisions read those beliefs.
 3. **Which racks get sims at all.** A rack whose reply the beliefs already
    settle before any sims gets none, and its `β(a, r)` is the predicted
    move. A small random share of such racks is simmed anyway, as an audit.
-   Where an audit disagrees with the prediction, the reader's variance
-   widens for the rest of the turn, and more racks get sims.
+   An audit's sims enter the store like any others, and where they
+   disagree with the prediction, a larger share of the settled racks is
+   simmed for the rest of the turn.
 
 Decisions 2 and 3 choose Bob's reply from predictions in place of sims.
 Only the move crosses back, so a wrong prediction picks a wrong reply for
@@ -963,9 +1089,9 @@ Three cheaper levers remain:
   for candidates that survive it.
 - **Caching `β(a, r)`.** Every replenishment sim of `(a, r)` reuses Bob's
   choice.
-- **Batching** the network calls (the leave beliefs, the search network
-  and the reader) across subtrees, following the `BatchingPositionEvalService`
-  pattern.
+- **Batching** the network calls (the leave beliefs and the search
+  network's two passes) across subtrees, following the
+  `BatchingPositionEvalService` pattern.
 
 ## Build order
 
@@ -1002,34 +1128,45 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
      equal time.
 6. **Allocation.** Successive halving and racing. *Measure:* the strength
    lost against the time saved.
-7. **Ownership and points heads,** on the leaf network and on the search
-   network, trained from game records. *Measure:* held-out loss per head
-   by bag size, and the maps at the known positions (whether a hook the
-   mover alone can fill, or a setup beside an existing hook, shows in the
-   maps).
+7. **Continuation heads on the leaf network,** trained from game records:
+   ownership and points, then going out and end-of-game points.
+   *Measure:* held-out loss per head by bag size, the maps at the known
+   positions (whether a hook the mover alone can fill, or a setup beside an
+   existing hook, shows in the maps), and the going-out calibration in the
+   last turns.
 8. **Maps from sims.** The kernel and the CPU reference return each
-   candidate's summed maps, completed by the leaf network's maps, and the
-   agent forms residuals against the leaf network's prediction on the
-   post-move position (v0, [The search network](#the-search-network)).
-   *Measure:* the noise of a square's residual against the rollout count.
+   candidate's summed maps and end-of-game outcomes, completed by the leaf
+   network's predictions, and the agent forms residuals against the leaf
+   network's prediction on the post-move position (v0, [The search
+   network](#the-search-network)). *Measure:* the noise of a square's
+   residual against the rollout count.
 9. **Grouped pools.** The generator on the pool labeler, as a dashboard
-   workload, writing the reader's scalars and maps beside the pools.
-   *Measure:* bytes and GPU time per group.
-10. **The reply-policy head:** the policy form, trained on self-play pools
-    from the mover's side. *Measure:* how often its top move is the pool's
-    best, against equity's ([Candidates](#candidates)), and how often it is
-    the subtree's choice at the agent's positions.
-11. **The reader,** trained by masked prediction on the grouped pools.
-    *Measure:* its residual predictions against no evidence, split by
-    evidence from the same candidate and from other candidates, and the
-    calibration of its variance.
+   workload, writing the scalars and the search-noise maps beside the
+   pools. *Measure:* bytes and GPU time per group.
+10. **The search network with an empty store:** the continuation heads,
+    pretrained on game records, and the policy and value heads, trained on
+    self-play pools from the mover's side. *Measure:* how often the
+    policy's top move is the pool's best, against equity's
+    ([Candidates](#candidates)), and how often it is the subtree's choice
+    at the agent's positions.
+11. **The store input,** trained by masked prediction on the grouped pools.
+    *Measure:* its value and policy predictions against the empty-store
+    pass, split by evidence from the same candidate and from other
+    candidates; the calibration of its variance; and, at a rack with a
+    search's count of its own sims, how often its top move is the rack's
+    full-label best, against the argmax of those sims alone.
 12. **Steering and budget in the agent:** admission, the three budget
     decisions with audits, Alice's payoffs after each of Bob's contenders,
-    and the single allocator. *Measure:* sims per turn and strength at
-    equal time against fixed counts, and the audit disagreement rate.
-13. **Generations.** DeepBot's self-play games, and the pools and grouped
-    pools labeled from them, train the next leave inference model, leaf
-    network, search network, reply-policy head and reader.
+    Bob's choice from the store-informed policy, and the single allocator.
+    *Measure:* sims per turn and strength at equal time against fixed
+    counts, and the audit disagreement rate.
+13. **Generations.** DeepBot's self-play logs each turn's paired `Δ` for
+    the candidates that reach the subtree. Its games, its root records, and
+    the pools and grouped pools labeled from its positions train the next
+    leave inference model, leaf network and search network, the root
+    correction head included. *Measure:* the root correction head's
+    held-out error against `Δ = 0`, and how often the subtree's pick is
+    among Alice's first candidates, with the head and without.
 
 ## Limits
 
@@ -1039,25 +1176,28 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
   floor. A move kind none of them ranks is found only by the floor, and
   late in the game, where the equity proposer's recall is weakest
   ([Candidates](#candidates)), that matters most.
-- **The reader can be wrong.** In steering, a wrong correction wastes sims.
-  At a rack the [budget](#budget) skips, it picks a wrong reply for Bob, and
-  the audits bound how often that goes unnoticed. Evidence that should not
-  transfer (a different bag count, a rack without the hook letter) is what
-  the reader's context inputs are for, and its masked training includes
-  those cases.
+- **The store input can be wrong.** In steering, a wrong correction
+  wastes sims. At a rack the [budget](#budget) skips, it picks a wrong reply
+  for Bob, and the audits bound how often that goes unnoticed. At a rack
+  with sims, it can outweigh them, less so as they accumulate. Evidence that
+  should not transfer (a different bag count, a rack without the hook
+  letter) is what the context inputs are for, and the masked training
+  includes those cases.
 - **The maps see places, not timing.** Some moves win by what they leave
   in the bag, not by any square: whether a bingo leaves the opponent able
-  to go out. The maps show that only indirectly, through who fills which
-  squares later, so the value residual carries it.
+  to go out. The going-out and end-of-game points heads read that near the
+  end of the game; earlier, the value residual carries it.
 - **Depth.** After the two searched decisions, every move is mechanical.
   Setups that pay off later than the sim's horizon are valued only by the
   leaf network. In Bob's sims, Alice's reply is hasty, so Bob's model of
   Alice does not look for blocks.
-- **Bob's argmax.** A deterministic model of Bob, over paired means of about
-  20 samples, is biased toward moves that drew lucky samples. Where his
-  contenders are within noise and Alice cares which he plays, the
-  [budget](#budget) weights them by their chance of being best instead; the
-  argmax stays where his choice is clear.
+- **Bob's choice under noise.** An argmax over paired means of about 20
+  samples is biased toward moves that drew lucky samples. Bob's choice is
+  the store-informed policy's top move instead, which reads the rest of the
+  turn's evidence; its bias is the prior's and the evidence's, which the
+  grouped pools' full labels train against. Where his contenders are still
+  within noise and Alice cares which he plays, the [budget](#budget)
+  weights them by their chance of being best.
 - **The leaf network values the policy of its training games.** v0's
   targets are outcomes of games HastyBot finished, so it values a leaf as
   HastyBot would play it out: a position that only stronger play would
@@ -1069,11 +1209,12 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 - **[simulation_information_flow.md](../simulation_information_flow.md).**
   In that document's vocabulary, DeepBot steers sideways at the root and
   below it: one sim's residuals choose which moves are simmed elsewhere,
-  across Bob's racks and across Alice's candidates. Valuation stays local,
-  each move valued by its own sims, except Bob's predicted reply at a rack
-  the budget skips. Draws are fixed, and nothing is revised. What generalizes
-  across many positions (which racks have a setup in a given spot) the
-  search network and the inference network learn offline; the reader
+  across Bob's racks and across Alice's candidates. Alice's valuation stays
+  local, each of her payoffs from her own sims; Bob's choice at a rack reads
+  the whole turn's evidence, his own sims at that rack among it. Draws are
+  fixed, and nothing is revised. What generalizes across many positions
+  (which racks have a setup in a given spot) the search network's prior and
+  the inference network learn offline; the search network's store input
   carries what is new in the position at hand.
 - **[supreme_bot.md](supreme_bot.md)** proposed reading sim residuals
   against a prior with a learned network. Its transfer test found no
@@ -1088,9 +1229,10 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
   through the square rather than a share of the score, since a move places a
   varying number of tiles.
 - **AlphaZero** trains its network on positions from its own self-play, with
-  its search's results as targets. The reply-policy head does the same: the
-  positions come from DeepBot's self-play, and the targets from the pools'
-  one-level search, the search Bob's subtree runs.
+  its search's results as targets. The search network does the same: the
+  positions come from DeepBot's self-play, the policy's targets from the
+  pools' one-level search, the search Bob's subtree runs, and the root
+  correction head's from DeepBot's own root search.
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
   never tries a setup that equity ranks low, and his rack is drawn
