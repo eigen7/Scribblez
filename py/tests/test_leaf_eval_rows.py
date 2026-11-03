@@ -1,7 +1,8 @@
 """The DeepBot leaf eval task's rows through the FFI (engine
 training/leaf_eval_task.h): the DataLoader and decode_rows over .slog files
 written by the C++ test_slog_writer binary. The join planes are recomputed here
-from each row's own board and cross-check planes."""
+from each row's own board and cross-check planes, and the per-square fates from
+the boards and score differentials of the game's later rows."""
 
 import subprocess
 from pathlib import Path
@@ -28,6 +29,9 @@ SPATIAL_PLANES = JOIN0 + 12
 MY_LEAVE0, OPP_LEAVE0, POOL0 = 0, 27, 54
 SCORE_DIFF, MY_LEAVE_VALUE, OPP_LEAVE_VALUE, POOL_SIZE = 81, 82, 83, 84
 SCALARS = 85
+# Square fates (encoding/square_fates.h).
+FILLED, OWN_BINGO, OWN_OTHER, OPP_BINGO, OPP_OTHER, STAYS_EMPTY = -1, 0, 1, 2, 3, 4
+SCORE_DIFF_SCALE = 100.0
 TILE_VALUES = np.array(
     [1, 3, 3, 2, 1, 4, 2, 4, 1, 8, 5, 1, 3, 1, 1, 3, 10, 1, 1, 1, 1, 4, 4, 8, 4, 10, 0]
 )
@@ -91,7 +95,12 @@ def test_shapes_cover_the_row():
         ("input_spatial", (SPATIAL_PLANES, N, N)),
         ("input_scalar", (SCALARS,)),
     ]
-    assert [(s.name, s.dims) for s in targets] == [("wld", (3,)), ("score_diff", (1,))]
+    assert [(s.name, s.dims) for s in targets] == [
+        ("wld", (3,)),
+        ("score_diff", (1,)),
+        ("ownership", (N, N)),
+        ("square_points", (N, N)),
+    ]
     total = sum(int(np.prod(s.dims)) for s in inputs + targets)
     assert total == ffi.task_row_floats(_TASK)
 
@@ -245,3 +254,68 @@ def test_each_game_drops_its_last_eligible_turn(played_games):
         begin, end = metas["eligible_begin"].astype(int), metas["eligible_end"].astype(int)
         expected += int(np.maximum(end - 1 - begin, 0).sum())
     assert SlogDataset(played_games, task=_TASK).num_samples == expected
+
+
+def test_square_fates_are_consistent(batch):
+    """Filled squares carry no fate, a square that stays empty scores nothing,
+    each side's moves carry its sign, and a bingo scores its 50-point bonus."""
+    spatial, _, b = batch
+    fate = b["ownership"].numpy()
+    points = b["square_points"].numpy()
+    np.testing.assert_array_equal(fate == FILLED, _occupied(spatial))
+    assert set(np.unique(fate)) <= {FILLED, OWN_BINGO, OWN_OTHER, OPP_BINGO, OPP_OTHER, STAYS_EMPTY}
+    assert (points[(fate == FILLED) | (fate == STAYS_EMPTY)] == 0).all()
+    assert (points[(fate == OWN_BINGO) | (fate == OWN_OTHER)] >= 0).all()
+    assert (points[(fate == OPP_BINGO) | (fate == OPP_OTHER)] <= 0).all()
+    assert (np.abs(points[(fate == OWN_BINGO) | (fate == OPP_BINGO)]) >= 50).all()
+    # Short test games leave squares of every kind but bingos.
+    assert {OWN_OTHER, OPP_OTHER, STAYS_EMPTY} <= set(np.unique(fate))
+
+
+def _rows_by_turn(path: Path, game: int, turns: np.ndarray) -> dict[str, np.ndarray]:
+    rows = ffi.decode_rows(path, np.full(len(turns), game), turns, post_move=True, task=_TASK)
+    spatial_floats = SPATIAL_PLANES * N * N
+    labels = rows[:, spatial_floats + SCALARS :]
+    return {
+        "occupied": rows[:, : LETTERS * N * N].reshape(-1, LETTERS, N, N).sum(axis=1) > 0,
+        "diff": np.rint(rows[:, spatial_floats + SCORE_DIFF] * SCORE_DIFF_SCALE),
+        "fate": labels[:, 4 : 4 + N * N].reshape(-1, N, N),
+        "points": labels[:, 4 + N * N :].reshape(-1, N, N),
+    }
+
+
+def _check_next_move(rows: dict, t: int, k: int):
+    """At row t, the squares turn t + k fills carry that move's fate: the
+    evaluator's (k even) or the opponent's (k odd), a bingo iff it placed 7
+    tiles, and its signed score. A move's score is the sum of the spreads
+    before and after it, each seen by its own mover."""
+    placed = rows["occupied"][t + k] & ~rows["occupied"][t + k - 1]
+    score = rows["diff"][t + k] + rows["diff"][t + k - 1]
+    if not placed.any():
+        assert score == 0
+        return
+    mine = k % 2 == 0
+    bingo = placed.sum() == 7
+    expected = (OWN_BINGO if bingo else OWN_OTHER) if mine else (OPP_BINGO if bingo else OPP_OTHER)
+    assert (rows["fate"][t][placed] == expected).all()
+    assert (rows["points"][t][placed] == (score if mine else -score)).all()
+
+
+def test_square_fates_match_the_games_later_moves(played_games):
+    header = ffi.struct_dtype("SlogFileHeader")
+    checked = 0
+    for path in sorted(played_games.glob("*.slog")):
+        num_games = int(np.fromfile(path, header, count=1)[0]["num_games"])
+        metas = np.fromfile(
+            path, ffi.struct_dtype("SlogGameMetadata"), count=num_games, offset=header.itemsize
+        )
+        for game, meta in enumerate(metas):
+            turns = np.arange(int(meta["eligible_begin"]), int(meta["eligible_end"]) - 1)
+            if len(turns) < 3:
+                continue
+            rows = _rows_by_turn(path, game, turns)
+            for t in range(len(turns) - 2):
+                _check_next_move(rows, t, 1)
+                _check_next_move(rows, t, 2)
+                checked += 1
+    assert checked > 20

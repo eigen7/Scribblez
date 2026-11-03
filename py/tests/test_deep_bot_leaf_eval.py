@@ -1,6 +1,6 @@
-"""The deep_bot_leaf_eval workload: the model's arms, the win table baseline's
-features against the engine's own, the epoch and the held-out eval, the resume
-gate, and the workload's registration."""
+"""The deep_bot_leaf_eval workload: the model's arms, the per-square heads'
+losses, the win table baseline's features against the engine's own, the epoch
+and the held-out eval, the resume gate, and the workload's registration."""
 
 import dataclasses
 import subprocess
@@ -19,10 +19,14 @@ from scribblez import ffi, workloads  # noqa: E402
 from scribblez.dataset import SlogDataset  # noqa: E402
 from scribblez.deep_bot_leaf_eval import evaluation, trainer  # noqa: E402
 from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
+    FILLED,
     LAYOUT,
+    POINTS_SCALE,
     SCALAR_FEATURES,
     LeafEvalModel,
     LeafEvalShape,
+    OwnershipHead,
+    SquarePointsHead,
 )
 from scribblez.leave_inference import win_table  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
@@ -139,9 +143,59 @@ def test_epoch_and_eval(batches, corpus, tmp_path, trunk):
         assert np.isfinite(result.losses["total"])
     after = evaluation.evaluate(model, iter(batch), cpu, table, win_table.MACONDO_WIN_TABLE)
     assert after["eval_wld_nll"] < before["eval_wld_nll"]
+    assert after["eval_ownership_nll"] < before["eval_ownership_nll"]
+    assert np.isfinite(after["eval_points_rmse"]) and after["eval_points_var_ratio"] > 0
     # The tables do not train: their read is the same before and after.
     for key in ("eval_wintable_logloss", "eval_wintable_macondo_logloss"):
         assert after[key] == before[key] and 0 < after[key] < 1
+
+
+def test_square_points_loss_reads_only_empty_squares():
+    """The mean fits the points and the variance the squared deviation from
+    the mean, on empty squares only: a filled square's prediction is free."""
+    fate = torch.full((1, 15, 15), 4.0)
+    fate[0, 0, :2] = FILLED
+    points = torch.zeros(1, 15, 15)
+    points[0, 1, 1] = 30.0
+    pred = torch.zeros(1, 2, 15, 15)
+    pred[0, 0, 1, 1] = 30.0 / POINTS_SCALE  # exact mean where it scores
+    pred[0, 1] = 0.0  # zero variance, also exact: every mean is right
+    pred[0, :, 0, :2] = 9.0  # filled squares: wrong, and ignored
+    targets = {"ownership": fate, "square_points": points}
+    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    reported = SquarePointsHead(8).loss({"square_points": pred}, targets, cfg).reported
+    assert reported["square_points_mean"] == 0 and reported["square_points_var"] == 0
+    pred[0, 0, 1, 1] = 0.0  # miss the 30 points by 0.3 (scaled)
+    reported = SquarePointsHead(8).loss({"square_points": pred}, targets, cfg).reported
+    empty = 225 - 2
+    assert reported["square_points_mean"].item() == pytest.approx(0.3**2 / empty)
+    assert reported["square_points_var"].item() == pytest.approx(0.3**4 / empty)
+
+
+def test_ownership_loss_and_square_sums_read_only_empty_squares():
+    """The training cross-entropy and the eval's per-row sums average and sum
+    over the empty squares; a filled square's confidently wrong prediction
+    counts for nothing."""
+    fate = torch.full((1, 15, 15), 4.0)
+    fate[0, 0, :2] = FILLED
+    points = torch.zeros(1, 15, 15)
+    points[0, 1, 1] = 30.0
+    logits = torch.zeros(1, 5, 15, 15)
+    logits[0, 1:, 0, :2] = 50.0  # filled squares: every class but 0, gathered there
+    square_points = torch.zeros(1, 2, 15, 15)
+    square_points[0, 1] = 1.0 / POINTS_SCALE**2  # variance of 1 point squared
+    square_points[0, :, 0, :2] = 9.0
+    targets = {"ownership": fate, "square_points": points}
+    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    ce = OwnershipHead(8).loss({"ownership": logits}, targets, cfg).reported["ownership"]
+    assert ce.item() == pytest.approx(np.log(5))
+    out = {"ownership": logits, "square_points": square_points}
+    sums = evaluation._square_sums(out, targets)
+    empty = 225 - 2
+    assert sums["empty_squares"][0] == empty
+    assert sums["own_nll_sum"][0] == pytest.approx(empty * np.log(5))
+    assert sums["points_sq_err_sum"][0] == pytest.approx(30.0**2)
+    assert sums["points_var_sum"][0] == pytest.approx(empty * 1.0)
 
 
 def test_expected_score_logloss():

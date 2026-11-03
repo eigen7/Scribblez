@@ -81,7 +81,9 @@ planes do the join in the encoder:
 ### Trunks
 
 [model.py](../py/scribblez/deep_bot_leaf_eval/model.py). Both trunks feed the
-same heads: win/draw/loss and score difference, from position_eval.
+same heads: win/draw/loss and score difference, from position_eval, off the
+pooled vector; and, off the cell map, the per-square ownership and points
+heads (trained, not yet served).
 
 - **transformer:** width 64, 4 layers, 2 heads; 0.30M parameters.
   - Tokens: one per cell, one register per tile kind (its three seat counts,

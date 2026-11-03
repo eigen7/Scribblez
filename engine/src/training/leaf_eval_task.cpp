@@ -14,6 +14,8 @@ void LeafEvalTask::encode_row(const EncodeContext& ctx, float* out_row) {
   float* labels = out_row + kInputFloats;
   WldTarget::encode(ctx, labels + kWldOffset);
   ScoreDiffTarget::encode(ctx, labels + kScoreDiffOffset);
+  OwnershipTarget::encode(ctx, labels + kOwnershipOffset);
+  SquarePointsTarget::encode(ctx, labels + kSquarePointsOffset);
 }
 
 }  // namespace scribblez

@@ -36,7 +36,9 @@ add_library(scribblez_core STATIC
   src/encoding/position_encoder.cpp
   src/encoding/leaf_eval_input_encoder.cpp
   src/encoding/leave_inference_input_encoder.cpp
+  src/encoding/square_fates.cpp
   src/training/leaf_eval_task.cpp
+  src/training/square_fate_targets.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp
@@ -493,6 +495,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_probe_log.cpp
     tests/test_rack_inference.cpp
     tests/test_reply_blocking.cpp
+    tests/test_square_fates.cpp
     tests/test_transfer_candidates.cpp
     tests/test_web_server.cpp
     tests/test_work_pool.cpp
