@@ -427,7 +427,7 @@ from the mover's belief, the opponent and then the mover replying hastily,
 and the leaf network at the end; the best move has the largest mean. Only
 the mover's own move is searched, so it is the mover's best against a hasty
 opponent. The pools label exactly that ([Labels](#labels)), so the head is
-the [policy form](#form-3-a-policy) of the policy-set model, trained on pools
+the [policy form](#the-policy) of the policy-set model, trained on pools
 from self-play positions, from the mover's side.
 
 DeepBot uses it at Bob's level, where it is the right question: Bob's
@@ -685,103 +685,20 @@ best member, so the objective rewards diversity. Of a strong play and four
 near-copies of it, the set is better with one copy replaced by a different
 kind of move, such as a setup that wins in other worlds.
 
-Two forms of the model meet this objective, and a third, a policy, sets
+Two set forms were built for that objective, a greedy selector with cached
+steps and a one-shot slot decoder, and a third form, a policy, sets
 diversity aside. All build on the move set model's architecture (the board
 trunk, the move encoder and the cross-check encoder), and all train on the
-same labeled pools ([Labels](#labels)). Which works better is measured.
+same labeled pools ([Labels](#labels)). The set forms are shelved
+([Appendix](#appendix-the-shelved-set-forms)): both tied the static-equity
+top `N` on recall, the greedy form's predicted gains did not depend on the
+set it was given, and the diversity term they exist for, which only regret
+rewards, is small in Scrabble when measured on stored pools: skipping a
+member whose rollouts track an earlier member's deal for deal left regret
+unchanged (0.721 vs. 0.722 points at `N = 8`). The policy is the form in
+use.
 
-### Form 1: greedy selection, with cached steps
-
-The expected max of a set of win probabilities is monotone and submodular, so
-greedy construction comes within a factor of `1 − 1/e` of the best set. The
-policy-set model picks one move at a time, each maximizing its predicted gain
-over the moves already chosen:
-
-`gain(a | S) = E[max(0, v(a) − max_{s∈S} v(s))]`
-
-`S` starts from the seed, the static-equity top move, rather than empty. At
-`S = ∅` the gain would be the value itself: a whole win probability, where
-every later step's is a margin of a few points, so that one step would set
-the gain loss's scale. Seeded, every step asks which move most improves on a
-real one; the seed is the sim-best move about half the time, so a set of two
-or more would hold it anyway. Greedy from a fixed seed keeps the guarantee
-for the moves it adds.
-
-The expectation is over what the sims have not resolved about the values,
-not over the game's own luck. A training pool's sims leave each pair of
-moves a mean difference with a standard error, so each member `s` of `S`
-gives `a` an expected improvement under that uncertainty,
-`E[max(0, μ_a − μ_s)]`. The target is the least of them. Since
-`max_S μ ≥ μ_s` for every member, each is an upper bound on the gain over the
-set's best, and the least is the tightest. It matters when `a` sims as a
-member does: if `A` is the set's best and `B` a member `a` duplicates, then
-`a` beats `A` only where `B` already does. Against `A` alone `a` would look
-promising; against `B` its improvement is 0. The bound is loose only when the
-set covers `a` jointly and no single member does, and then it errs toward
-crediting `a`. The exact value (resampling the paired rollouts and comparing
-`a` with the set's best on each resample) is the alternative if that proves
-to matter.
-
-An expectation over rollouts instead, `E_r[max(0, v_r(a) − v_r(s))]`, was
-considered and rejected. It is half the mean margin plus half the mean
-absolute per-rollout difference, and that per-rollout spread (11 to 16
-points, inferred from the pools' paired standard errors) dwarfs typical
-margins (about 1 point), so it would rank moves by volatility: a move 5
-points worse than the set's best but volatile would outrank one 2 points
-better.
-
-A stage conditions each move's
-query on the tokens of the moves already chosen. The evidence-fusion stage
-built for [sim_residual_feedback.md](sim_residual_feedback.md) already
-conditions on a set of move tokens. There the tokens carried sim results;
-here they are chosen moves alone. Its proves-best head is the same quantity
-with "simmed" in place of "chosen".
-
-Built naively, `S` takes `N` sequential network calls. Most of each call does
-not depend on `S`: the board trunk, the move encodings and the cross-check
-encodings are computed once per position and cached. Each step reruns only
-the set-conditioning stage and the gain head, a small fraction of a full
-pass. This is the cache-graph and step-graph split the evidence path already
-uses ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
-Total compute is about one full pass plus `N` light ones, but the steps
-remain serial.
-
-### Form 2: a one-shot slot decoder
-
-The network outputs the whole set in one pass, in the manner of set
-prediction (DETR; Carion et al., 2020):
-
-- `N_max` learned query slots cross-attend to the encoded moves and
-  self-attend to each other.
-- Each slot points to one move, through a softmax over the legal moves of the
-  dot product between the slot's query and each move's embedding.
-- Because the slots attend to each other within the pass, training teaches
-  them to divide the moves among themselves. Diversity comes from joint
-  training, not from sequential conditioning.
-
-**The loss is coverage of the best move.** Let `q(a)` be the label
-distribution over which move is best, and `p_k(a)` the probability that slot
-`k` points to `a`. With the first `N` slots,
-
-`L_N = −Σ_a q(a) · log(1 − Π_{k ≤ N} (1 − p_k(a)))`
-
-which is the negative log-probability that the set contains the best move.
-Once one slot covers a move, another slot pointing there adds almost nothing,
-so across positions that look alike but have different best moves, the slots
-spread over the plausible winners. This is the mechanism of multiple-choice
-learning: several outputs trained so that at least one is right. The loss
-counts a set whose best move falls just short of the true best as a miss;
-soft labels soften that ([Labels](#labels)), and expected regret,
-`v(a*) − max_{a∈S} v(a)` with softmax pointers, is the alternative if margins
-need more weight.
-
-**Any `N` from one pass.** Training sums the loss over prefixes,
-`Σ_N w_N · L_N`. Slot 1 then learns the best single move, slots 1 and 2 the
-best pair, and so on, so the first `N` slots serve any `N ≤ N_max`: Alice's
-`N_A` and Bob's `N_B` come from the same pass. At inference, a slot whose
-move an earlier slot already took falls back to its next choice.
-
-### Form 3: a policy
+### The policy
 
 The network gives each legal move one logit, and a softmax over the
 position's moves, however many it has, makes a policy `π`. The loss is the
@@ -791,17 +708,13 @@ policy's top `N`.
 The events "`a` is the best move" are disjoint, so `Σ_{a∈S} q(a)` is the
 probability that `S` holds the best move. A policy that matched `q` would
 therefore make the best set for recall and cover at every `N`, from one
-pass. What it gives up is the objective's diversity term, which only
-regret rewards. Measured on stored pools, that term is small in Scrabble:
-skipping a member whose rollouts track an earlier member's deal for deal
-left regret unchanged (0.721 vs. 0.722 points at `N = 8`).
-
-### Many sets at once
-
-DeepBot builds many sets per turn. Bob's subtrees alone need one per
-`(a, r)`, about 100 per candidate. With either form, each network call is one
-batched call over all the sets in progress. Form 1 makes `N` such calls, all
-but the first of them light; forms 2 and 3 make one.
+pass. DeepBot builds many sets per turn, one per `(a, r)` in Bob's
+subtrees alone, and each network call is one batched call over all the
+sets in progress. The policy is the [search network's](#the-search-network)
+policy head. Measured 2026-10-29 on 2,000 pools it tied equity on recall;
+with 6,800 training pools it beat equity on regret at `N = 4` (0.52
+against 0.61 points of win probability). It underfits its own training
+pools, so the lever is the model, not more data.
 
 ### Labels
 
@@ -825,17 +738,14 @@ uniform refill, and the sims are paired across moves.
   candidate is simmed directly, rather than reached by a rollout policy that
   would have to choose it. A setup that static equity ranks low is labeled by
   its own outcome, provided its payoff arrives within the sim's horizon.
-- **Form 1's targets: subset assembly.** Any subset `S` of the pool, plus a
-  held-out move `a`, gives a row whose target is the least expected
-  improvement of `a` over a member of `S`, computed from the paired rollout
-  values (see Form 1). One pool yields many rows.
-- **Form 2's targets: a soft best move.** `q(a)` is the probability that `a`
+- **The target: a soft best move.** `q(a)` is the probability that `a`
   is best under the paired sim statistics: by bootstrapping over the paired
   samples, or by a normal approximation to the paired differences against
-  the leader. Near-equal moves share the mass, so the slots learn that either
-  will do. Racing stops weak moves early, on fewer rollouts, and both
+  the leader. Near-equal moves share the mass, so the policy learns that
+  either will do. Racing stops weak moves early, on fewer rollouts, and both
   estimates account for that, since a move far below the leader rarely comes
-  out on top.
+  out on top. The greedy form's targets, assembled from subsets of the pool,
+  are in the [appendix](#appendix-the-shelved-set-forms).
 
 **Label rollouts stop at the leaf network.** Played to the end of the game,
 a rollout is slow and its outcome noisy. A label rollout instead plays the
@@ -1105,11 +1015,13 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 2. **Policy-set labels.** Pools over positions from the whole game except the
    endgame, with opponent leaves from the leave inference model and rollouts
    run on the GPU, stopped at the leaf network.
-3. **Policy-set v0, both forms,** in parallel with steps 4 to 6. It
-   replaces the equity proposer once it beats it. *Measure:* recall, meaning how often the
-   pool's sim-best move is in `S`, against the top `N` by value, by form, bag
-   size and `N`, with setups and exchanges reported separately; and each
-   form's time per batch of sets. The equity baseline's curve is in
+3. **Policy-set v0.** Built: the set forms tied the equity proposer and
+   are shelved ([Appendix](#appendix-the-shelved-set-forms)); the policy
+   form goes on as the search network's policy head (step 10), and
+   replaces the equity proposer once it beats it at the `N` the stage
+   needs. *Measure:* recall, meaning how often the pool's sim-best move is
+   in `S`, against the top `N` by value, by bag size and `N`, with setups
+   and exchanges reported separately. The equity baseline's curve is in
    [Candidates](#candidates).
 4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
@@ -1243,10 +1155,122 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
   is the source of the rule that each player decides over their own beliefs,
   and that only moves cross between players' evaluations.
 - **[sim_residual_feedback.md](sim_residual_feedback.md)** built the
-  evidence-fusion stage and the proves-best head. The policy-set model's set
-  conditioning and gain head are the same machinery, conditioned on chosen
-  moves.
+  evidence-fusion stage and the proves-best head. The shelved greedy form's
+  set conditioning and gain head ([Appendix](#appendix-the-shelved-set-forms))
+  are the same machinery, conditioned on chosen moves.
 - **[sim_labeled_candidates.md](sim_labeled_candidates.md)** supplies the
   exhaustive survey recipe the policy-set model's labels extend.
 - **[design.md §3](../design.md)** describes a public belief system. The
   generational inference network is a concrete first form of it.
+
+## Appendix: the shelved set forms
+
+The two set forms of the [policy-set model](#the-policy-set-model), built
+as the `policy_set` workload's `greedy` and `slot` forms and shelved
+2026-10-29: on 2,000 pools, and over a 35-generation run, both tied the
+static-equity top `N` on recall at `N = 8` and did not beat it on regret,
+and the greedy form's predicted gains came out flat across the sets it was
+given. The text stands as designed.
+
+### Form 1: greedy selection, with cached steps
+
+The expected max of a set of win probabilities is monotone and submodular, so
+greedy construction comes within a factor of `1 − 1/e` of the best set. The
+policy-set model picks one move at a time, each maximizing its predicted gain
+over the moves already chosen:
+
+`gain(a | S) = E[max(0, v(a) − max_{s∈S} v(s))]`
+
+`S` starts from the seed, the static-equity top move, rather than empty. At
+`S = ∅` the gain would be the value itself: a whole win probability, where
+every later step's is a margin of a few points, so that one step would set
+the gain loss's scale. Seeded, every step asks which move most improves on a
+real one; the seed is the sim-best move about half the time, so a set of two
+or more would hold it anyway. Greedy from a fixed seed keeps the guarantee
+for the moves it adds.
+
+The expectation is over what the sims have not resolved about the values,
+not over the game's own luck. A training pool's sims leave each pair of
+moves a mean difference with a standard error, so each member `s` of `S`
+gives `a` an expected improvement under that uncertainty,
+`E[max(0, μ_a − μ_s)]`. The target is the least of them. Since
+`max_S μ ≥ μ_s` for every member, each is an upper bound on the gain over the
+set's best, and the least is the tightest. It matters when `a` sims as a
+member does: if `A` is the set's best and `B` a member `a` duplicates, then
+`a` beats `A` only where `B` already does. Against `A` alone `a` would look
+promising; against `B` its improvement is 0. The bound is loose only when the
+set covers `a` jointly and no single member does, and then it errs toward
+crediting `a`. The exact value (resampling the paired rollouts and comparing
+`a` with the set's best on each resample) is the alternative if that proves
+to matter.
+
+An expectation over rollouts instead, `E_r[max(0, v_r(a) − v_r(s))]`, was
+considered and rejected. It is half the mean margin plus half the mean
+absolute per-rollout difference, and that per-rollout spread (11 to 16
+points, inferred from the pools' paired standard errors) dwarfs typical
+margins (about 1 point), so it would rank moves by volatility: a move 5
+points worse than the set's best but volatile would outrank one 2 points
+better.
+
+A stage conditions each move's
+query on the tokens of the moves already chosen. The evidence-fusion stage
+built for [sim_residual_feedback.md](sim_residual_feedback.md) already
+conditions on a set of move tokens. There the tokens carried sim results;
+here they are chosen moves alone. Its proves-best head is the same quantity
+with "simmed" in place of "chosen".
+
+Built naively, `S` takes `N` sequential network calls. Most of each call does
+not depend on `S`: the board trunk, the move encodings and the cross-check
+encodings are computed once per position and cached. Each step reruns only
+the set-conditioning stage and the gain head, a small fraction of a full
+pass. This is the cache-graph and step-graph split the evidence path already
+uses ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
+Total compute is about one full pass plus `N` light ones, but the steps
+remain serial.
+
+### Form 2: a one-shot slot decoder
+
+The network outputs the whole set in one pass, in the manner of set
+prediction (DETR; Carion et al., 2020):
+
+- `N_max` learned query slots cross-attend to the encoded moves and
+  self-attend to each other.
+- Each slot points to one move, through a softmax over the legal moves of the
+  dot product between the slot's query and each move's embedding.
+- Because the slots attend to each other within the pass, training teaches
+  them to divide the moves among themselves. Diversity comes from joint
+  training, not from sequential conditioning.
+
+**The loss is coverage of the best move.** Let `q(a)` be the label
+distribution over which move is best, and `p_k(a)` the probability that slot
+`k` points to `a`. With the first `N` slots,
+
+`L_N = −Σ_a q(a) · log(1 − Π_{k ≤ N} (1 − p_k(a)))`
+
+which is the negative log-probability that the set contains the best move.
+Once one slot covers a move, another slot pointing there adds almost nothing,
+so across positions that look alike but have different best moves, the slots
+spread over the plausible winners. This is the mechanism of multiple-choice
+learning: several outputs trained so that at least one is right. The loss
+counts a set whose best move falls just short of the true best as a miss;
+soft labels soften that ([Labels](#labels)), and expected regret,
+`v(a*) − max_{a∈S} v(a)` with softmax pointers, is the alternative if margins
+need more weight.
+
+**Any `N` from one pass.** Training sums the loss over prefixes,
+`Σ_N w_N · L_N`. Slot 1 then learns the best single move, slots 1 and 2 the
+best pair, and so on, so the first `N` slots serve any `N ≤ N_max`: Alice's
+`N_A` and Bob's `N_B` come from the same pass. At inference, a slot whose
+move an earlier slot already took falls back to its next choice.
+
+**Targets: subset assembly.** Any subset `S` of the pool, plus a held-out
+move `a`, gives a row whose target is the least expected improvement of `a`
+over a member of `S`, computed from the paired rollout values. One pool
+yields many rows.
+
+### Many sets at once
+
+DeepBot builds many sets per turn. Bob's subtrees alone need one per
+`(a, r)`, about 100 per candidate. With either form, each network call is one
+batched call over all the sets in progress. Form 1 makes `N` such calls, all
+but the first of them light; Form 2 and the policy make one.
