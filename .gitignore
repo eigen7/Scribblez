@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 .venv/
 .vscode/
+.pr-quiz/
 
 # Lexicon binaries are not committed (encode a copyrighted wordlist).
 # setup_wizard.py downloads them into the host mount dir; if you keep a local
