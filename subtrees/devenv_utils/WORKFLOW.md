@@ -17,8 +17,12 @@ devenv_utils working clone; run it from the repo the change targets.
 
 ## Lifecycle
 
+`$DEVENV_PROJECT_MOUNT` is the container's own data dir in the mount:
+`/workspace/mount` itself, or `/workspace/mount/<project>` for a
+`shared_mount` project (see shared_mount.py).
+
 1. `pr_flow.py worktree <branch>` — creates
-   `/workspace/mount/worktrees/<project>/<branch>` on a new branch, with the
+   `$DEVENV_PROJECT_MOUNT/worktrees/<project>/<branch>` on a new branch, with the
    `.env.json` setup stamp copied and a Claude commit identity so the PR
    distinguishes Claude's commits from the user's. Worktrees live under the
    mount so in-progress work survives container relaunches. Don't create
@@ -30,7 +34,7 @@ devenv_utils working clone; run it from the repo the change targets.
    panel critique of the intended approach before any code is written.
    A change under `subtrees/` is blocked by the pre-commit guard:
    it belongs in the source repo's working clone
-   (`/workspace/mount/devenv_utils`), through this same workflow, as its own
+   (`$DEVENV_PROJECT_MOUNT/devenv_utils`), through this same workflow, as its own
    PR — see SUBTREES.md, including how to test a consumer change against an
    unmerged devenv_utils branch.
 3. Before opening the PR: the affected test suites must pass and changed
@@ -48,7 +52,10 @@ devenv_utils working clone; run it from the repo the change targets.
    ([skills/pr-review/SKILL.md](skills/pr-review/SKILL.md)): a bounded
    agentic review cycle (specialized reviewer subagents, adversarial
    verification, fix-or-rebut) that ends with one summary comment on the
-   PR. Launching it is the user's cost decision.
+   PR. Launching it is the user's cost decision. After it, the user may run
+   the shared `pr-quiz` skill
+   ([skills/pr-quiz/SKILL.md](skills/pr-quiz/SKILL.md)) to confirm they
+   understand the PR well enough to own it before merging.
 6. Address review comments with follow-up commits — not squashes or
    force-pushes, which break the reviewer's "changes since last review" view.
    A plain `git push` from the worktree updates the PR — while it is open.
