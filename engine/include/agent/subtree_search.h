@@ -46,6 +46,10 @@ struct SubtreeMove {
   int equity_rank = 0;  // among the candidates; 0 is HastyBot's move
   int candidates = 1;   // how many were simmed (1: no sims)
   double q = 1;         // the probability the sims gave that it is the best
+  // Its share of the outer search's value at the rack: q renormalized over
+  // the rack's contenders (contenders()); 1 where it is the only one.
+  double weight = 1;
+  int sims = 1;  // the outer search's sims after it at the rack
 };
 
 // The leave inference model a subtree's beliefs come from; an empty `predict`
@@ -73,16 +77,27 @@ SimPosition mover_position(const RolloutStart& applied, const Rack& rack);
 std::vector<Move> mover_candidates(const SimPosition& pos, const SubtreeParams& params,
                                    const Dictionary& dict);
 
+// The candidates the outer search sims after (docs/plans/deep_bot.md,
+// "Budget"), the likeliest best first: its `sims` at the rack apportioned
+// among all of `moves` by the chance the labeler's sims gave each of being
+// best (util::apportion), the moves that got any, each weighted by its chance
+// renormalized over them. A likelier move never gets fewer sims, and the
+// likeliest always gets one.
+std::vector<SubtreeMove> contenders(const std::vector<Move>& moves, const PoolPosition& labeled,
+                                    int sims);
+
 // The candidate the labeler's sims of `moves` found most likely best.
 SubtreeMove chosen_move(const std::vector<Move>& moves, const PoolPosition& labeled);
 
-// The sims of the other player's `reply` after `applied`, which it answers
-// holding `rack`: the mover of `applied` has its leave seated, and each sim
-// draws its replenishment, returns the tiles of its exchange, and draws the
-// replier's, all from the bag as the mover found it. That bag is the same
-// whichever move it applied, so under one `seed` its moves' sims deal each
-// player the same tiles, as far as the counts they draw allow.
-PoolJob after_reply_job(const RolloutStart& applied, const Rack& rack, const Move& reply, int sims,
+// The sims of the other player's `replies` after `applied`, which it answers
+// holding `rack`, sims[k] of replies[k]: the mover of `applied` has its leave
+// seated, and each sim draws its replenishment, returns the tiles of its
+// exchange, and draws the replier's, all from the bag as the mover found it.
+// That bag is the same whichever move it applied, so under one `seed` its
+// moves' sims deal each player the same tiles, as far as the counts they draw
+// allow; the replies share one group, so sim j of each is paired the same way.
+PoolJob after_reply_job(const RolloutStart& applied, const Rack& rack,
+                        const std::vector<Move>& replies, const std::vector<int>& sims,
                         const Dictionary& dict, uint64_t seed);
 
 // Hands a labeler jobs built a chunk at a time, remembering the order they
@@ -105,8 +120,9 @@ class ChunkedJobs {
   std::vector<size_t> keys_;
 };
 
-// Labels every job `jobs` hands out, calling done(key, record) in order.
-void label_all(RolloutValues& values, const PoolLabeler::Params& params, ChunkedJobs& jobs,
-               const std::function<void(size_t, const PoolPosition&)>& done);
+// Labels every job `jobs` hands out, calling done(key, record) in order;
+// returns the rollouts it ran.
+long long label_all(RolloutValues& values, const PoolLabeler::Params& params, ChunkedJobs& jobs,
+                    const std::function<void(size_t, const PoolPosition&)>& done);
 
 }  // namespace scribblez

@@ -43,6 +43,12 @@ class SoftmaxSampler {
   std::vector<double> weights_;
 };
 
+// `total` whole units split among `shares` (non-negative) by the Sainte-Laguë
+// rule: each unit in turn goes to the largest shares[k] / (2 n_k + 1), n_k the
+// units k holds so far, the lower index on ties. A larger share never gets
+// fewer units, and the split of total + 1 is the split of total plus one unit.
+std::vector<int> apportion(const std::vector<double>& shares, int total);
+
 // Row/column deltas of the four orthogonal neighbors: up, down, left, right.
 constexpr std::array<std::pair<int, int>, 4> kFourNeighborDeltas = {
   {{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};

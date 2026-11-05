@@ -36,4 +36,15 @@ int SoftmaxSampler::sample(const std::vector<double>& values, int k, double temp
   return k - 1;
 }
 
+std::vector<int> apportion(const std::vector<double>& shares, int total) {
+  std::vector<int> out(shares.size(), 0);
+  for (int unit = 0; unit < total && !shares.empty(); ++unit) {
+    size_t best = 0;
+    for (size_t k = 1; k < shares.size(); ++k)
+      if (shares[k] * (2 * out[best] + 1) > shares[best] * (2 * out[k] + 1)) best = k;
+    ++out[best];
+  }
+  return out;
+}
+
 }  // namespace scribblez::util

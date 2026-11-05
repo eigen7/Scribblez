@@ -58,8 +58,8 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "subtrees: how many candidates, the best by a first pass of hasty sims, get the subtree; "
      "0 = all")  //
     ("sims-per-rack", po::value<int>(&p.sims_per_rack)->default_value(p.sims_per_rack),
-     "subtrees: Alice's sims after the subtree's move at each rack, each drawing the "
-     "replenishment")  //
+     "subtrees: Alice's sims at each rack after the reply, each drawing the replenishment; under "
+     "subtree, apportioned among Bob's moves by their chance of being his best")  //
     ("alice-racks", po::value<int>(&p.subtree.opp_racks)->default_value(p.subtree.opp_racks),
      "subtree: leaves Bob samples for Alice, one sim of each of his candidates per leave")  //
     ("bob-candidates", po::value<int>(&p.subtree.candidates)->default_value(p.subtree.candidates),
@@ -184,19 +184,21 @@ MoveDecision DeepBot::make_move(const MoveRequest& req) {
   const std::shared_ptr<const belief::LeaveSampler> belief = root_belief(q);
   if (params_.reply != "hasty") return subtree_move(req, moves, belief.get());
   const std::vector<PoolLabel> labels =
-    hasty_labels(req, moves, belief.get(), params_.rollouts, params_.race);
+    hasty_labels(req, moves, belief.get(), params_.rollouts, params_.race).labels;
   const auto best = std::max_element(
     labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
   return moves[size_t(best - labels.begin())];
 }
 
-std::vector<PoolLabel> DeepBot::hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
-                                             const belief::LeaveSampler* belief, int rollouts,
-                                             bool race) const {
+DeepBot::HastySims DeepBot::hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
+                                         const belief::LeaveSampler* belief, int rollouts,
+                                         bool race) const {
   PoolJob job =
     position_job(sim_position_from(req), moves, turn_seed(), belief, req.dict, rollouts);
   PoolLabeler labeler(*backend_.values, {.rollouts = rollouts, .race = race});
-  return label(labeler, std::move(job)).labels;
+  HastySims out{.labels = label(labeler, std::move(job)).labels, .sims = 0};
+  out.sims = labeler.stats().tasks;
+  return out;
 }
 
 Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
@@ -214,13 +216,12 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
                                        .earlier = earlier};
   const AliceTurn turn{position, moves, root.starts, racks, root.group};
   // The first pass: every candidate's hasty sims, on the same racks.
-  const std::vector<PoolLabel> hasty =
-    hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false);
-  const std::vector<size_t> searched = survivors(moves, hasty, req.bag_size);
+  const HastySims hasty = hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false);
+  const std::vector<size_t> searched = survivors(moves, hasty.labels, req.bag_size);
   const std::vector<double> values = params_.reply == "subtree"
                                        ? bob_subtree_values(req, turn, hasty, searched)
                                        : second_turn_values(req, turn, searched);
-  return moves[best_candidate(with_first_pass(values, moves, hasty, req.bag_size))];
+  return moves[best_candidate(with_first_pass(values, moves, hasty.labels, req.bag_size))];
 }
 
 std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
@@ -239,17 +240,18 @@ std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
 }
 
 std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
-                                                const std::vector<PoolLabel>& hasty,
+                                                const HastySims& hasty,
                                                 const std::vector<size_t>& searched) {
-  const auto replies = bob_replies(turn, searched, belief_model(), *backend_.values,
-                                   params_.subtree, req.dict, turn_seed());
-  const std::vector<double> values = values_after_replies(
-    turn, searched, replies, *backend_.values, params_.sims_per_rack, req.dict, turn_seed());
+  const BobReplies replies =
+    bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
+                params_.sims_per_rack, req.dict, turn_seed());
+  const ReplyPayoffs payoffs =
+    payoffs_after_replies(turn, searched, replies.replies, *backend_.values, req.dict, turn_seed());
   if (!params_.subtree_dump.empty()) {
-    dump_turn(req, turn, hasty, searched, replies,
-              with_first_pass(values, turn.candidates, hasty, req.bag_size));
+    dump_turn(req, turn, hasty, searched, replies, payoffs,
+              with_first_pass(payoffs.values, turn.candidates, hasty.labels, req.bag_size));
   }
-  return values;
+  return payoffs.values;
 }
 
 std::vector<double> DeepBot::second_turn_values(const MoveRequest& req, const AliceTurn& turn,
@@ -261,25 +263,28 @@ std::vector<double> DeepBot::second_turn_values(const MoveRequest& req, const Al
                               params_.second, params_.sims_per_rack, req.dict, turn_seed());
 }
 
-void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn,
-                        const std::vector<PoolLabel>& hasty, const std::vector<size_t>& searched,
-                        const std::vector<std::vector<SubtreeMove>>& replies,
-                        const std::vector<double>& values) const {
-  const auto rerun = bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
-                                 req.dict, turn_seed() ^ kRerunSeed);
-  SubtreeTurn t{.agent = name(),
-                .thread = params_.thread_id,
-                .game = games_,
-                .ply = ply_,
-                .bag = req.bag_size,
-                .turn = &turn,
-                .searched = std::vector<bool>(turn.candidates.size(), false),
-                .subtree_values = values,
-                .hasty_values = {},
-                .replies = &replies,
-                .rerun = &rerun};
+void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
+                        const std::vector<size_t>& searched, const BobReplies& replies,
+                        const ReplyPayoffs& payoffs, const std::vector<double>& values) const {
+  const BobReplies rerun =
+    bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
+                params_.sims_per_rack, req.dict, turn_seed() ^ kRerunSeed);
+  SubtreeTurn t{
+    .agent = name(),
+    .thread = params_.thread_id,
+    .game = games_,
+    .ply = ply_,
+    .bag = req.bag_size,
+    .turn = &turn,
+    .searched = std::vector<bool>(turn.candidates.size(), false),
+    .subtree_values = values,
+    .hasty_values = {},
+    .replies = &replies.replies,
+    .rerun = &rerun.replies,
+    .payoffs = &payoffs,
+    .sims = {.first_pass = hasty.sims, .subtrees = replies.sims, .after_replies = payoffs.sims}};
   for (size_t c : searched) t.searched[c] = true;
-  for (const PoolLabel& l : hasty) t.hasty_values.push_back(l.win_prob);
+  for (const PoolLabel& l : hasty.labels) t.hasty_values.push_back(l.win_prob);
   append_dump_line(params_.subtree_dump, subtree_turn_json(t));
 }
 
