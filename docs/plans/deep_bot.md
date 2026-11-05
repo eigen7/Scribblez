@@ -34,15 +34,16 @@ Write **Alice** for the player to move and **Bob** for the opponent.
    bag](#when-alices-move-empties-the-bag) skips the subtree. The
    [budget](#budget) decides how many sims each rack's subtree gets; a rack
    whose reply the evidence already settles gets none.
-4. **Alice's sims.** For each `(a, r)`, Alice runs several
-   [sims](#sims), each with different replenishment draws, after each of
-   Bob's contending replies `b`:
+4. **Alice's sims.** For each `(a, r)`, Alice runs a dozen
+   [sims](#sims), each with different replenishment draws, split among
+   Bob's contending replies `b` by their chance of being his choice
+   ([Budget](#budget)). Each sim:
    1. Bob plays `b`.
    2. Alice and Bob each play one more move by a mechanical rule.
    3. The leaf is evaluated.
 
-   The mean over draws is her payoff `q_A(a, r, b)`. Her value `q(a)` is
-   the mean over racks of her payoff at Bob's reply: at `β(a, r)`, or
+   The mean over `b`'s draws is her payoff `q_A(a, r, b)`. Her value `q(a)`
+   is the mean over racks of her payoff at Bob's reply: at `β(a, r)`, or
    averaged over his contenders by their chance of being his choice where
    his subtree leaves them [tied](#budget).
 5. **Evidence.** Every sim, at both levels, is compared with what the
@@ -1008,12 +1009,12 @@ Per Alice candidate, with fixed counts:
 |---|---|
 | Candidate sets for Bob | `R_A`: 100 |
 | Bob's sims | `R_A · N_B · R_B`: 100 × 8 × 20 = 16,000 |
-| Alice's sims | `R_A ·` sims per rack: about 400 |
+| Alice's sims | `R_A ·` sims per rack: 100 × 12 = 1,200 |
 
-Modeling Bob dominates, at about 40 to 1, and scales with `N_B`, which the
+Modeling Bob dominates, at about 13 to 1, and scales with `N_B`, which the
 equity proposer needs larger late in the game ([Candidates](#candidates)).
 With 20 candidates, a turn is
-about 320,000 short sims, each two mechanical moves after a fixed one, and a
+about 340,000 short sims, each two mechanical moves after a fixed one, and a
 leaf network evaluation. On the dev laptop's GPU (RTX 5000 Ada), the rollout
 kernel runs 140,000 to 540,000 two-ply rollouts a second, depending on how
 many racks hold a blank, and the leaf network about 270,000 evaluations a
@@ -1021,7 +1022,7 @@ second in FP16; together, 90,000 to 170,000 sims a second
 ([gpu_hasty_rollouts.md](gpu_hasty_rollouts.md#the-leaf-network-on-the-device)).
 That is roughly 2 to 4 seconds a turn. The same sims on the 28-thread CPU,
 with the win table as the leaf, ran 20,000 to 164,000 rollouts a second in the
-same measurement, so 2 to 16 seconds a turn; with the leaf network fed from
+same measurement, so 2 to 17 seconds a turn; with the leaf network fed from
 the host, the input upload bounds them at about 48,000 evaluations a second.
 
 **The search network's passes are not in the table.** Each of Bob's
@@ -1056,7 +1057,7 @@ Three decisions read those beliefs.
 2. **When a rack stops.** When one move's chance of being best is near
    certain, or when Alice does not care which of his contenders he plays:
    her payoffs `q_A(a, r, b)` after them barely differ. At fixed counts
-   she runs a few sims per rack against his `N_B · R_B` (about 160), so
+   she runs a dozen sims per rack against his `N_B · R_B` (about 160), so
    simming after each of his contenders costs her little, and her payoffs
    say where his choice matters. Where his contenders stay within
    noise of each other and her payoffs after them differ, more sims cannot
@@ -1086,6 +1087,41 @@ fixed-count agent with successive halving ([Build order](#build-order),
 step 6), they measure how much of the subtree's cost the turn's own sims
 can shed before any model is trained, and set the floor the learned budget
 is measured against.
+
+**Alice's sims at a rack go to Bob's moves by their chance of being his
+choice.** Each of the rack's sims in turn goes to the move with the largest
+`w_b / (2 n_b + 1)`, where `w_b` is the move's chance of being best and
+`n_b` the sims it already holds (the Sainte-Laguë rule), the lower equity
+rank on ties. The moves that get any are his contenders, and her payoff at
+the rack is their mean weighted by `w_b` renormalized over them:
+
+- **Proportional is the split her value wants.** Contender `b`'s sims
+  estimate a term of her value weighted by `w_b`, so for equally noisy sims
+  the split that minimizes the variance of the weighted mean gives each
+  contender sims in proportion to `w_b`. An equal split after each contender
+  spends most of its sims on terms that weigh little: at chances 0.8, 0.1,
+  0.1 and 12 sims, 4 each leaves her payoff about twice the variance of
+  10, 1, 1. Concentrating the sims on `β(a, r)` matches that variance but
+  keeps the error of the argmax snapping a near-tie, which more of her sims
+  never shrink.
+- **A likelier move never gets fewer sims, and one more sim only adds
+  one.** Cumulative rounding of the chances loses the first (0.31, 0.29,
+  0.25, 0.15 at ten sims gives 4, 2, 3, 1; the rule gives 3, 3, 3, 1). The
+  second is what racing her candidates needs: a candidate stopped early
+  holds the split a smaller count would have given.
+- **A move without sims drops out.** It is a move whose share rounds to
+  nothing, which replaces a floor on the chance and a cap on the count;
+  the weight it carried shrinks with the rack's count.
+- **Sim `j` of each contender deals the same draws.** The rack's
+  replenishment is keyed by rack and sim index, the same for every
+  candidate of Alice's and every move of Bob's, so the differences between
+  his contenders stay paired over the sims they share, and every candidate
+  meets the same draws. One unlucky bag is one sim at one rack.
+
+The split serves her value, not the payoff test: where a contender holds
+one sim, its gap to `β(a, r)` rests on one paired sample. The test tops up
+the contenders whose gap could stop the rack, which is the allocator's
+call.
 
 **A second audit covers the racks that have sims.** Bob's choice there is
 the store-informed policy's top move, not the argmax of his sims ([The
@@ -1158,10 +1194,11 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
      matches against BestBot and `mset-sim` in standard Scrabble. The
      ablation against HastyBot is done, and null by design.
 6. **Allocation without a model.** Successive halving and racing, then the
-   model-free part of the [budget](#budget): Alice's payoffs after each of
-   Bob's contenders, a rack that stops when they barely differ, his
-   contenders weighted by their chance of being best from his own sims
-   where they stay close, and the bound at the root. *Measure:* the sims
+   model-free part of the [budget](#budget): Alice's sims at each rack
+   split among Bob's contenders by their chance of being best from his own
+   sims, a rack that stops when her payoffs after them barely differ, and
+   the bound at the root. Racing her candidates stops each one partway
+   through the split's sequence, so its count need not be fixed. *Measure:* the sims
    shed per turn and the strength lost against the time saved, the floor
    the learned budget (step 12) is measured against.
 7. **Continuation heads on the leaf network,** trained from game records:
