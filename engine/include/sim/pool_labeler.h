@@ -34,6 +34,9 @@ struct PoolJob {
   PoolPosition record;
   RolloutGroup group;
   std::vector<RolloutStart> starts;
+  // Rollouts per start, parallel to `starts`, each from 1 to the labeler's
+  // budget, for an unraced labeler; empty: the budget for every start.
+  std::vector<int> rollouts;
 };
 
 class PoolLabeler {
@@ -80,6 +83,8 @@ class PoolLabeler {
     bool finished = false;
   };
 
+  // The rollouts candidate c of `f` runs at most.
+  int budget(const Flight& f, size_t c) const;
   // Pulls jobs until the pending tasks fill a launch, or no job is left.
   void top_up(const std::function<std::optional<PoolJob>()>& next);
   // Queues the next round of `f`'s alive candidates.

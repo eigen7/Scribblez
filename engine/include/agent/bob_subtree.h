@@ -8,13 +8,14 @@
 // Bob samples Alice's leave from his belief (belief::ReplyView: the leave
 // inference row of his position, Alice's private past hidden), sims his
 // static-equity top moves on those samples (Alice and Bob reply by HastyBot,
-// the leaf network at the end), and his reply is the moves his sims leave a
-// real chance of being his best, each with that chance (ContenderRule): at
-// R_B racks his sims separate close moves poorly, so a near-tie does not snap
-// to one move. Only the moves cross back: Alice then sims each (a, r) after
-// each contender with her own leave known and her replenishment drawn per
-// sim, and values `a` by the mean over racks of her payoffs weighted by the
-// contenders' chances.
+// the leaf network at the end), and his reply is his moves with their chances
+// of being his best. At R_B racks his sims separate close moves poorly, so a
+// near-tie does not snap to one move: Alice's sims at the rack are apportioned
+// among his moves by those chances (contenders()), and the moves that get
+// any are his contenders. Only the moves cross back: Alice sims each (a, r)
+// after each contender with her own leave known and her replenishment drawn
+// per sim, and values `a` by the mean over racks of her payoffs weighted by
+// the contenders' chances.
 //
 // Every subtree of a turn races through one PoolLabeler, so their rounds share
 // launches; so do Alice's sims. Jobs are built a candidate at a time, in
@@ -61,17 +62,18 @@ struct BobReplies {
   long long sims = 0;
 };
 
-// `seed` keys Bob's samples and draws, by rack index.
+// `sims` is Alice's sims after his reply at each rack, which his contenders
+// share; `seed` keys his samples and draws, by rack index.
 BobReplies bob_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                        const BeliefModel& model, RolloutValues& values, const SubtreeParams& params,
-                       const ContenderRule& rule, const Dictionary& dict, uint64_t seed);
+                       int sims, const Dictionary& dict, uint64_t seed);
 
 // Alice's sims after Bob's replies to each candidate c in `which`.
 struct ReplyPayoffs {
   // payoffs[c][i][k]: Alice's win probability (a draw counting half) over
-  // `sims` rollouts after contender k of replies[c][i], each drawing her
-  // replenishment; one rack's contenders share draws. The other candidates'
-  // rows stay empty.
+  // the rollouts after contender k of replies[c][i], its `sims` of them, each
+  // drawing her replenishment; one rack's contenders share draws, rollout j
+  // of each dealing the same tiles. The other candidates' rows stay empty.
   std::vector<std::vector<std::vector<double>>> payoffs;
   // Alice's value of c: the mean over racks of her payoffs weighted by the
   // contenders' weights; kPruned for the rest.
@@ -81,8 +83,7 @@ struct ReplyPayoffs {
 
 ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                    const std::vector<std::vector<BobReply>>& replies,
-                                   RolloutValues& values, int sims, const Dictionary& dict,
-                                   uint64_t seed);
+                                   RolloutValues& values, const Dictionary& dict, uint64_t seed);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).

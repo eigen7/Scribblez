@@ -58,13 +58,8 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "subtrees: how many candidates, the best by a first pass of hasty sims, get the subtree; "
      "0 = all")  //
     ("sims-per-rack", po::value<int>(&p.sims_per_rack)->default_value(p.sims_per_rack),
-     "subtrees: Alice's sims after each of the subtree's contenders at each rack, each drawing "
-     "the replenishment")  //
-    ("bob-contenders", po::value<int>(&p.contenders.max)->default_value(p.contenders.max),
-     "subtree: at most this many of Bob's moves, the likeliest best by his sims, that Alice sims "
-     "after at each rack, weighted by that chance")  //
-    ("bob-contender-q", po::value<double>(&p.contenders.min_q)->default_value(p.contenders.min_q),
-     "subtree: the chance of being Bob's best a move needs for Alice to sim after it")  //
+     "subtrees: Alice's sims at each rack after the reply, each drawing the replenishment; under "
+     "subtree, apportioned among Bob's moves by their chance of being his best")  //
     ("alice-racks", po::value<int>(&p.subtree.opp_racks)->default_value(p.subtree.opp_racks),
      "subtree: leaves Bob samples for Alice, one sim of each of his candidates per leave")  //
     ("bob-candidates", po::value<int>(&p.subtree.candidates)->default_value(p.subtree.candidates),
@@ -139,9 +134,6 @@ void validate(const DeepBot::Params& p) {
     throw util::CleanException("deepbot: --subtree-candidates must be >= 0");
   if (p.subtree.candidates < 1 || p.subtree.late_candidates < 1)
     throw util::CleanException("deepbot: --bob-candidates and --bob-late-candidates must be >= 1");
-  if (p.contenders.max < 1 || p.contenders.min_q < 0 || p.contenders.min_q > 1)
-    throw util::CleanException(
-      "deepbot: --bob-contenders must be >= 1 and --bob-contender-q within [0, 1]");
   if (p.second.candidates < 1 || p.second.late_candidates < 1)
     throw util::CleanException(
       "deepbot: --second-candidates and --second-late-candidates must be >= 1");
@@ -252,10 +244,9 @@ std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const Al
                                                 const std::vector<size_t>& searched) {
   const BobReplies replies =
     bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
-                params_.contenders, req.dict, turn_seed());
+                params_.sims_per_rack, req.dict, turn_seed());
   const ReplyPayoffs payoffs =
-    payoffs_after_replies(turn, searched, replies.replies, *backend_.values, params_.sims_per_rack,
-                          req.dict, turn_seed());
+    payoffs_after_replies(turn, searched, replies.replies, *backend_.values, req.dict, turn_seed());
   if (!params_.subtree_dump.empty()) {
     dump_turn(req, turn, hasty, searched, replies, payoffs,
               with_first_pass(payoffs.values, turn.candidates, hasty.labels, req.bag_size));
@@ -277,7 +268,7 @@ void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const Has
                         const ReplyPayoffs& payoffs, const std::vector<double>& values) const {
   const BobReplies rerun =
     bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
-                params_.contenders, req.dict, turn_seed() ^ kRerunSeed);
+                params_.sims_per_rack, req.dict, turn_seed() ^ kRerunSeed);
   SubtreeTurn t{
     .agent = name(),
     .thread = params_.thread_id,

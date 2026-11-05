@@ -21,6 +21,7 @@
 #include "sim/rollout_values.h"
 #include "temp_dir.h"
 #include "util/exception.h"
+#include "util/math.h"
 
 #include <boost/json.hpp>
 #include <gtest/gtest.h>
@@ -30,6 +31,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <numeric>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -173,7 +176,7 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
       EXPECT_EQ(racks, int64_t(p.bob_racks));
       const double contenders = r.at("contenders_mean").as_double();
       EXPECT_GE(contenders, 1.0);
-      EXPECT_LE(contenders, double(p.contenders.max));
+      EXPECT_LE(contenders, double(p.sims_per_rack));
       const double choice = r.at("choice_share").as_double();
       EXPECT_GE(choice, 0.0);
       EXPECT_LE(choice, 1.0);
@@ -319,7 +322,7 @@ TEST(DeepBot, AliceNeverRedrawsTheTilesSheExchanged) {
   const RolloutStart exchanged = make_rollout_start(
     board, alice, 0, 0, Move::exchange(Rack::from_string("JKQXZ").counts()), /*group=*/0);
   const Rack bob = Rack::from_string("BCDFGHI");
-  const PoolJob job = after_reply_job(exchanged, bob, {Move::pass()}, /*sims=*/200, nwl23(), 1);
+  const PoolJob job = after_reply_job(exchanged, bob, {Move::pass()}, /*sims=*/{200}, nwl23(), 1);
   for (uint32_t k = 0; k < 200; ++k) {
     const TileCounts rack = after_reply_racks(job, k).opp.counts();
     ASSERT_EQ(rack.size(), RACK_SIZE);
@@ -351,7 +354,7 @@ TEST(DeepBot, AlicesCandidatesArePairedOnBothPlayersDrawsAfterBobsReply) {
   constexpr int kSims = 16;
   std::vector<PoolJob> jobs;
   for (const RolloutStart& a : applied)
-    jobs.push_back(after_reply_job(a, bob, {reply}, kSims, nwl23(), /*seed=*/5));
+    jobs.push_back(after_reply_job(a, bob, {reply}, {kSims}, nwl23(), /*seed=*/5));
   for (uint32_t k = 0; k < kSims; ++k) {
     const RolloutRacks first = after_reply_racks(jobs[0], k);
     const Rack bob_drew = without(first.mine, Rack::from_string("FGHI"));
@@ -447,36 +450,71 @@ std::vector<int> ranks_of(const std::vector<SubtreeMove>& contenders) {
   return out;
 }
 
+std::vector<int> sims_of(const std::vector<SubtreeMove>& contenders) {
+  std::vector<int> out;
+  for (const SubtreeMove& m : contenders) out.push_back(m.sims);
+  return out;
+}
+
 }  // namespace
 
-// Bob's contenders are the moves his sims leave at least the rule's chance
-// of being best, at most its count of them, likeliest first, with their
-// chances renormalized; the likeliest always stays, alone if nothing else
-// reaches the floor. chosen_move is the likeliest alone.
-TEST(DeepBot, ContendersAreTheMovesWithARealChanceOfBeingBobsBest) {
+// Alice's sims at a rack go to Bob's moves by the Sainte-Laguë rule over
+// their chances of being his best, likeliest first; the moves that get any
+// are his contenders, their chances renormalized over them. A likelier move
+// never gets fewer sims, where cumulative rounding would give 0.31, 0.29,
+// 0.25, 0.15 at ten sims 4, 2, 3, 1. chosen_move is the likeliest alone.
+TEST(DeepBot, AlicesSimsAreApportionedAmongBobsMovesByTheirChanceOfBeingBest) {
   const PoolPosition pool = labeled_pool({0.05, 0.6, 0.3, 0.05});
-  const std::vector<SubtreeMove> two = contenders(pool.moves, pool, {.min_q = 0.1, .max = 3});
+  const std::vector<SubtreeMove> all = contenders(pool.moves, pool, /*sims=*/12);
+  EXPECT_EQ(ranks_of(all), (std::vector<int>{1, 2, 0, 3}));
+  EXPECT_EQ(sims_of(all), (std::vector<int>{7, 3, 1, 1}));
+  EXPECT_DOUBLE_EQ(all[0].weight, 0.6);
+  EXPECT_DOUBLE_EQ(all[0].q, 0.6);
+  EXPECT_EQ(all[0].candidates, 4);
+  const std::vector<SubtreeMove> two = contenders(pool.moves, pool, /*sims=*/4);
   EXPECT_EQ(ranks_of(two), (std::vector<int>{1, 2}));
+  EXPECT_EQ(sims_of(two), (std::vector<int>{3, 1}));
   EXPECT_DOUBLE_EQ(two[0].weight, 0.6 / 0.9);
   EXPECT_DOUBLE_EQ(two[1].weight, 0.3 / 0.9);
-  EXPECT_DOUBLE_EQ(two[0].q, 0.6);
-  EXPECT_EQ(two[0].candidates, 4);
-  EXPECT_EQ(ranks_of(contenders(pool.moves, pool, {.min_q = 0.1, .max = 1})),
-            (std::vector<int>{1}));
-  EXPECT_EQ(ranks_of(contenders(pool.moves, pool, {.min_q = 0, .max = 10})),
-            (std::vector<int>{1, 2, 0, 3}));
   const SubtreeMove chosen = chosen_move(pool.moves, pool);
   EXPECT_EQ(chosen.equity_rank, 1);
   EXPECT_DOUBLE_EQ(chosen.weight, 1.0);
+  const PoolPosition close = labeled_pool({0.31, 0.29, 0.25, 0.15});
+  EXPECT_EQ(sims_of(contenders(close.moves, close, /*sims=*/10)), (std::vector<int>{3, 3, 3, 1}));
+  // Ties go to the lower equity rank, as they did when the likeliest alone
+  // was Bob's reply.
   const PoolPosition flat = labeled_pool({0.08, 0.08, 0.08});
-  const std::vector<SubtreeMove> one = contenders(flat.moves, flat, {.min_q = 0.1, .max = 3});
-  EXPECT_EQ(ranks_of(one), (std::vector<int>{0}));
-  EXPECT_DOUBLE_EQ(one[0].weight, 1.0);
+  EXPECT_EQ(ranks_of(contenders(flat.moves, flat, /*sims=*/1)), (std::vector<int>{0}));
+  EXPECT_EQ(sims_of(contenders(flat.moves, flat, /*sims=*/4)), (std::vector<int>{2, 1, 1}));
+}
+
+// One more sim only adds to the split, and a larger share never holds fewer.
+TEST(DeepBot, ApportioningIsMonotoneInSharesAndInTheTotal) {
+  std::mt19937_64 rng(3);
+  std::uniform_real_distribution<double> u(0.0, 1.0);
+  for (int trial = 0; trial < 200; ++trial) {
+    std::vector<double> shares(size_t(2 + trial % 5));
+    for (double& s : shares) s = u(rng);
+    std::sort(shares.rbegin(), shares.rend());
+    std::vector<int> before(shares.size(), 0);
+    for (int total = 1; total <= 20; ++total) {
+      const std::vector<int> split = util::apportion(shares, total);
+      EXPECT_EQ(std::accumulate(split.begin(), split.end(), 0), total);
+      for (size_t k = 0; k < split.size(); ++k) {
+        EXPECT_GE(split[k], before[k]);
+        if (k > 0) {
+          EXPECT_GE(split[k - 1], split[k]);
+        }
+      }
+      before = split;
+    }
+  }
 }
 
 // Alice's value of a candidate is the mean over Bob's racks of her payoffs
-// after his contenders, weighted by their weights; with one contender per
-// rack it is the mean payoff.
+// after his contenders, weighted by their weights, each contender getting its
+// own sims; with one contender per rack it is the mean payoff, and its
+// payoff is the same with the others' sims beside it.
 TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Midgame at = midgame(/*seed=*/5, /*plies=*/8);
@@ -499,22 +537,23 @@ TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
                                        .bag = req.bag_size,
                                        .earlier = {}};
   const AliceTurn turn{position, moves, root.starts, racks, root.group};
-  // Bob's reply at each rack: his equity top two, weighted 3 to 1.
+  // Bob's reply at each rack: his equity top two, weighted 3 to 1, with
+  // three of Alice's sims after the first and one after the second.
   std::vector<std::vector<BobReply>> replies(moves.size(), std::vector<BobReply>(kRacks));
   for (size_t c = 0; c < moves.size(); ++c) {
     for (size_t i = 0; i < kRacks; ++i) {
       const std::vector<Move> his = mover_candidates(
         mover_position(root.starts[c], racks[i]), {.candidates = 2, .late_candidates = 2}, nwl23());
       ASSERT_EQ(his.size(), 2u);
-      replies[c][i] = {{.move = his[0], .weight = 0.75}, {.move = his[1], .weight = 0.25}};
+      replies[c][i] = {{.move = his[0], .weight = 0.75, .sims = 3},
+                       {.move = his[1], .weight = 0.25, .sims = 1}};
     }
   }
   CpuRolloutValues values(nwl23(), synthetic_leaf());
   const std::vector<size_t> which{0, 1};
-  constexpr int kSims = 4;
   const ReplyPayoffs weighted =
-    payoffs_after_replies(turn, which, replies, values, kSims, nwl23(), /*seed=*/2);
-  EXPECT_EQ(weighted.sims, int64_t(moves.size()) * kRacks * 2 * kSims);
+    payoffs_after_replies(turn, which, replies, values, nwl23(), /*seed=*/2);
+  EXPECT_EQ(weighted.sims, int64_t(moves.size()) * kRacks * (3 + 1));
   for (size_t c : which) {
     double expect = 0;
     for (size_t i = 0; i < kRacks; ++i) {
@@ -527,14 +566,14 @@ TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
     }
     EXPECT_NEAR(weighted.values[c], expect, 1e-12);
   }
-  // One contender, weight 1: the mean of its payoffs, the same sims.
+  // One contender, weight 1: the mean of its payoffs, the same three sims.
   for (auto& by_rack : replies)
     for (BobReply& r : by_rack) {
       r.resize(1);
       r[0].weight = 1;
     }
   const ReplyPayoffs single =
-    payoffs_after_replies(turn, which, replies, values, kSims, nwl23(), /*seed=*/2);
+    payoffs_after_replies(turn, which, replies, values, nwl23(), /*seed=*/2);
   for (size_t c : which) {
     double expect = 0;
     for (size_t i = 0; i < kRacks; ++i) {

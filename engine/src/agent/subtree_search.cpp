@@ -41,18 +41,25 @@ std::vector<Move> mover_candidates(const SimPosition& pos, const SubtreeParams& 
 }
 
 std::vector<SubtreeMove> contenders(const std::vector<Move>& moves, const PoolPosition& labeled,
-                                    const ContenderRule& rule) {
+                                    int sims) {
   const std::vector<PoolLabel>& labels = labeled.labels;
   std::vector<size_t> order(moves.size());
   std::iota(order.begin(), order.end(), size_t(0));
   std::stable_sort(order.begin(), order.end(),
                    [&](size_t a, size_t b) { return labels[a].q > labels[b].q; });
+  std::vector<double> q;
+  for (const size_t k : order) q.push_back(labels[k].q);
+  const std::vector<int> share = util::apportion(q, sims);
   std::vector<SubtreeMove> out;
   double total = 0;
-  for (const size_t k : order) {
-    if (!out.empty() && (labels[k].q < rule.min_q || int(out.size()) >= rule.max)) break;
-    out.push_back(
-      {.move = moves[k], .equity_rank = int(k), .candidates = int(moves.size()), .q = labels[k].q});
+  // Every move after the first without sims has none either.
+  for (size_t j = 0; j < order.size() && share[j] > 0; ++j) {
+    const size_t k = order[j];
+    out.push_back({.move = moves[k],
+                   .equity_rank = int(k),
+                   .candidates = int(moves.size()),
+                   .q = labels[k].q,
+                   .sims = share[j]});
     total += labels[k].q;
   }
   for (SubtreeMove& m : out) m.weight = m.q / total;
@@ -60,19 +67,21 @@ std::vector<SubtreeMove> contenders(const std::vector<Move>& moves, const PoolPo
 }
 
 SubtreeMove chosen_move(const std::vector<Move>& moves, const PoolPosition& labeled) {
-  return contenders(moves, labeled, {.min_q = 0, .max = 1}).front();
+  return contenders(moves, labeled, /*sims=*/1).front();
 }
 
 PoolJob after_reply_job(const RolloutStart& applied, const Rack& rack,
-                        const std::vector<Move>& replies, int sims, const Dictionary& dict,
-                        uint64_t seed) {
-  PoolJob job = position_job(mover_position(applied, rack), replies, seed, nullptr, dict, sims);
+                        const std::vector<Move>& replies, const std::vector<int>& sims,
+                        const Dictionary& dict, uint64_t seed) {
+  const int most = *std::max_element(sims.begin(), sims.end());
+  PoolJob job = position_job(mover_position(applied, rack), replies, seed, nullptr, dict, most);
+  job.rollouts = sims;
   // The replier's unseen pool less the leave, which the sims seat, and the
   // exchanged tiles, which went back only after the refill: the bag as the
   // mover of `applied` found it.
   const bool unseen = job.group.pool.remove(applied.returned.counts());
   DEBUG_ASSERT(unseen, "an exchange's tiles are unseen to the replier");
-  job.group.opp_leaves.assign(size_t(sims), applied.leave);
+  job.group.opp_leaves.assign(size_t(most), applied.leave);
   for (RolloutStart& start : job.starts) start.opp_returned = applied.returned;
   return job;
 }

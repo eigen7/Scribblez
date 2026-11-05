@@ -8,6 +8,7 @@
 #include "sim/sim_runner.h"
 #include "util/work_pool.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -56,7 +57,7 @@ struct CandidateSubtrees {
 };
 
 CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const BeliefModel& model,
-                                     const SubtreeParams& params, const Dictionary& dict,
+                                     const SubtreeParams& params, int sims, const Dictionary& dict,
                                      uint64_t seed, std::vector<BobReply>& replies) {
   const auto beliefs = bob_beliefs(turn, turn.candidates[c], model, dict);
   const size_t racks = turn.bob_racks.size();
@@ -66,7 +67,8 @@ CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const Beli
     const SimPosition pos = mover_position(turn.applied[c], turn.bob_racks[i]);
     out.moves[i] = mover_candidates(pos, params, dict);
     if (out.moves[i].size() <= 1) {
-      replies[i] = {{.move = out.moves[i].empty() ? Move::pass() : out.moves[i].front()}};
+      replies[i] = {
+        {.move = out.moves[i].empty() ? Move::pass() : out.moves[i].front(), .sims = sims}};
       return;
     }
     const auto belief = beliefs.sampler(i, *model.table);
@@ -86,6 +88,24 @@ std::vector<Move> moves_of(const BobReply& reply) {
   return out;
 }
 
+// Alice's sims after each move of `reply`, in its order.
+std::vector<int> sims_of(const BobReply& reply) {
+  std::vector<int> out;
+  out.reserve(reply.size());
+  for (const SubtreeMove& m : reply) out.push_back(m.sims);
+  return out;
+}
+
+// The most sims any one move of the replies to `which` gets: the labeler's
+// budget.
+int most_sims(const std::vector<std::vector<BobReply>>& replies, const std::vector<size_t>& which) {
+  int most = 1;
+  for (size_t c : which)
+    for (const BobReply& reply : replies[c])
+      for (const SubtreeMove& m : reply) most = std::max(most, m.sims);
+  return most;
+}
+
 }  // namespace
 
 std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count) {
@@ -100,14 +120,15 @@ std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start
 
 BobReplies bob_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                        const BeliefModel& model, RolloutValues& values, const SubtreeParams& params,
-                       const ContenderRule& rule, const Dictionary& dict, uint64_t seed) {
+                       int sims, const Dictionary& dict, uint64_t seed) {
   BobReplies out{.replies = std::vector<std::vector<BobReply>>(turn.candidates.size()), .sims = 0};
   for (size_t c : which) out.replies[c].resize(turn.bob_racks.size());
   // Bob's candidates by (candidate, rack), kept until the labels come back.
   std::vector<std::vector<std::vector<Move>>> moves(turn.candidates.size());
   ChunkedJobs jobs(which.size(), [&](size_t chunk) {
     const size_t c = which[chunk];
-    CandidateSubtrees made = candidate_subtrees(turn, c, model, params, dict, seed, out.replies[c]);
+    CandidateSubtrees made =
+      candidate_subtrees(turn, c, model, params, sims, dict, seed, out.replies[c]);
     moves[c] = std::move(made.moves);
     for (auto& [i, job] : made.jobs) i += c * turn.bob_racks.size();
     return std::move(made.jobs);
@@ -116,15 +137,14 @@ BobReplies bob_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                        [&](size_t key, const PoolPosition& p) {
                          const size_t c = key / turn.bob_racks.size();
                          const size_t i = key % turn.bob_racks.size();
-                         out.replies[c][i] = contenders(moves[c][i], p, rule);
+                         out.replies[c][i] = contenders(moves[c][i], p, sims);
                        });
   return out;
 }
 
 ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                    const std::vector<std::vector<BobReply>>& replies,
-                                   RolloutValues& values, int sims, const Dictionary& dict,
-                                   uint64_t seed) {
+                                   RolloutValues& values, const Dictionary& dict, uint64_t seed) {
   const size_t racks = turn.bob_racks.size();
   ReplyPayoffs out{.payoffs = std::vector<std::vector<std::vector<double>>>(turn.candidates.size()),
                    .values = std::vector<double>(turn.candidates.size(), kPruned),
@@ -137,14 +157,14 @@ ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size
     const size_t c = which[chunk];
     std::vector<std::pair<size_t, PoolJob>> made(racks);
     util::parallel_for(racks, [&](size_t i) {
-      made[i] = {c * racks + i,
-                 after_reply_job(turn.applied[c], turn.bob_racks[i], moves_of(replies[c][i]), sims,
-                                 dict, rack_seed(seed, kAfterReplyDomain, i))};
+      made[i] = {c * racks + i, after_reply_job(turn.applied[c], turn.bob_racks[i],
+                                                moves_of(replies[c][i]), sims_of(replies[c][i]),
+                                                dict, rack_seed(seed, kAfterReplyDomain, i))};
     });
     return made;
   });
   // The leaf values each sim from Bob's side, who moved last.
-  out.sims = label_all(values, {.rollouts = sims, .race = false}, jobs,
+  out.sims = label_all(values, {.rollouts = most_sims(replies, which), .race = false}, jobs,
                        [&](size_t key, const PoolPosition& p) {
                          const size_t c = key / racks;
                          const size_t i = key % racks;

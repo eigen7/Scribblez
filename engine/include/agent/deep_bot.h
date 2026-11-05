@@ -7,9 +7,10 @@
 // draws the rest of both racks. How Bob replies is the reply model:
 //
 //   - `subtree`: Bob decides on his own information (agent/bob_subtree.h).
-//     For rack i, his own sims leave his contenders with their chances of
-//     being his best, and Alice's sims after each, with her replenishment
-//     drawn, value the candidate by their weighted mean. She plays the best.
+//     For rack i, his own sims give his moves their chances of being his
+//     best, Alice's sims at the rack are apportioned among them by those
+//     chances, and her payoffs after them, with her replenishment drawn,
+//     value the candidate by their weighted mean. She plays the best.
 //   - `hasty`: Bob and then Alice reply by HastyBot and the leaf network values
 //     the end state, BestBot's loop with inferred racks and the leaf network.
 //     The sims race the candidates in rounds (sim/pool_labeler.h), and she
@@ -73,10 +74,11 @@ class DeepBot : public Agent {
     // How many of Alice's candidates, the best by a first pass of hasty sims,
     // get the subtree; 0: all.
     int subtree_candidates = 8;
-    int sims_per_rack = 4;       // ... after each of Bob's contenders
-    SubtreeParams subtree{};     // Bob's, under `subtree`
-    ContenderRule contenders{};  // which of Bob's moves Alice sims after
-    SubtreeParams second{};      // Alice's second turn's, under `alice-subtree`
+    // Alice's sims at each rack after Bob's reply; under `subtree`,
+    // apportioned among his contenders.
+    int sims_per_rack = 12;
+    SubtreeParams subtree{};  // Bob's, under `subtree`
+    SubtreeParams second{};   // Alice's second turn's, under `alice-subtree`
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
     // the hasty sims and a second run of the subtrees.
     std::string subtree_dump{};
