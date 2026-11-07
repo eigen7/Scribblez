@@ -1,6 +1,7 @@
 #include "sim/pool_labeler.h"
 
 #include "sim/pool_labels.h"
+#include "util/exception.h"
 
 #include <algorithm>
 #include <numeric>
@@ -18,6 +19,19 @@ Rollout to_rollout(const RolloutOutcome& o) {
   r.delta = o.result.diff;
   r.delta_sq = double(o.result.diff) * o.result.diff;
   return r;
+}
+
+void check_rollouts(const PoolJob& job, const PoolLabeler::Params& params) {
+  if (job.rollouts.empty()) return;
+  if (params.race) throw util::Exception("PoolLabeler: per-start rollouts need an unraced labeler");
+  if (job.rollouts.size() != job.starts.size())
+    throw util::Exception("PoolLabeler: {} rollout counts for {} starts", job.rollouts.size(),
+                          job.starts.size());
+  for (const int n : job.rollouts) {
+    if (n < 1 || n > params.rollouts)
+      throw util::Exception("PoolLabeler: a start's {} rollouts are outside [1, {}]", n,
+                            params.rollouts);
+  }
 }
 
 }  // namespace
@@ -53,6 +67,7 @@ void PoolLabeler::top_up(const std::function<std::optional<PoolJob>()>& next) {
       exhausted_ = true;
       break;
     }
+    check_rollouts(*job, params_);
     Flight f;
     f.order = pulled_++;
     f.job = std::move(*job);
@@ -60,16 +75,20 @@ void PoolLabeler::top_up(const std::function<std::optional<PoolJob>()>& next) {
     f.alive.resize(f.rollouts.size());
     std::iota(f.alive.begin(), f.alive.end(), size_t(0));
     for (const Move& m : f.job.record.moves) f.keep.push_back(m.type() == MoveType::PASS);
-    stats_.full_tasks += (long long)(f.rollouts.size()) * params_.rollouts;
+    for (size_t c = 0; c < f.rollouts.size(); ++c) stats_.full_tasks += budget(f, c);
     begin_round(f);
     flight_.push_back(std::move(f));
     finished_.emplace_back();
   }
 }
 
+int PoolLabeler::budget(const Flight& f, size_t c) const {
+  return f.job.rollouts.empty() ? params_.rollouts : f.job.rollouts[c];
+}
+
 void PoolLabeler::begin_round(Flight& f) const {
-  const int upto = checkpoints_[f.round];
   for (const size_t c : f.alive) {
+    const int upto = std::min(checkpoints_[f.round], budget(f, c));
     f.rollouts[c].resize(size_t(upto));
     for (int i = f.done; i < upto; ++i) f.pending.push_back({uint32_t(c), uint32_t(i)});
   }
