@@ -75,6 +75,10 @@ class DeepBotLeafEvalParams:
     lambda_points: float = param(
         1.0, "square-points loss weight (per-square mean and variance, in units of 100 points)"
     )
+    lambda_going_out: float = param(1.0, "going-out loss weight (three-way cross-entropy)")
+    lambda_end_points: float = param(
+        1.0, "end-of-game points loss weight (mean and variance, in units of 100 points)"
+    )
     # Model (deep_bot_leaf_eval/model.py).
     trunk: str = param(
         TRUNK_TRANSFORMER,

@@ -1,6 +1,7 @@
-"""The deep_bot_leaf_eval workload: the model's arms, the per-square heads'
-losses, the win table baseline's features against the engine's own, the epoch
-and the held-out eval, the resume gate, and the workload's registration."""
+"""The deep_bot_leaf_eval workload: the model's arms, the per-square and
+end-of-game heads' losses, the win table baseline's features against the
+engine's own, the epoch and the held-out eval, the resume gate, and the
+workload's registration."""
 
 import dataclasses
 import subprocess
@@ -23,6 +24,9 @@ from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
     LAYOUT,
     POINTS_SCALE,
     SCALAR_FEATURES,
+    UNLABELLED,
+    EndPointsHead,
+    GoingOutHead,
     LeafEvalModel,
     LeafEvalShape,
     OwnershipHead,
@@ -133,18 +137,21 @@ def test_epoch_and_eval(batches, corpus, tmp_path, trunk):
     win_table.write(table, win_table.fit(samples), {"test": True})
     cpu = torch.device("cpu")
     params = deep_bot_leaf_eval.DeepBotLeafEvalParams()
-    # One batch, fitted for two steps: the conv trunk's CPU bf16 autocast makes
-    # every step cost.
+    # One batch, fitted for a few steps: the conv trunk's CPU bf16 autocast
+    # makes every step cost.
     batch = batches[:1]
     before = evaluation.evaluate(model, iter(batch), cpu, table, win_table.MACONDO_WIN_TABLE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-    for _ in range(2):
+    for _ in range(3):
         result = run_epoch(model, optimizer, iter(batch), cpu, trainer.loss_config(params))
         assert np.isfinite(result.losses["total"])
     after = evaluation.evaluate(model, iter(batch), cpu, table, win_table.MACONDO_WIN_TABLE)
     assert after["eval_wld_nll"] < before["eval_wld_nll"]
     assert after["eval_ownership_nll"] < before["eval_ownership_nll"]
     assert np.isfinite(after["eval_points_rmse"]) and after["eval_points_var_ratio"] > 0
+    # The test games all stall, so the going-out head has one class to learn.
+    assert after["eval_going_out_nll"] < before["eval_going_out_nll"]
+    assert np.isfinite(after["eval_end_points_rmse"]) and after["eval_end_points_var_ratio"] > 0
     # The tables do not train: their read is the same before and after.
     for key in ("eval_wintable_logloss", "eval_wintable_macondo_logloss"):
         assert after[key] == before[key] and 0 < after[key] < 1
@@ -196,6 +203,33 @@ def test_ownership_loss_and_square_sums_read_only_empty_squares():
     assert sums["own_nll_sum"][0] == pytest.approx(empty * np.log(5))
     assert sums["points_sq_err_sum"][0] == pytest.approx(30.0**2)
     assert sums["points_var_sum"][0] == pytest.approx(empty * 1.0)
+
+
+def test_end_of_game_losses_and_reads_skip_games_cut_short():
+    """Both heads' losses and the eval's per-row reads cover only the rows
+    whose game reached its end; an unlabelled row's wrong predictions count
+    for nothing."""
+    going_out = torch.tensor([[0.0], [2.0], [float(UNLABELLED)]])
+    end_points = torch.tensor([[16.0], [-7.0], [0.0]])
+    logits = torch.zeros(3, 3)
+    logits[2, 1] = 50.0  # unlabelled: confidently wrong, ignored
+    preds = torch.zeros(3, 2)
+    preds[0, 0] = 16.0 / POINTS_SCALE  # exact mean
+    preds[1, 1] = (7.0 / POINTS_SCALE) ** 2  # mean 0, variance exact for the miss
+    preds[2] = 9.0
+    targets = {"going_out": going_out, "end_points": end_points}
+    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    ce = GoingOutHead(8).loss({"going_out": logits}, targets, cfg).reported["going_out"]
+    assert ce.item() == pytest.approx(np.log(3))
+    reported = EndPointsHead(8).loss({"end_points": preds}, targets, cfg).reported
+    assert reported["end_points_mean"].item() == pytest.approx(0.07**2 / 2)
+    # Row 0's variance should be 0 and is; row 1's squared deviation is 0.07^2.
+    assert reported["end_points_var"].item() == pytest.approx(0.0, abs=1e-12)
+    rows = evaluation._end_rows({"going_out": logits, "end_points": preds}, targets)
+    np.testing.assert_array_equal(rows["end_labelled"], [1.0, 1.0, 0.0])
+    np.testing.assert_allclose(rows["going_out_nll"], [np.log(3), np.log(3), 0.0])
+    np.testing.assert_allclose(rows["end_sq_err"], [0.0, 49.0, 0.0])
+    np.testing.assert_allclose(rows["end_var"], [0.0, 49.0, 0.0], atol=1e-4)
 
 
 def test_expected_score_logloss():

@@ -34,8 +34,12 @@ used at inference, and score_diff (B, 2) [mean, std]. Two per-square heads read
 the trunk's cell features: ownership (B, 5, 15, 15) logits over what becomes of
 each empty square (engine encoding/square_fates.h), and square_points
 (B, 2, 15, 15), the mean and variance of the signed points of the move that
-fills it. docs/plans/deep_bot.md ("The search network") gives their purpose:
-sims complete their maps with them, and residuals against them are evidence.
+fills it. Two end-of-game heads read the pooled vector: going_out (B, 3)
+logits over who goes out (the mover, the opponent, nobody), and end_points
+(B, 2), the mean and variance of the net end-of-game rack adjustment from the
+mover's side (engine training/game_end_targets.h). docs/plans/deep_bot.md
+("The search network") gives their purpose: sims complete their maps and
+end-of-game outcomes with them, and residuals against them are evidence.
 """
 
 from dataclasses import dataclass
@@ -71,6 +75,9 @@ SQUARE_FATE_CLASSES = 5
 FILLED = -1
 # Points are learned in units of 100, the row's score-differential scale.
 POINTS_SCALE = 100.0
+GOING_OUT_CLASSES = 3
+# A game cut short has no end to predict: its going-out label.
+UNLABELLED = -1
 
 
 @dataclass(frozen=True)
@@ -187,15 +194,35 @@ class ConvTrunk(nn.Module):
 
 @dataclass
 class LeafLossConfig(LossConfig):
-    """position_eval's loss config plus the per-square heads' weights."""
+    """position_eval's loss config plus the per-square and end-of-game heads'
+    weights."""
 
     lambda_ownership: float
     lambda_points: float
+    lambda_going_out: float
+    lambda_end_points: float
 
 
-def _masked_mean(per_square: torch.Tensor, empty: torch.Tensor) -> torch.Tensor:
-    """The mean of (B, 15, 15) `per_square` over the empty squares."""
-    return (per_square * empty).sum() / empty.sum().clamp(min=1)
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """The mean of `values` where `mask` (same shape, 0/1) is set."""
+    return (values * mask).sum() / mask.sum().clamp(min=1)
+
+
+def moment_losses(
+    mean: torch.Tensor, var: torch.Tensor, target: torch.Tensor, mask: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fits of two moments by squared error over `mask`: the mean against
+    `target`, the variance against the squared deviation from the detached
+    mean. Each is consistent whatever the target's shape, a spike at zero plus
+    scattered large values, where a Gaussian likelihood is not."""
+    loss_mean = _masked_mean((mean - target) ** 2, mask)
+    loss_var = _masked_mean((var - (target - mean.detach()) ** 2) ** 2, mask)
+    return loss_mean, loss_var
+
+
+def _mean_and_variance(out: torch.Tensor) -> torch.Tensor:
+    """(B, 2, ...) raw head output -> [mean, softplus variance] along dim 1."""
+    return torch.stack([out[:, 0], F.softplus(out[:, 1])], dim=1)
 
 
 class OwnershipHead(Head):
@@ -220,12 +247,8 @@ class OwnershipHead(Head):
 
 class SquarePointsHead(Head):
     """(B, 2, 15, 15): per square, the mean and variance of the signed points
-    of the move that fills it (zero if none does), in POINTS_SCALE units.
-
-    Both fit moments by squared error on the empty squares: the mean against
-    the points, the variance against the squared deviation from the detached
-    mean. Each is consistent whatever the target's shape, a spike at zero plus
-    scattered large values, where a Gaussian likelihood is not."""
+    of the move that fills it (zero if none does), in POINTS_SCALE units, by
+    moment_losses on the empty squares."""
 
     name = "square_points"
     loss_keys = ("square_points", "square_points_mean", "square_points_var")
@@ -236,15 +259,14 @@ class SquarePointsHead(Head):
         self.conv = nn.Conv2d(channels, 2, 1)
 
     def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
-        out = self.conv(x)
-        return torch.stack([out[:, 0], F.softplus(out[:, 1])], dim=1)
+        return _mean_and_variance(self.conv(x))
 
     def loss(self, outputs, targets, cfg):
         empty = (targets["ownership"] != FILLED).to(outputs["square_points"].dtype)
         mean, var = outputs["square_points"].unbind(dim=1)
-        points = targets["square_points"] / POINTS_SCALE
-        loss_mean = _masked_mean((mean - points) ** 2, empty)
-        loss_var = _masked_mean((var - (points - mean.detach()) ** 2) ** 2, empty)
+        loss_mean, loss_var = moment_losses(
+            mean, var, targets["square_points"] / POINTS_SCALE, empty
+        )
         total = loss_mean + loss_var
         reported = {
             "square_points": total,
@@ -252,6 +274,62 @@ class SquarePointsHead(Head):
             "square_points_var": loss_var,
         }
         return HeadLoss(cfg.lambda_points * total, reported)
+
+
+def _end_head(value_in: int, outputs: int) -> nn.Sequential:
+    return nn.Sequential(nn.Linear(value_in, 64), nn.ReLU(inplace=True), nn.Linear(64, outputs))
+
+
+def _labelled(targets: dict[str, torch.Tensor]) -> torch.Tensor:
+    """(B,) 1.0 for a row whose game reached its end."""
+    return (targets["going_out"][:, 0] != UNLABELLED).float()
+
+
+class GoingOutHead(Head):
+    """(B, 3) logits over who goes out: the mover, the opponent, or nobody;
+    cross-entropy on the rows whose game reached its end."""
+
+    name = "going_out"
+    loss_keys = ("going_out",)
+    target_keys = ("going_out",)
+
+    def __init__(self, value_in: int):
+        super().__init__()
+        self.fc = _end_head(value_in, GOING_OUT_CLASSES)
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        return self.fc(value_in)
+
+    def loss(self, outputs, targets, cfg):
+        labels = targets["going_out"][:, 0].long()
+        ce = F.cross_entropy(outputs["going_out"], labels, ignore_index=UNLABELLED)
+        return HeadLoss(cfg.lambda_going_out * ce, {"going_out": ce})
+
+
+class EndPointsHead(Head):
+    """(B, 2): the mean and variance of the net end-of-game rack adjustment
+    from the mover's side, in POINTS_SCALE units, by moment_losses on the rows
+    whose game reached its end."""
+
+    name = "end_points"
+    loss_keys = ("end_points", "end_points_mean", "end_points_var")
+    target_keys = ("end_points", "going_out")
+
+    def __init__(self, value_in: int):
+        super().__init__()
+        self.fc = _end_head(value_in, 2)
+
+    def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
+        return _mean_and_variance(self.fc(value_in))
+
+    def loss(self, outputs, targets, cfg):
+        labelled = _labelled(targets).to(outputs["end_points"].dtype)
+        mean, var = outputs["end_points"].unbind(dim=1)
+        points = targets["end_points"][:, 0] / POINTS_SCALE
+        loss_mean, loss_var = moment_losses(mean, var, points, labelled)
+        total = loss_mean + loss_var
+        reported = {"end_points": total, "end_points_mean": loss_mean, "end_points_var": loss_var}
+        return HeadLoss(cfg.lambda_end_points * total, reported)
 
 
 class LeafEvalModel(HeadedModel):
@@ -269,6 +347,8 @@ class LeafEvalModel(HeadedModel):
             ScoreDiffHead(value_in),
             OwnershipHead(shape.width),
             SquarePointsHead(shape.width),
+            GoingOutHead(value_in),
+            EndPointsHead(value_in),
         )
         self.heads = nn.ModuleDict({h.name: h for h in heads})
 

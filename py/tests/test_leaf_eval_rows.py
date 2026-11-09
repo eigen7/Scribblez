@@ -2,7 +2,8 @@
 training/leaf_eval_task.h): the DataLoader and decode_rows over .slog files
 written by the C++ test_slog_writer binary. The join planes are recomputed here
 from each row's own board and cross-check planes, and the per-square fates from
-the boards and score differentials of the game's later rows."""
+the boards and score differentials of the game's later rows, and the
+end-of-game labels against the game's end."""
 
 import subprocess
 from pathlib import Path
@@ -31,6 +32,10 @@ SCORE_DIFF, MY_LEAVE_VALUE, OPP_LEAVE_VALUE, POOL_SIZE = 81, 82, 83, 84
 SCALARS = 85
 # Square fates (encoding/square_fates.h).
 FILLED, OWN_BINGO, OWN_OTHER, OPP_BINGO, OPP_OTHER, STAYS_EMPTY = -1, 0, 1, 2, 3, 4
+# Going out (training/game_end_targets.h).
+UNLABELLED, I_GO_OUT, OPP_GOES_OUT, NOBODY_GOES_OUT = -1, 0, 1, 2
+# Label offsets after wld (3) and score_diff (1) and the two per-square maps.
+GOING_OUT_LABEL, END_POINTS_LABEL = 4 + 2 * N * N, 5 + 2 * N * N
 SCORE_DIFF_SCALE = 100.0
 TILE_VALUES = np.array(
     [1, 3, 3, 2, 1, 4, 2, 4, 1, 8, 5, 1, 3, 1, 1, 3, 10, 1, 1, 1, 1, 4, 4, 8, 4, 10, 0]
@@ -100,6 +105,8 @@ def test_shapes_cover_the_row():
         ("score_diff", (1,)),
         ("ownership", (N, N)),
         ("square_points", (N, N)),
+        ("going_out", (1,)),
+        ("end_points", (1,)),
     ]
     total = sum(int(np.prod(s.dims)) for s in inputs + targets)
     assert total == ffi.task_row_floats(_TASK)
@@ -280,8 +287,24 @@ def _rows_by_turn(path: Path, game: int, turns: np.ndarray) -> dict[str, np.ndar
         "occupied": rows[:, : LETTERS * N * N].reshape(-1, LETTERS, N, N).sum(axis=1) > 0,
         "diff": np.rint(rows[:, spatial_floats + SCORE_DIFF] * SCORE_DIFF_SCALE),
         "fate": labels[:, 4 : 4 + N * N].reshape(-1, N, N),
-        "points": labels[:, 4 + N * N :].reshape(-1, N, N),
+        "points": labels[:, 4 + N * N : GOING_OUT_LABEL].reshape(-1, N, N),
+        "going_out": labels[:, GOING_OUT_LABEL],
+        "end_points": labels[:, END_POINTS_LABEL],
     }
+
+
+def _game_rows(played_games: Path):
+    """Each game's rows at every eligible turn but the dropped last one."""
+    header = ffi.struct_dtype("SlogFileHeader")
+    for path in sorted(played_games.glob("*.slog")):
+        num_games = int(np.fromfile(path, header, count=1)[0]["num_games"])
+        metas = np.fromfile(
+            path, ffi.struct_dtype("SlogGameMetadata"), count=num_games, offset=header.itemsize
+        )
+        for game, meta in enumerate(metas):
+            turns = np.arange(int(meta["eligible_begin"]), int(meta["eligible_end"]) - 1)
+            if len(turns) >= 3:
+                yield _rows_by_turn(path, game, turns)
 
 
 def _check_next_move(rows: dict, t: int, k: int):
@@ -302,20 +325,44 @@ def _check_next_move(rows: dict, t: int, k: int):
 
 
 def test_square_fates_match_the_games_later_moves(played_games):
-    header = ffi.struct_dtype("SlogFileHeader")
     checked = 0
-    for path in sorted(played_games.glob("*.slog")):
-        num_games = int(np.fromfile(path, header, count=1)[0]["num_games"])
-        metas = np.fromfile(
-            path, ffi.struct_dtype("SlogGameMetadata"), count=num_games, offset=header.itemsize
-        )
-        for game, meta in enumerate(metas):
-            turns = np.arange(int(meta["eligible_begin"]), int(meta["eligible_end"]) - 1)
-            if len(turns) < 3:
-                continue
-            rows = _rows_by_turn(path, game, turns)
-            for t in range(len(turns) - 2):
-                _check_next_move(rows, t, 1)
-                _check_next_move(rows, t, 2)
-                checked += 1
+    for rows in _game_rows(played_games):
+        for t in range(len(rows["diff"]) - 2):
+            _check_next_move(rows, t, 1)
+            _check_next_move(rows, t, 2)
+            checked += 1
     assert checked > 20
+
+
+def test_end_of_game_labels_follow_the_games_end(played_games):
+    """Real games end with a player going out. Every row of a game names the
+    same event from its own mover's side, so the class and the sign of the
+    points flip between consecutive rows, and the points are twice the
+    leftover rack's value, so even and signed by who went out."""
+    games = 0
+    for rows in _game_rows(played_games):
+        going_out, points = rows["going_out"], rows["end_points"]
+        assert set(going_out) <= {I_GO_OUT, OPP_GOES_OUT}
+        assert (going_out[1:] != going_out[:-1]).all()
+        assert (points[1:] == -points[:-1]).all()
+        assert (points % 2 == 0).all()
+        assert (np.sign(points) == np.where(going_out == I_GO_OUT, 1, -1)).all()
+        games += 1
+    assert games >= 4
+
+
+def test_stalled_games_label_nobody_going_out(batch, slogs):
+    """test_slog_writer's small-dictionary games all stall with tiles on both
+    racks: nobody goes out, and the points, the opponent's leftover value
+    minus the mover's, flip sign between a game's consecutive rows."""
+    _, _, b = batch
+    going_out = b["going_out"].numpy()[:, 0]
+    assert (going_out == NOBODY_GOES_OUT).all()
+    assert (b["end_points"].numpy() != 0).any()
+    header = ffi.struct_dtype("SlogFileHeader")
+    meta = np.fromfile(
+        slogs[0], ffi.struct_dtype("SlogGameMetadata"), count=1, offset=header.itemsize
+    )[0]
+    rows = _rows_by_turn(slogs[0], 0, np.arange(int(meta["num_turns"])))
+    assert (rows["end_points"][1:] == -rows["end_points"][:-1]).all()
+    assert (rows["going_out"] == NOBODY_GOES_OUT).all()

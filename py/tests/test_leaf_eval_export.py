@@ -1,6 +1,6 @@
 """The DeepBot leaf eval model's ONNX export: the graph takes the full row
 (join planes included, whether or not the model reads them), emits the two
-value heads but not the per-square ones, and carries the metadata the
+value heads but not the per-square or end-of-game ones, and carries the metadata the
 engine's LeafEvalSpec gates on; and the trainer's per-generation export, where
 a policy_set task pins it."""
 
@@ -57,10 +57,11 @@ def test_export_carries_the_row_and_the_metadata(tmp_path, join_planes):
     assert list(outputs) == list(OUTPUTS)
     assert outputs["wld"] == ["batch", 3]
     assert outputs["score_diff"] == ["batch", 2]
-    # The per-square heads are training targets until the engine serves them:
-    # the export drops their weights with their outputs.
+    # The per-square and end-of-game heads are training targets until the
+    # engine serves them: the export drops their weights with their outputs.
     weights = [w.name for w in graph.graph.initializer]
-    assert not [w for w in weights if "ownership" in w or "square_points" in w]
+    dropped = ("ownership", "square_points", "going_out", "end_points")
+    assert not [w for w in weights if any(d in w for d in dropped)]
 
 
 def test_each_generation_exports_where_a_policy_set_task_pins_it(tmp_path):
