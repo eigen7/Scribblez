@@ -21,6 +21,7 @@ add_library(scribblez_core STATIC
   src/training/max_move_per_lane_task.cpp
   src/game/game.cpp
   src/game/game_log.cpp
+  src/game/game_end.cpp
   src/data/gcg_reader.cpp
   src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
