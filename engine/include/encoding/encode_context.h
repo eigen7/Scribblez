@@ -1,6 +1,7 @@
 #pragma once
 
 #include "encoding/input_encoder.h"
+#include "game/game_end.h"
 #include "game/move.h"
 #include "game/rack.h"
 
@@ -45,6 +46,8 @@ struct EncodeContext {
   bool has_self_next_move = false;
   int final_score_p0 = 0;
   int final_score_p1 = 0;
+  // How the game ended and each player's end-of-game adjustment.
+  GameEnd game_end{};
 
   int final_active() const { return active_player == 0 ? final_score_p0 : final_score_p1; }
   int final_opp() const { return active_player == 0 ? final_score_p1 : final_score_p0; }
