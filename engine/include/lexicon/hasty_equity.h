@@ -54,7 +54,9 @@ class HastyEquity {
   static void init(const std::string& klv2_path, const std::string& peg_json_path);
 
   // init() with `lexicon`'s default files; a no-op once loaded. Call during
-  // single-threaded setup, since it must not race with equity queries.
+  // single-threaded setup, since it must not race with equity queries. "Loaded"
+  // means any table, including a test's synthetic one, so tests that need the
+  // real leaves use install_nwl23_hasty_equity() (engine/tests/nwl23_equity.h).
   static void ensure_initialized(const std::string& lexicon);
 
   // Paths into the Macondo checkout: the per-lexicon leave values
