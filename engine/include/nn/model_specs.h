@@ -4,10 +4,13 @@
 #include "encoding/input_encoder.h"
 #include "encoding/leaf_eval_input_encoder.h"
 #include "encoding/leave_inference_input_encoder.h"
+#include "encoding/square_fates.h"
 #include "nn/onnx_metadata.h"
+#include "training/game_end_targets.h"
 #include "training/move_set_encoder.h"
 #include "training/policy_set_format.h"
 #include "training/policy_set_inputs.h"
+#include "training/square_fate_targets.h"
 #include "training/training_targets.h"
 
 #include <array>
@@ -154,6 +157,44 @@ struct ScoreDiffOutput {
   static constexpr int kRowElems = kScoreDiffOutputFloats;  // [mean, std]
   static constexpr bool kDynamic = true;
   // Already the Gaussian's parameters; std is made positive in-graph.
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
+// The leaf eval model's continuation heads (docs/plans/deep_bot.md, "The
+// search network"): what follows the leaf, from the side of the player who
+// just moved. A per-square output is plane-major, kBoardCells floats per
+// plane, in the row's board frame. Points are in units of kScoreDiffInputScale.
+struct OwnershipOutput {
+  static constexpr const char* kName = OwnershipTarget::kName;
+  using Elem = float;
+  static constexpr int kRowElems = kSquareFateClasses * kBoardCells;  // a plane per SquareFate
+  static constexpr bool kDynamic = true;
+  // Raw logits; a consumer softmaxes each square over its class planes.
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
+struct SquarePointsOutput {
+  static constexpr const char* kName = SquarePointsTarget::kName;
+  using Elem = float;
+  static constexpr int kRowElems = 2 * kBoardCells;  // [mean plane, variance plane]
+  static constexpr bool kDynamic = true;
+  // The moments themselves; the variance is made positive in-graph.
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
+struct GoingOutOutput {
+  static constexpr const char* kName = GoingOutTarget::kName;
+  using Elem = float;
+  static constexpr int kRowElems = GoingOutTarget::kClasses;  // the mover, the opponent, nobody
+  static constexpr bool kDynamic = true;
+  static constexpr RowDecode kDecode = RowDecode::kSoftmax;
+};
+
+struct EndPointsOutput {
+  static constexpr const char* kName = EndPointsTarget::kName;
+  using Elem = float;
+  static constexpr int kRowElems = 2;  // [mean, variance]
+  static constexpr bool kDynamic = true;
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
@@ -534,7 +575,8 @@ class LeafEvalSpec {
     {"leaf_eval_format_version", kLeafEvalFormatVersion, -1}};
   using Inputs = TensorList<SpatialInput, ScalarInput>;
   using MoveInputs = TensorList<>;
-  using Outputs = TensorList<WldOutput, ScoreDiffOutput>;
+  using Outputs = TensorList<WldOutput, ScoreDiffOutput, OwnershipOutput, SquarePointsOutput,
+                             GoingOutOutput, EndPointsOutput>;
   using AuxOutputs = TensorList<>;
 };
 

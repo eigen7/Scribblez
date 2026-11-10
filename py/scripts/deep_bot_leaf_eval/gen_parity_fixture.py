@@ -17,9 +17,9 @@ Files written into --out-dir:
   * leave_values.txt -- LEAVE_VALUES.
   * inputs.bin      -- N rows x the row's floats, spatial then scalar, as
                        LeafEvalInputEncoder::encode writes them.
-  * expected.bin    -- N x 5 float32: each row's win/draw/loss logits and its
-                       score-difference mean and spread, as PyTorch computes
-                       them.
+  * expected.bin    -- N x EXPECTED_FLOATS float32: each row's outputs in
+                       OUTPUTS order, each flattened row-major (a per-square
+                       head plane by plane), as PyTorch computes them.
 
 Random weights and rows are deliberate: the check is the inference stack's
 fidelity, not a trained model's.
@@ -39,6 +39,9 @@ SPATIAL_PLANES = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
 SCALAR_SIZE = LAYOUT["pool_size"] + 1
 SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 LEAVE_VALUES = "parity-fixture-leave-values"
+# wld (3), score_diff (2), ownership (5 x 225), square_points (2 x 225),
+# going_out (3), end_points (2): test_leaf_eval_parity.cpp's kExpectedFloats.
+EXPECTED_FLOATS = 3 + 2 + 5 * 225 + 2 * 225 + 3 + 2
 
 
 def build_model(seed: int) -> LeafEvalModel:
@@ -57,8 +60,9 @@ def reference(model: LeafEvalModel, rows: np.ndarray) -> np.ndarray:
         rows[:, :SPATIAL_FLOATS].reshape(-1, SPATIAL_PLANES, BOARD_SIZE, BOARD_SIZE)
     )
     out = model(spatial, torch.from_numpy(rows[:, SPATIAL_FLOATS:]))
-    wld, score = (out[name].reshape(len(rows), -1) for name in OUTPUTS)
-    return torch.cat([wld, score], dim=1).numpy().astype(np.float32)
+    flat = torch.cat([out[name].reshape(len(rows), -1) for name in OUTPUTS], dim=1)
+    assert flat.shape[1] == EXPECTED_FLOATS
+    return flat.numpy().astype(np.float32)
 
 
 def random_rows(rng: np.random.Generator, n: int) -> np.ndarray:
