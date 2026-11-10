@@ -14,6 +14,7 @@
 #include "hasty_positions.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "nwl23_equity.h"
 #include "sim/macondo_autostopper.h"
 #include "sim/macondo_simmer.h"
 #include "sim/sim_runner.h"
@@ -42,16 +43,9 @@ namespace {
 
 constexpr char kWinPct[] = "/workspace/mount/macondo/data/strategy/default/winpct.csv";
 
-// Loads the NWL23 equity tables; false when the leaves file is absent.
-bool ensure_equity() {
-  if (!std::ifstream(HastyEquity::default_leaves_path("NWL23")).good()) return false;
-  HastyEquity::ensure_initialized("NWL23");
-  return true;
-}
-
 bool have_macondo_data() {
   return std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good() && std::ifstream(kWinPct).good() &&
-         ensure_equity();
+         scribblez::testing::install_nwl23_hasty_equity();
 }
 
 const Dictionary& nwl23() {

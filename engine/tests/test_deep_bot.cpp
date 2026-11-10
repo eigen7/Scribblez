@@ -17,6 +17,7 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/leave_values.h"
+#include "nwl23_equity.h"
 #include "sim/pool_jobs.h"
 #include "sim/rollout_values.h"
 #include "temp_dir.h"
@@ -42,9 +43,7 @@ namespace {
 
 bool have_data() {
   if (!std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good()) return false;
-  if (!std::ifstream(HastyEquity::default_leaves_path("NWL23")).good()) return false;
-  HastyEquity::ensure_initialized("NWL23");
-  return true;
+  return scribblez::testing::install_nwl23_hasty_equity();
 }
 
 const Dictionary& nwl23() {

@@ -20,6 +20,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "nwl23_equity.h"
 #include "util/io.h"
 
 #include <gtest/gtest.h>
@@ -31,14 +32,6 @@
 using namespace scribblez;
 
 namespace {
-
-// Loads the NWL23 equity tables; false when the leaves file is absent.
-bool ensure_equity() {
-  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-  if (!std::ifstream(leaves).good()) return false;
-  HastyEquity::ensure_initialized("NWL23");
-  return true;
-}
 
 struct Placed {
   int r;
@@ -90,7 +83,7 @@ void set_letter(Board& b, int r, int c, char letter) {
 // the triple-word corner (7,0) (forming JO down and JA across), WeirdBot forces
 // J onto (7,0).
 TEST(WeirdBot, ForcesHighestLeaveTileOntoBestCrossCheck) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const Dictionary dict = Dictionary::build_from_words({"JA", "JO"});
   WeirdBotAgent wb(0, "WeirdBot");
   wb.begin_game({});
@@ -118,7 +111,7 @@ TEST(WeirdBot, ForcesHighestLeaveTileOntoBestCrossCheck) {
 // cross-word, so WeirdBot plays HastyBot's static-equity argmax. The leave
 // being non-empty is what separates this from the first-move fallback.
 TEST(WeirdBot, FallsBackWhenNoCrossCheckSquare) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const Dictionary dict = tiny_dict();
   WeirdBotAgent wb(0, "WeirdBot");
   wb.begin_game({});
@@ -145,7 +138,7 @@ TEST(WeirdBot, FallsBackWhenNoCrossCheckSquare) {
 // {A}. The second rack holds A and a higher-value J, both with forcing squares;
 // WeirdBot must force A.
 TEST(WeirdBot, TracksOwnLeaveAcrossMoves) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const Dictionary dict = Dictionary::build_from_words({"AT", "JO"});
   WeirdBotAgent wb(0, "WeirdBot");
   wb.begin_game({});
@@ -176,7 +169,7 @@ TEST(WeirdBot, TracksOwnLeaveAcrossMoves) {
 
 // With no tracked leave yet, WeirdBot plays HastyBot's move.
 TEST(WeirdBot, FirstMoveFallsBackToHasty) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const Dictionary dict = tiny_dict();
   WeirdBotAgent wb(0, "WeirdBot");
   wb.begin_game({});
@@ -192,7 +185,7 @@ TEST(WeirdBot, FirstMoveFallsBackToHasty) {
 }
 
 TEST(WeirdBot, FromSpecParsing) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   EXPECT_NE(WeirdBotAgent::from_spec({}, 0, "WeirdBot"), nullptr);
   EXPECT_THROW(WeirdBotAgent::from_spec({"--bogus-option=1"}, 0, "X"), std::runtime_error);
 }
@@ -203,7 +196,7 @@ TEST(WeirdBot, FromSpecParsing) {
 // the forcing end to end on the real NWL23 board. It would catch a cross-check
 // orientation bug that the hand-built boards above cannot.
 TEST(WeirdBot, ForcesGAtM7OnPos09) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(kwg).good()) GTEST_SKIP() << "no NWL23 kwg at " << kwg;
   const Dictionary dict = Dictionary::load_kwg(kwg);

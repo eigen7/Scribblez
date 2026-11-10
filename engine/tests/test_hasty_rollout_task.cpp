@@ -11,6 +11,7 @@
 #include "game/rack.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "nwl23_equity.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
 #include "sim/sim_runner.h"
@@ -35,9 +36,7 @@ namespace {
 
 bool have_data() {
   if (!std::ifstream(SCRIBBLEZ_DEFAULT_KWG).good()) return false;
-  if (!std::ifstream(HastyEquity::default_leaves_path("NWL23")).good()) return false;
-  HastyEquity::ensure_initialized("NWL23");
-  return true;
+  return scribblez::testing::install_nwl23_hasty_equity();
 }
 
 const Dictionary& nwl23() {
