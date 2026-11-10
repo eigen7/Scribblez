@@ -32,6 +32,7 @@
 #include "lexicon/leave_values.h"
 #include "lexicon/lexicon.h"
 #include "move_key.h"
+#include "nwl23_equity.h"
 #include "sim/pool_labels.h"
 #include "sim/rollout_report.h"
 #include "sim/setup_plays.h"
@@ -87,6 +88,7 @@
 #include <vector>
 
 using namespace scribblez;
+using scribblez::testing::install_nwl23_hasty_equity;
 using scribblez::testing::key_set;
 using scribblez::testing::move_key;
 
@@ -4328,13 +4330,10 @@ class ShadowCheckAgent : public scribblez::Agent {
 TEST(HastyEquity, ShadowMatchesReference) {
   namespace fs = std::filesystem;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves = scribblez::HastyEquity::default_leaves_path("NWL23");
-  const std::string peg = scribblez::HastyEquity::default_peg_path();
-  if (!fs::exists(kwg) || !fs::exists(leaves)) {
+  if (!fs::exists(kwg) || !install_nwl23_hasty_equity()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
   scribblez::Dictionary dict = scribblez::Dictionary::load_kwg(kwg);
-  scribblez::HastyEquity::init(leaves, peg);
 
   long comparisons = 0;
   for (uint64_t seed = 1; seed <= 10; ++seed) {
@@ -4440,13 +4439,10 @@ TEST(WordMap, MatchesGaddagRealLexicon) {
   namespace fs = std::filesystem;
   using namespace scribblez;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-  const std::string peg = HastyEquity::default_peg_path();
-  if (!fs::exists(kwg) || !fs::exists(leaves)) {
+  if (!fs::exists(kwg) || !install_nwl23_hasty_equity()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
   Dictionary dict = Dictionary::load_kwg(kwg);
-  HastyEquity::init(leaves, peg);
   const WordMap& wm = dict.word_map();
 
   std::vector<CapturedPos> positions, blanked;
@@ -4589,14 +4585,9 @@ TEST(HastyBot, ExchangesInsteadOfPassingWithNoLegalPlay) {
 // NWL23 lexicon and leaves.
 TEST(HastyBot, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
-  if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
+  if (!std::ifstream(kwg_path).good() || !install_nwl23_hasty_equity()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
-  // init(), not ensure_initialized(): other tests in this binary load synthetic
-  // leaves into the process-wide singleton, and ensure_initialized() would keep
-  // them.
-  HastyEquity::init(leaves_path, HastyEquity::default_peg_path());
   Dictionary dict = Dictionary::load_kwg(kwg_path);
 
   // clang-format off
@@ -4655,14 +4646,9 @@ TEST(HastyBot, ExchangesOnRealMidGamePositionWithNoLegalPlay) {
 // NWL23 leaves that is bad enough that exchanging must win.
 TEST(HastyBot, ExchangesDuplicateHeavyRackOverItsOnlyPlay) {
   const std::string kwg_path = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves_path = HastyEquity::default_leaves_path("NWL23");
-  if (!std::ifstream(kwg_path).good() || !std::ifstream(leaves_path).good()) {
+  if (!std::ifstream(kwg_path).good() || !install_nwl23_hasty_equity()) {
     GTEST_SKIP() << "no NWL23 kwg/leaves";
   }
-  // init(), not ensure_initialized(): other tests in this binary load synthetic
-  // leaves into the process-wide singleton, and ensure_initialized() would keep
-  // them.
-  HastyEquity::init(leaves_path, HastyEquity::default_peg_path());
   Dictionary dict = Dictionary::load_kwg(kwg_path);
 
   Board board;
@@ -5986,10 +5972,8 @@ TEST(RolloutReport, PairedWinDiffMoments) {
 TEST(SetupPlays, AcetaIsAHighValueSetup) {
   namespace fs = std::filesystem;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-  if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  if (!fs::exists(kwg) || !install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 kwg/leaves";
   Dictionary dict = Dictionary::load_kwg(kwg);
-  HastyEquity::init(leaves, HastyEquity::default_peg_path());
 
   const std::string gcg =
     "#player1 Will Will\n#player2 Joshua Joshua\n"
@@ -6908,11 +6892,9 @@ TEST(TrajectoryPosition, ExhibitDecisionPoint) {
   namespace fs = std::filesystem;
   using namespace scribblez;
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
   const std::string gcg_path = std::string(SCRIBBLEZ_TEST_DATA_DIR) + "/egotize-lane.gcg";
-  if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  if (!fs::exists(kwg) || !install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 kwg/leaves";
   Dictionary dict = Dictionary::load_kwg(kwg);
-  HastyEquity::init(leaves, HastyEquity::default_peg_path());
 
   TrajectoryDecision d;
   std::string error;

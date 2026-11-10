@@ -15,6 +15,7 @@
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
 #include "move_key.h"
+#include "nwl23_equity.h"
 
 #include <gtest/gtest.h>
 
@@ -31,14 +32,6 @@ using scribblez::testing::key_set;
 using scribblez::testing::move_key;
 
 namespace {
-
-// Loads the NWL23 equity tables; false when the leaves file is absent.
-bool ensure_equity() {
-  const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-  if (!std::ifstream(leaves).good()) return false;
-  HastyEquity::ensure_initialized("NWL23");
-  return true;
-}
 
 // Recomputes a finished game's scores from its turn records and checks them
 // against the log: score deltas sum to the last cumulative scores, and the
@@ -98,7 +91,7 @@ EndgameAgent<HastyBot>::Params endgame_params(uint64_t budget, int plies) {
 
 // While the bag holds tiles the agent plays exactly like a plain HastyBot.
 TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
 
   std::mt19937 rng(0x1234ABCDu);
@@ -127,7 +120,7 @@ TEST(EndgameAgent, PreEndgameDelegatesToHasty) {
 // On an endgame where the solver's move differs from HastyBot's greedy move,
 // the agent plays the solver's move, or the greedy move with budget 0.
 TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xA5A5F00Du);
 
@@ -161,7 +154,7 @@ TEST(EndgameAgent, EndgameTakeoverVsGreedy) {
 // multi-move root) declines the solve, and the agent plays HastyBot's move: a
 // partial search never replaces the greedy policy with a noisier one.
 TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xFA11BACCu);
 
@@ -180,7 +173,7 @@ TEST(EndgameAgent, ShallowSolveFallsBackToHasty) {
 }
 
 TEST(EndgameAgent, EndgameMoveIsLegal) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0xBADF00D1u);
 
@@ -204,7 +197,7 @@ TEST(EndgameAgent, EndgameMoveIsLegal) {
 // Full EndgameHastyBot-vs-HastyBot games terminate normally and log consistent
 // scores.
 TEST(EndgameAgent, FullGameTinyDict) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   for (uint64_t seed = 1; seed <= 8; ++seed) {
     EndgameAgent<HastyBot> a0(endgame_params(20000, 25));
@@ -221,7 +214,8 @@ TEST(EndgameAgent, FullGameTinyDict) {
 // only makes those two solves slower.
 TEST(EndgameAgent, FullGameRealLexicon) {
   const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-  if (!std::ifstream(kwg).good() || !ensure_equity()) GTEST_SKIP() << "no NWL23 kwg/leaves";
+  if (!std::ifstream(kwg).good() || !scribblez::testing::install_nwl23_hasty_equity())
+    GTEST_SKIP() << "no NWL23 kwg/leaves";
   Dictionary d = Dictionary::load_kwg(kwg);
   for (uint64_t seed = 1; seed <= 6; ++seed) {
     EndgameAgent<HastyBot> a0(endgame_params(5000, 25));
@@ -235,7 +229,7 @@ TEST(EndgameAgent, FullGameRealLexicon) {
 // from_spec accepts both the endgame- and the HastyBot options, and rejects bad
 // ones.
 TEST(EndgameAgent, FromSpecParsing) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
   EXPECT_NE(EndgameAgent<HastyBot>::from_spec(
               {"--endgame-budget=1234", "--endgame-plies=7", "--temperature=0"}, 0, "X"),
@@ -258,7 +252,7 @@ TEST(EndgameAgent, FromSpecParsing) {
 }
 
 TEST(EndgameAgent, SpreadMattersFromSpec) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
 
   EXPECT_NE(EndgameAgent<HastyBot>::from_spec(
               {"--endgame-spread-matters=1", "--endgame-budget=777"}, 0, "W"),
@@ -276,7 +270,7 @@ TEST(EndgameAgent, SpreadMattersFromSpec) {
 //   * a proven loss without a certificate falls back to HastyBot's move, which
 //     shapes the final spread better than an arbitrary losing move.
 TEST(EndgameAgent, FirstWinProjectsCertificates) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   Dictionary d = tiny_dict();
   std::mt19937 rng(0x105510FFu);
 
@@ -322,7 +316,7 @@ TEST(EndgameAgent, FirstWinProjectsCertificates) {
 // proven endgames to their end, so agents are prompted less, and every game
 // still ends naturally. Plays the same seeds both ways and compares prompts.
 TEST(EndgameAgent, FastTrackReducesPrompts) {
-  if (!ensure_equity()) GTEST_SKIP() << "no NWL23 leaves";
+  if (!scribblez::testing::install_nwl23_hasty_equity()) GTEST_SKIP() << "no NWL23 leaves";
   const char* path = SCRIBBLEZ_DEFAULT_KWG;
   if (!std::ifstream(path).good()) GTEST_SKIP() << "no lexicon at " << path;
   Dictionary d = Dictionary::load_kwg(path);

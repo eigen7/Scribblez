@@ -9,6 +9,7 @@
 #include "game/tile.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
+#include "nwl23_equity.h"
 #include "sim/monte_carlo_sim.h"
 #include "util/io.h"
 #include "worker_budget.h"
@@ -73,10 +74,9 @@ class MonteCarloSimTest : public ::testing::Test {
  protected:
   void SetUp() override {
     const std::string kwg = SCRIBBLEZ_DEFAULT_KWG;
-    const std::string leaves = HastyEquity::default_leaves_path("NWL23");
-    if (!fs::exists(kwg) || !fs::exists(leaves)) GTEST_SKIP() << "no NWL23 kwg/leaves";
+    if (!fs::exists(kwg) || !scribblez::testing::install_nwl23_hasty_equity())
+      GTEST_SKIP() << "no NWL23 kwg/leaves";
     dict_ = std::make_unique<Dictionary>(Dictionary::load_kwg(kwg));
-    HastyEquity::ensure_initialized("NWL23");
   }
 
   // Hasty_2 bingoed INCASED, then Hasty_1 (the POV) played GAVE; the opponent
