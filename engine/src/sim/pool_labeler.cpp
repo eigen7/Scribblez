@@ -119,7 +119,7 @@ void PoolLabeler::launch() {
       ++f.outstanding;
     }
   }
-  const std::vector<RolloutOutcome> outcomes = values_.run(batch);
+  const std::vector<RolloutOutcome> outcomes = values_.run(batch).outcomes;
   for (size_t j = 0; j < outcomes.size(); ++j) {
     Flight& f = flight_[where[j].first];
     const rollout_abi::RolloutTask& t = where[j].second;

@@ -2,10 +2,11 @@
 
 // Rollout batches (sim/hasty_rollout_task.h) valued from the chooser's side:
 // each task's win/draw/loss probabilities, from the leaf at its end state, or
-// exact when the game ended inside the rollout. One interface over the
-// backends: the CUDA kernel with the leaf network on the device
-// (gpu/gpu_rollout_values.h), and the CPU reference with a leaf function,
-// which the test suites use since they hide the GPU.
+// exact when the game ended inside the rollout, and each start's rollouts
+// summed into its maps (rollout_abi::SimMaps), as far as the rollouts settled
+// them. One interface over the backends: the CUDA kernel with the leaf
+// network on the device (gpu/gpu_rollout_values.h), and the CPU reference
+// with a leaf function, which the test suites use since they hide the GPU.
 
 #include "gpu/rollout_abi.h"
 #include "sim/hasty_rollout_task.h"
@@ -37,12 +38,17 @@ struct RolloutOutcome {
   double win_value() const { return scribblez::win_value(wld); }
 };
 
+// A batch valued: outcomes[k] for batch.tasks[k], maps[s] for batch.starts[s].
+struct BatchValues {
+  std::vector<RolloutOutcome> outcomes;
+  std::vector<rollout_abi::SimMaps> maps;
+};
+
 class RolloutValues {
  public:
   virtual ~RolloutValues() = default;
 
-  // Every task's outcome, outcomes[k] for batch.tasks[k].
-  virtual std::vector<RolloutOutcome> run(const RolloutBatch& batch) = 0;
+  virtual BatchValues run(const RolloutBatch& batch) = 0;
 };
 
 // A leaf's value from player 0's side (the player who moved last). Called
@@ -56,7 +62,7 @@ class CpuRolloutValues : public RolloutValues {
  public:
   CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf);
 
-  std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
+  BatchValues run(const RolloutBatch& batch) override;
 
  private:
   const Dictionary& dict_;

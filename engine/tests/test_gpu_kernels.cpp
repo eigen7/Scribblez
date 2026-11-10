@@ -15,6 +15,7 @@
 #include "lexicon/hasty_equity.h"
 #include "nwl23_equity.h"
 #include "sim/hasty_rollout_task.h"
+#include "sim/sim_maps.h"
 
 #include <gtest/gtest.h>
 
@@ -118,16 +119,32 @@ class GpuCrossCheckDeltaTest : public ::testing::TestWithParam<int> {};
 
 }  // namespace
 
+// The first start whose device maps differ from the CPU reference's, with
+// the field; empty when none do.
+std::string maps_mismatch(const std::vector<rollout_abi::SimMaps>& cpu,
+                          const std::vector<rollout_abi::SimMaps>& gpu) {
+  for (size_t s = 0; s < cpu.size(); ++s) {
+    const std::string diff = sim_maps_difference(cpu[s], gpu[s]);
+    if (!diff.empty()) return std::format("start {}: {}", s, diff);
+  }
+  return "";
+}
+
 // The opening, the middle game, and a late position where many rollouts end
-// the game.
+// the game. The results rollout for rollout, and the maps start for start,
+// bit for bit.
 TEST_P(GpuRolloutKernelTest, RolloutsMatchTheCpuReference) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const RolloutBatch batch = batch_at(GetParam());
-  const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
-  const auto res = gpu().run(batch, nwl23());
-  ASSERT_EQ(res.size(), cpu.size());
-  EXPECT_EQ(mismatches(batch, cpu, res), "");
-  for (const rollout_abi::RolloutResult& r : res) EXPECT_EQ(r.pad, 0) << "span-list overflow";
+  std::vector<rollout_abi::RolloutFates> fates;
+  const auto cpu = run_hasty_rollouts_cpu(batch, nwl23(), nullptr, &fates);
+  const GpuHastyRollouts::Output res = gpu().run(batch, nwl23());
+  ASSERT_EQ(res.results.size(), cpu.size());
+  EXPECT_EQ(mismatches(batch, cpu, res.results), "");
+  for (const rollout_abi::RolloutResult& r : res.results)
+    EXPECT_EQ(r.pad, 0) << "span-list overflow";
+  ASSERT_EQ(res.maps.size(), batch.starts.size());
+  EXPECT_EQ(maps_mismatch(sum_sim_maps(fates, tasks_by_start(batch)), res.maps), "");
 }
 
 INSTANTIATE_TEST_SUITE_P(Plies, GpuRolloutKernelTest, ::testing::Values(2, 10, 16));
@@ -144,7 +161,7 @@ TEST(GpuRolloutKernel, SeatsAFullRackAsTheOpponentsLeave) {
   ASSERT_FALSE(full.empty());
   for (size_t i = 0; i < leaves.size(); ++i) leaves[i] = full[i % full.size()];
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
-  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
+  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23()).results), "");
 }
 
 // The opponent's exchanged tiles going back after its refill, as in Alice's
@@ -161,7 +178,7 @@ TEST(GpuRolloutKernel, PutsTheOpponentsExchangeBackAfterItsRefill) {
   ASSERT_TRUE(group.pool.remove(returned.counts()));
   for (RolloutStart& start : batch.starts) start.opp_returned = returned;
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
-  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
+  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23()).results), "");
 }
 
 TEST(GpuRolloutKernel, DeviceLeafRowsMatchTheCpuEncoder) {

@@ -87,6 +87,73 @@ struct LeafState {
   uint32_t cross_mask[2][kSquares];  // per view, as the rollout left them
 };
 
+// What a rollout settled exactly, for the maps of docs/plans/deep_bot.md
+// ("Sims"), from player 0's side. Per square: who filled it during the
+// rollout's plies and whether in a bingo (encoding/square_fates.h's classes,
+// which hasty_rollout_task.cpp asserts these match), with the signed points
+// of that move; a square still empty at the end stays empty for certain when
+// the game ended there, and is otherwise open, for the leaf network to
+// complete. Likewise who went out and the net end-of-game rack adjustment
+// (game/game_end.h's net from player 0's side), open when the game did not
+// end. Squares filled at the start carry no label.
+constexpr int8_t kFateFilledAtStart = -1;
+constexpr int8_t kFateStaysEmpty = 4;
+constexpr int8_t kFateOpen = 5;
+constexpr int kFateClasses = 5;     // the settled classes, 0 to kFateStaysEmpty
+constexpr int kWentOutClasses = 3;  // 0 us, 1 the opponent, 2 nobody
+constexpr int8_t kWentOutOpen = -1;
+
+// The class of a square `player` fills, in a bingo or not.
+SCRIBBLEZ_HD constexpr int8_t placer_fate(int player, bool bingo) {
+  return int8_t((player == 0 ? 0 : 2) + (bingo ? 0 : 1));
+}
+
+struct RolloutFates {
+  int8_t fate[kSquares];
+  int16_t points[kSquares];  // 0 unless the rollout's plies filled the square
+  int8_t went_out;
+  int16_t end_points;  // 0 when open
+};
+
+// A start's rollouts summed into its maps, as far as they settled them: per
+// square, how many rollouts gave it each class, and the sum and the sum of
+// squares of its points (0 for the open and the unsettled); who went out,
+// likewise; and the rollouts counted. What the leaf network completes is
+// added to the same sums (gpu/gpu_rollout_values.h), so the sums are float.
+// Both the CPU reference and the device add a start's rollouts one at a
+// time in ascending task order, so their sums are bit-identical.
+struct SimMaps {
+  float class_sum[kFateClasses][kSquares];
+  float points_sum[kSquares];
+  float points_sq_sum[kSquares];
+  float went_out_sum[kWentOutClasses];
+  float end_points_sum;
+  float end_points_sq_sum;
+  float sims;
+};
+
+// Adds square `sq` of one rollout's fates to `m`. An open or unlabelled
+// square adds nothing. The square of the points is taken in integers, so no
+// compiler fuses it with the add: both sides round the same way.
+SCRIBBLEZ_HD inline void add_square_fate(SimMaps& m, int sq, const RolloutFates& f) {
+  const int fate = f.fate[sq];
+  if (fate < 0 || fate >= kFateClasses) return;
+  m.class_sum[fate][sq] += 1.0f;
+  const int p = f.points[sq];
+  m.points_sum[sq] += float(p);
+  m.points_sq_sum[sq] += float(p * p);
+}
+
+// Adds one rollout's end of game and its count to `m`.
+SCRIBBLEZ_HD inline void add_end_fate(SimMaps& m, const RolloutFates& f) {
+  m.sims += 1.0f;
+  if (f.went_out < 0) return;
+  m.went_out_sum[f.went_out] += 1.0f;
+  const int p = f.end_points;
+  m.end_points_sum += float(p);
+  m.end_points_sq_sum += float(p * p);
+}
+
 // A rollout's start, flattened: a candidate applied to the board, so we
 // (player 0, the chooser) have just moved and hold `leave`; the opponent
 // moves next. Cross-check arrays are per view (0 = the natural frame's rows,

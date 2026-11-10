@@ -22,7 +22,7 @@ class LockedRolloutValues : public RolloutValues {
  public:
   explicit LockedRolloutValues(std::unique_ptr<RolloutValues> inner) : inner_(std::move(inner)) {}
 
-  std::vector<RolloutOutcome> run(const RolloutBatch& batch) override {
+  BatchValues run(const RolloutBatch& batch) override {
     std::lock_guard<std::mutex> lock(mutex_);
     return inner_->run(batch);
   }

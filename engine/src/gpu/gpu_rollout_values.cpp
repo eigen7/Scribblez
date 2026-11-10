@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <utility>
 
 namespace scribblez {
 
@@ -38,31 +39,35 @@ GpuRolloutValues::GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq
   net_.load();
 }
 
-std::vector<RolloutOutcome> GpuRolloutValues::run(const RolloutBatch& batch) {
+BatchValues GpuRolloutValues::run(const RolloutBatch& batch) {
   auto t0 = Clock::now();
-  const std::vector<rollout_abi::RolloutResult> results = rollouts_.run(batch, dict_);
+  GpuHastyRollouts::Output run = rollouts_.run(batch, dict_);
   timings_.rollout_seconds = seconds_since(t0);
   timings_.kernel_seconds = rollouts_.last_timings().kernel_seconds;
   t0 = Clock::now();
-  std::vector<RolloutOutcome> outcomes(results.size());
+  BatchValues out;
+  out.outcomes.resize(run.results.size());
+  out.maps = std::move(run.maps);
   std::vector<uint32_t> unfinished;
-  for (size_t k = 0; k < results.size(); ++k) {
-    outcomes[k].result = results[k];
-    if (results[k].game_over)
-      outcomes[k].wld = terminal_wld(results[k].diff);
+  for (size_t k = 0; k < run.results.size(); ++k) {
+    out.outcomes[k].result = run.results[k];
+    if (run.results[k].game_over)
+      out.outcomes[k].wld = terminal_wld(run.results[k].diff);
     else
       unfinished.push_back(uint32_t(k));
   }
   const int n = int(unfinished.size());
-  for (int first = 0; first < n; first += net_.max_rows())
-    evaluate_leaves(&unfinished[size_t(first)], std::min(net_.max_rows(), n - first), &outcomes);
+  for (int first = 0; first < n; first += net_.max_rows()) {
+    evaluate_leaves(&unfinished[size_t(first)], std::min(net_.max_rows(), n - first),
+                    &out.outcomes);
+  }
   timings_.leaf_seconds = seconds_since(t0);
   timings_.leaves = int64_t(n);
   totals_.rollout_seconds += timings_.rollout_seconds;
   totals_.kernel_seconds += timings_.kernel_seconds;
   totals_.leaf_seconds += timings_.leaf_seconds;
   totals_.leaves += timings_.leaves;
-  return outcomes;
+  return out;
 }
 
 void GpuRolloutValues::evaluate_leaves(const uint32_t* tasks, int count,

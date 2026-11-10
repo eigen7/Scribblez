@@ -14,6 +14,7 @@
 #include "nwl23_equity.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
+#include "sim/sim_maps.h"
 #include "sim/sim_runner.h"
 #include "worker_budget.h"
 
@@ -331,7 +332,7 @@ TEST(RolloutValues, TheCpuBackendValuesLeavesAndFinishedGames) {
   const Decision d = decision_after(dict, /*seed=*/6, /*plies=*/10);
   const RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/8);
   CpuRolloutValues values(dict, synthetic_leaf());
-  const std::vector<RolloutOutcome> outcomes = values.run(batch);
+  const std::vector<RolloutOutcome> outcomes = values.run(batch).outcomes;
   const std::vector<rollout_abi::RolloutResult> results = run_hasty_rollouts_cpu(batch, dict);
   ASSERT_EQ(outcomes.size(), results.size());
   for (size_t k = 0; k < outcomes.size(); ++k) {
@@ -371,7 +372,8 @@ TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
   });
   ASSERT_NE(out, ranked.end()) << "no move plays out";
   const RolloutBatch batch = batch_of(d, {*out}, /*rollouts=*/4);
-  const std::vector<RolloutOutcome> outcomes = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
+  const BatchValues values = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
+  const std::vector<RolloutOutcome>& outcomes = values.outcomes;
   for (size_t i = 0; i < outcomes.size(); ++i) {
     const RolloutOutcome& o = outcomes[i];
     const Rack opp = rollout_racks(batch, batch.tasks[i]).opp;
@@ -382,6 +384,112 @@ TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
     EXPECT_EQ(o.result.diff, diff) << "rollout " << i;
     EXPECT_EQ(unpack_move(o.result.moves[0]).type(), MoveType::PASS) << "rollout " << i;
     EXPECT_EQ(o.wld, terminal_wld(diff)) << "rollout " << i;
+  }
+  // The maps: we went out in every rollout, collecting the bonus, and no
+  // square's fate is left open.
+  ASSERT_EQ(values.maps.size(), 1u);
+  const rollout_abi::SimMaps& m = values.maps[0];
+  EXPECT_EQ(m.sims, 4.0f);
+  EXPECT_EQ(m.went_out_sum[0], 4.0f);
+  EXPECT_EQ(m.went_out_sum[1], 0.0f);
+  EXPECT_EQ(m.went_out_sum[2], 0.0f);
+  float bonus_sum = 0;
+  for (size_t i = 0; i < outcomes.size(); ++i)
+    bonus_sum += float(2 * rollout_racks(batch, batch.tasks[i]).opp.point_value());
+  EXPECT_EQ(m.end_points_sum, bonus_sum);
+  const Board& after = batch.starts[0].board;
+  for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+    const bool empty = after.at(sq / BOARD_SIZE, sq % BOARD_SIZE).is_empty();
+    float settled = 0;
+    for (int c = 0; c < rollout_abi::kFateClasses; ++c) settled += m.class_sum[c][sq];
+    EXPECT_EQ(settled, empty ? 4.0f : 0.0f) << "square " << sq;
+    EXPECT_EQ(m.class_sum[rollout_abi::kFateStaysEmpty][sq], empty ? 4.0f : 0.0f)
+      << "square " << sq;
+  }
+}
+
+namespace {
+
+// The fate class and signed points `m` by `mover` gives the squares it fills.
+std::pair<int8_t, int16_t> expected_fate(const Move& m, int mover) {
+  return {rollout_abi::placer_fate(mover, m.num_glyphs() == RACK_SIZE),
+          int16_t(mover == 0 ? m.score() : -m.score())};
+}
+
+}  // namespace
+
+// Mid-game, with tiles in the bag, a rollout is its two plies: the squares
+// they fill are labelled by their mover and points, the start's tiles carry
+// no label, every other square and the end of the game stay open.
+TEST(HastyRolloutCpu, FatesLabelTheSquaresThePliesFillAndLeaveTheRestOpen) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const Decision d = decision_after(dict, /*seed=*/1, /*plies=*/10);
+  const RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/16);
+  std::vector<rollout_abi::RolloutFates> fates;
+  const auto results = run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
+  ASSERT_EQ(fates.size(), results.size());
+  const Board& start = batch.starts[0].board;
+  for (size_t k = 0; k < results.size(); ++k) {
+    ASSERT_EQ(results[k].game_over, 0) << "rollout " << k;
+    const rollout_abi::RolloutFates& f = fates[k];
+    EXPECT_EQ(f.went_out, rollout_abi::kWentOutOpen);
+    EXPECT_EQ(f.end_points, 0);
+    std::array<std::pair<int8_t, int16_t>, rollout_abi::kSquares> expected;
+    for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+      const bool empty = start.at(sq / BOARD_SIZE, sq % BOARD_SIZE).is_empty();
+      expected[sq] = {empty ? rollout_abi::kFateOpen : rollout_abi::kFateFilledAtStart, 0};
+    }
+    for (int ply = 0; ply < 2; ++ply) {
+      const Move m = unpack_move(results[k].moves[ply]);
+      const int mover = ply == 0 ? 1 : 0;
+      visit_placed_squares(
+        m, [&](int r, int c) { expected[r * BOARD_SIZE + c] = expected_fate(m, mover); });
+    }
+    for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+      EXPECT_EQ(f.fate[sq], expected[sq].first) << "rollout " << k << " square " << sq;
+      EXPECT_EQ(f.points[sq], expected[sq].second) << "rollout " << k << " square " << sq;
+    }
+  }
+}
+
+// The maps sum each start's own rollouts, in ascending task order, however
+// the batch interleaves the starts' tasks.
+TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const Decision d = decision_after(dict, /*seed=*/3, /*plies=*/8);
+  const std::vector<Move> ranked = ranked_moves(d, dict);
+  RolloutBatch batch = batch_of(d, {ranked[0], ranked[1]}, /*rollouts=*/0);
+  for (uint32_t i = 0; i < 6; ++i) {
+    batch.add_rollouts(i % 2, i, 1);
+    if (i % 3 == 0) batch.add_rollouts(1, 10 + i, 1);
+  }
+  const TasksByStart by_start = tasks_by_start(batch);
+  ASSERT_EQ(by_start.offsets, (std::vector<uint32_t>{0, 3, 8}));
+  ASSERT_EQ(by_start.tasks, (std::vector<uint32_t>{0, 3, 6, 1, 2, 4, 5, 7}));
+  std::vector<rollout_abi::RolloutFates> fates;
+  run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
+  const std::vector<rollout_abi::SimMaps> maps = sum_sim_maps(fates, by_start);
+  ASSERT_EQ(maps.size(), 2u);
+  for (size_t s = 0; s < 2; ++s) {
+    const rollout_abi::SimMaps& m = maps[s];
+    const float n = float(by_start.offsets[s + 1] - by_start.offsets[s]);
+    EXPECT_EQ(m.sims, n);
+    for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+      float settled = 0, points = 0, points_sq = 0, got = 0;
+      for (int c = 0; c < rollout_abi::kFateClasses; ++c) got += m.class_sum[c][sq];
+      for (uint32_t i = by_start.offsets[s]; i < by_start.offsets[s + 1]; ++i) {
+        const rollout_abi::RolloutFates& f = fates[by_start.tasks[i]];
+        if (f.fate[sq] < 0 || f.fate[sq] >= rollout_abi::kFateClasses) continue;
+        settled += 1;
+        points += float(f.points[sq]);
+        points_sq += float(f.points[sq] * f.points[sq]);
+      }
+      EXPECT_EQ(got, settled) << "start " << s << " square " << sq;
+      EXPECT_EQ(m.points_sum[sq], points) << "start " << s << " square " << sq;
+      EXPECT_EQ(m.points_sq_sum[sq], points_sq) << "start " << s << " square " << sq;
+    }
   }
 }
 
@@ -401,7 +509,7 @@ TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
     if (it == ranked.end()) continue;
     const RolloutBatch batch = batch_of(d, {*it}, /*rollouts=*/8);
     const std::vector<RolloutOutcome> outcomes =
-      CpuRolloutValues(dict, synthetic_leaf()).run(batch);
+      CpuRolloutValues(dict, synthetic_leaf()).run(batch).outcomes;
     for (size_t i = 0; i < outcomes.size(); ++i) {
       EXPECT_EQ(outcomes[i].result.game_over, 1) << "seed " << seed << " rollout " << i;
       EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;

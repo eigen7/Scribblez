@@ -126,20 +126,25 @@ struct DeviceTables;
 DeviceTables* upload_tables(const HostTables& host, size_t* bytes);
 void free_tables(DeviceTables* tables);
 
-// A batch in the device's layouts (sim/hasty_rollout_task.h's RolloutBatch).
+// A batch in the device's layouts (sim/hasty_rollout_task.h's RolloutBatch),
+// with its tasks binned by start (sim/sim_maps.h's TasksByStart) for the
+// sim-maps reduction.
 struct BatchAbi {
   std::vector<rollout_abi::RolloutTask> tasks;
   std::vector<rollout_abi::PositionAbi> positions;
   std::vector<rollout_abi::GroupAbi> groups;
   std::vector<rollout_abi::OppLeaveAbi> opp_leaves;
+  std::vector<uint32_t> tasks_by_start;  // every task, grouped by start
+  std::vector<uint32_t> start_offsets;   // positions.size() + 1 bounds into tasks_by_start
 };
 
-// The batch's tasks into results[0, tasks), one block each. `seconds`
-// receives the batch upload, the kernel and the result download;
-// `phase_cycles` the summed per-block cycles of each Phase.
+// The batch's tasks into results[0, tasks), one block each, and each start's
+// rollouts summed into maps[0, positions). `seconds` receives the batch
+// upload, the kernels and the downloads; `phase_cycles` the summed per-block
+// cycles of each Phase.
 void run_rollouts(DeviceTables* tables, const BatchAbi& batch, rollout_abi::RolloutResult* results,
-                  double seconds[3], unsigned long long phase_cycles[kPhases],
-                  unsigned long long counts[kCounts]);
+                  rollout_abi::SimMaps* maps, double seconds[3],
+                  unsigned long long phase_cycles[kPhases], unsigned long long counts[kCounts]);
 
 // The last run's leaf states, a device pointer (one per task).
 const rollout_abi::LeafState* device_leaves(const DeviceTables* tables);

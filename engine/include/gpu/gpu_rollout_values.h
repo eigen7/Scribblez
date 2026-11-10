@@ -32,7 +32,7 @@ class GpuRolloutValues : public RolloutValues {
   // against other leave values than `eq`'s.
   GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq, const Params& params);
 
-  std::vector<RolloutOutcome> run(const RolloutBatch& batch) override;
+  BatchValues run(const RolloutBatch& batch) override;
 
   // Seconds in the rollout kernel (with the batch's conversion and
   // transfers) and in the leaf (encoding and the network), and the leaves
