@@ -48,6 +48,15 @@ constexpr std::pair<const char*, int> kSimMapsFields[] = {
   {"sims", 1},
 };
 
+constexpr int simmaps_table_floats() {
+  int n = 0;
+  for (const auto& field : kSimMapsFields) n += field.second;
+  return n;
+}
+
+// The table covers SimMaps exactly, so the diff walks every field.
+static_assert(sizeof(SimMaps) == sizeof(float) * simmaps_table_floats());
+
 }  // namespace
 
 std::string sim_maps_difference(const SimMaps& a, const SimMaps& b) {

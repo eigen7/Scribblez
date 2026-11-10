@@ -118,10 +118,9 @@ struct RolloutFates {
 // A start's rollouts summed into its maps, as far as they settled them: per
 // square, how many rollouts gave it each class, and the sum and the sum of
 // squares of its points (0 for the open and the unsettled); who went out,
-// likewise; and the rollouts counted. What the leaf network completes is
-// added to the same sums (gpu/gpu_rollout_values.h), so the sums are float.
-// Both the CPU reference and the device add a start's rollouts one at a
-// time in ascending task order, so their sums are bit-identical.
+// likewise; and the rollouts counted. The sums are float because the leaf
+// network's completion of the open squares and ends will add into them. The
+// device's sums are bit-identical to the CPU reference's (sim/sim_maps.h).
 struct SimMaps {
   float class_sum[kFateClasses][kSquares];
   float points_sum[kSquares];

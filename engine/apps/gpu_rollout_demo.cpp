@@ -275,7 +275,7 @@ int run(int argc, char** argv) {
                              .leaf_rows = leaf_rows});
     leaf_status = evaluate_leaves(values, batch, dict, cpu_leaves, leaf_model);
   }
-  return (a.diff_mismatch || a.move_mismatch || leaf_status != 0) ? 1 : 0;
+  return (a.diff_mismatch || a.move_mismatch || maps_differ || leaf_status != 0) ? 1 : 0;
 }
 
 }  // namespace
