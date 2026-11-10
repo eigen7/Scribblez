@@ -1193,14 +1193,16 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
      self-play turns where they disagree ([Candidates](#candidates)); then
      matches against BestBot and `mset-sim` in standard Scrabble. The
      ablation against HastyBot is done, and null by design.
-6. **Allocation without a model.** Successive halving and racing, then the
-   model-free part of the [budget](#budget): Alice's sims at each rack
-   split among Bob's contenders by their chance of being best from his own
-   sims, a rack that stops when her payoffs after them barely differ, and
-   the bound at the root. Racing her candidates stops each one partway
-   through the split's sequence, so its count need not be fixed. *Measure:* the sims
-   shed per turn and the strength lost against the time saved, the floor
-   the learned budget (step 12) is measured against.
+6. **Allocation without a model.** Done: successive halving and racing,
+   and Alice's sims at each rack split among Bob's contenders by their
+   chance of being best from his own sims, which gives the
+   [budget](#budget) its payoff vector. The rest of the model-free budget,
+   a rack that stops when her payoffs after Bob's contenders barely differ,
+   the bound at the root, and racing her candidates partway through the
+   split's sequence, saves time without changing what the agent computes,
+   and its ceiling is modest beside the learned budget's, so it moves to
+   step 12, whose decisions need Bob's subtree to pause mid-turn in any
+   case.
 7. **Continuation heads on the leaf network,** trained from game records:
    ownership and points, then going out and end-of-game points.
    *Measure:* held-out loss per head by bag size, the maps at the known
@@ -1231,8 +1233,12 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 12. **Steering and the learned budget in the agent:** admission, budget
     decisions 1 and 3 with their audit, Bob's choice from the
     store-informed policy with the simmed-rack audit, and the single
-    allocator. *Measure:* sims per turn and strength at equal time against
-    step 6, and both audits' disagreement rates.
+    allocator, with the model-free stops deferred from step 6: a rack stops
+    when her payoffs after Bob's contenders barely differ, a candidate whose
+    best case falls below another's worst case is dropped, and racing her
+    candidates stops each one partway through the split's sequence.
+    *Measure:* sims per turn and strength at equal time against the agent
+    that sims every rack in full, and both audits' disagreement rates.
 13. **Generations.** DeepBot's self-play logs each turn's paired `Δ` for
     the candidates that reach the subtree. Its games, its root records, and
     the pools and grouped pools labeled from its positions train the next

@@ -108,8 +108,9 @@ static_assert(sizeof(TurnBlob) == 24, "TurnBlob must be 24 bytes");
 
 // A view of game `game_idx` in a loaded .slog buffer. Its records live in
 // `scratch`, so the view is valid until `scratch` is next reused. Only each
-// record's move and draw are filled in (see complete_turn_records). The caller
-// must have validated the file's magic and version. `sampled_turn`, if
+// record's player, move and draw are filled in (see complete_turn_records); a
+// reader of the game's end (game/game_end.h) works from those alone. The
+// caller must have validated the file's magic and version. `sampled_turn`, if
 // non-null, receives the game's GameMetadata::sampled_turn.
 GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecord>& scratch,
                        uint32_t* sampled_turn);

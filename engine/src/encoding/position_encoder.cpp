@@ -174,6 +174,7 @@ EncodeContext PositionEncoder::make_context(const GameLog& g, int sampled_turn, 
   }
   ctx.final_score_p0 = g.final_scores[0];
   ctx.final_score_p1 = g.final_scores[1];
+  ctx.game_end = scribblez::game_end(g);
   return ctx;
 }
 

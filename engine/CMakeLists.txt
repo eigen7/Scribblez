@@ -21,6 +21,7 @@ add_library(scribblez_core STATIC
   src/training/max_move_per_lane_task.cpp
   src/game/game.cpp
   src/game/game_log.cpp
+  src/game/game_end.cpp
   src/data/gcg_reader.cpp
   src/data/gcg_post_move.cpp
   src/data/gcg_writer.cpp
@@ -39,6 +40,7 @@ add_library(scribblez_core STATIC
   src/encoding/square_fates.cpp
   src/training/leaf_eval_task.cpp
   src/training/square_fate_targets.cpp
+  src/training/game_end_targets.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp
@@ -488,6 +490,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/tests_main.cpp
     tests/test_batching_eval_service.cpp
     tests/test_footprint.cpp
+    tests/test_game_end.cpp
     tests/test_gcg_reader.cpp
     tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp

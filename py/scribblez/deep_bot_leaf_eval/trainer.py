@@ -73,7 +73,7 @@ def model_shape(params) -> LeafEvalShape:
 
 def loss_config(params) -> LeafLossConfig:
     """position_eval's loss config, without its placement heads, plus the
-    per-square heads'."""
+    per-square and end-of-game heads'."""
     return LeafLossConfig(
         lambda_wld=params.lambda_wld,
         lambda_sd=params.lambda_sd,
@@ -83,6 +83,8 @@ def loss_config(params) -> LeafLossConfig:
         huber_delta_std=params.huber_delta_std,
         lambda_ownership=params.lambda_ownership,
         lambda_points=params.lambda_points,
+        lambda_going_out=params.lambda_going_out,
+        lambda_end_points=params.lambda_end_points,
     )
 
 
@@ -93,6 +95,8 @@ def loss_weights(params) -> dict[str, float]:
         "loss_score_diff": params.lambda_sd,
         "loss_ownership": params.lambda_ownership,
         "loss_square_points": params.lambda_points,
+        "loss_going_out": params.lambda_going_out,
+        "loss_end_points": params.lambda_end_points,
     }
 
 
@@ -174,6 +178,10 @@ def _record(state, gen, result, elapsed, optim_arm) -> dict:
         "loss_square_points": losses["square_points"],
         "loss_square_points_mean": losses["square_points_mean"],
         "loss_square_points_var": losses["square_points_var"],
+        "loss_going_out": losses["going_out"],
+        "loss_end_points": losses["end_points"],
+        "loss_end_points_mean": losses["end_points_mean"],
+        "loss_end_points_var": losses["end_points_var"],
         "wld_acc": result.wld_acc,
         "lr": optim_arm.current,
         **result.grad_norm,

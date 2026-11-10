@@ -8,6 +8,9 @@ three-way WLD cross-entropy and its score-differential error are recorded too,
 and the per-square heads' reads over the rows' empty squares: the ownership
 cross-entropy, the points mean's RMSE in points, and the ratio of the
 predicted points variance to the realized squared error (1 when calibrated).
+The end-of-game heads get the same reads over the rows whose game reached its
+end: the going-out cross-entropy, overall and by pool size, and the
+end-of-game points' RMSE and variance ratio.
 
 The table reads the leaf as the side to move (the opponent, who replies next)
 sees it once both refills are drawn: their spread plus their leave's static
@@ -23,7 +26,7 @@ import numpy as np
 import torch
 
 from scribblez import ffi
-from scribblez.deep_bot_leaf_eval.model import FILLED, LAYOUT, POINTS_SCALE
+from scribblez.deep_bot_leaf_eval.model import FILLED, LAYOUT, POINTS_SCALE, UNLABELLED
 
 RACK_SIZE = 7
 SCORE_DIFF_SCALE = 100.0  # the row's score differential scale (input_encoder.h)
@@ -93,6 +96,24 @@ def _square_sums(out: dict, raw: dict) -> dict[str, np.ndarray]:
     }
 
 
+def _end_rows(out: dict, raw: dict) -> dict[str, np.ndarray]:
+    """Per row, the end-of-game heads' reads, zero for a row whose game was
+    cut short: the going-out NLL, the end points' squared error and predicted
+    variance (in points squared), and whether the row is labelled."""
+    label = raw["going_out"][:, 0].long()
+    labelled = (label != UNLABELLED).float()
+    log_probs = torch.log_softmax(out["going_out"].float().cpu(), dim=1)
+    nll = -log_probs.gather(1, label.clamp(min=0)[:, None])[:, 0]
+    mean, var = out["end_points"].float().cpu().unbind(dim=1)
+    sq_err = (mean * POINTS_SCALE - raw["end_points"][:, 0]) ** 2
+    return {
+        "going_out_nll": (nll * labelled).numpy(),
+        "end_sq_err": (sq_err * labelled).numpy(),
+        "end_var": (var * POINTS_SCALE**2 * labelled).numpy(),
+        "end_labelled": labelled.numpy(),
+    }
+
+
 def _model_rows(model, raw: dict, device) -> dict[str, np.ndarray]:
     out = model(raw["input_spatial"].to(device), raw["input_scalar"].to(device))
     probs = torch.softmax(out["wld"].float(), dim=1).cpu().numpy()
@@ -107,6 +128,7 @@ def _model_rows(model, raw: dict, device) -> dict[str, np.ndarray]:
         "pool": _seat_sizes(raw["input_scalar"].numpy())[2],
         "features": win_table_features(raw["input_scalar"].numpy()),
         **_square_sums(out, raw),
+        **_end_rows(out, raw),
     }
 
 
@@ -138,13 +160,23 @@ def evaluate(
 def eval_metrics(rows: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> dict[str, float]:
     squares = max(float(rows["empty_squares"].sum()), 1.0)
     sq_err = float(rows["points_sq_err_sum"].sum())
+    labelled = rows["end_labelled"] > 0
+    ends = max(float(labelled.sum()), 1.0)
+    end_sq_err = float(rows["end_sq_err"].sum())
     m = {
         "eval_wld_nll": float(rows["wld_nll"].mean()),
         "eval_sd_mean_mae": float(rows["sd_error"].mean()),
         "eval_ownership_nll": float(rows["own_nll_sum"].sum()) / squares,
         "eval_points_rmse": (sq_err / squares) ** 0.5,
         "eval_points_var_ratio": float(rows["points_var_sum"].sum()) / max(sq_err, 1e-9),
+        "eval_going_out_nll": float(rows["going_out_nll"].sum()) / ends,
+        "eval_end_points_rmse": (end_sq_err / ends) ** 0.5,
+        "eval_end_points_var_ratio": float(rows["end_var"].sum()) / max(end_sq_err, 1e-9),
     }
+    for band, lo, hi in POOL_BANDS:
+        sel = labelled & (rows["pool"] >= lo) & (rows["pool"] <= hi)
+        if sel.any():
+            m[f"eval_going_out_nll_pool_{band}"] = float(rows["going_out_nll"][sel].mean())
     for name, e in expected.items():
         loss = expected_score_logloss(e, rows["outcome"])
         m[f"eval_{name}_logloss"] = float(loss.mean())

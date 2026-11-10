@@ -64,6 +64,7 @@ GameLog make_game_view(const char* buf, uint32_t game_idx, std::vector<TurnRecor
 
   scratch.resize(gm.num_turns);
   for (uint32_t k = 0; k < gm.num_turns; ++k) {
+    scratch[k].player = int(k % 2);  // seat 0 moves first (ReplayStart::first_player)
     scratch[k].move = turns[k].move;
     scratch[k].drawn = turns[k].drawn;
   }

@@ -1,6 +1,7 @@
 #include "data/gcg_writer.h"
 
 #include "game/board.h"
+#include "game/game_end.h"
 #include "game/move.h"
 #include "game/tile.h"
 
@@ -122,16 +123,14 @@ void write_gcg_header(std::string& out, const GameLog& log, const std::array<std
 }
 
 // Replays the board, since a play's notation depends on the tiles already
-// down. Records each player's last cumulative score in `last_cumulative`, for
-// the end-of-game adjustment lines.
+// down.
 void write_gcg_turns(std::string& out, const GameLog& log, const std::array<std::string, 2>& nick,
-                     const GcgWriteOptions& options, std::array<int, 2>& last_cumulative) {
+                     const GcgWriteOptions& options) {
   Board board;
   for (size_t turn_idx = 0; turn_idx < size_t(log.num_records); ++turn_idx) {
     const TurnRecord& t = log.records[turn_idx];
     const Move& m = t.move;
     const int cumulative = t.cumulative_scores[t.player];
-    last_cumulative[t.player] = cumulative;
     const bool include_rack = include_rack_field(options, turn_idx);
     const std::string rack = include_rack ? rack_field(log, options, turn_idx) : std::string{};
 
@@ -169,16 +168,15 @@ void write_gcg_turns(std::string& out, const GameLog& log, const std::array<std:
   }
 }
 
-// End-of-game rack adjustments, derived from the gap between final_scores and
-// each player's last cumulative score. A player who went out gains the value
-// of the opponent's leftover tiles; a player left holding tiles loses theirs.
-// The gain is written first.
+// End-of-game rack adjustments (game/game_end.h). A player who went out gains
+// the value of the opponent's leftover tiles; a player left holding tiles
+// loses theirs. The gain is written first.
 void write_gcg_endgame_adjustments(std::string& out, const GameLog& log,
-                                   const std::array<std::string, 2>& nick,
-                                   const std::array<int, 2>& last_cumulative) {
+                                   const std::array<std::string, 2>& nick) {
+  const GameEnd end = game_end(log);
   for (int pass = 0; pass < 2; ++pass) {
     for (int p = 0; p < 2; ++p) {
-      const int delta = log.final_scores[p] - last_cumulative[p];
+      const int delta = end.adjustment[p];
       const bool positive = delta > 0;
       if (delta == 0 || positive != (pass == 0)) continue;
       if (positive) {
@@ -231,11 +229,9 @@ std::string game_log_to_gcg(const GameLog& log) { return game_log_to_gcg(log, Gc
 std::string game_log_to_gcg(const GameLog& log, const GcgWriteOptions& options) {
   std::string out;
   const std::array<std::string, 2> nick = player_nicks(log);
-  std::array<int, 2> last_cumulative = {0, 0};
-
   write_gcg_header(out, log, nick, options);
-  write_gcg_turns(out, log, nick, options, last_cumulative);
-  write_gcg_endgame_adjustments(out, log, nick, last_cumulative);
+  write_gcg_turns(out, log, nick, options);
+  write_gcg_endgame_adjustments(out, log, nick);
 
   return out;
 }

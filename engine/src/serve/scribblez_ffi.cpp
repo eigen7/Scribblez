@@ -245,6 +245,8 @@ const ScribblezShape kLeafEvalTargetShapes[] = {
   {scribblez::ScoreDiffTarget::kName, scribblez::ScoreDiffTarget::kDims, 1, 1},
   {scribblez::OwnershipTarget::kName, scribblez::OwnershipTarget::kDims, 2, 2},
   {scribblez::SquarePointsTarget::kName, scribblez::SquarePointsTarget::kDims, 2, 3},
+  {scribblez::GoingOutTarget::kName, scribblez::GoingOutTarget::kDims, 1, 4},
+  {scribblez::EndPointsTarget::kName, scribblez::EndPointsTarget::kDims, 1, 5},
   {nullptr, nullptr, 0, 0},
 };
 
