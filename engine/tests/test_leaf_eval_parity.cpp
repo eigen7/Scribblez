@@ -36,9 +36,13 @@ namespace {
 
 using LeafNet = nn::NeuralNet<nn::LeafEvalSpec>;
 
-// Per row of expected.bin: the three logits, then the score difference's
-// mean and spread.
-constexpr int kExpectedFloats = nn::WldOutput::kRowElems + nn::ScoreDiffOutput::kRowElems;
+// Per row of expected.bin: every output of the spec, in its order, flattened
+// (gen_parity_fixture.py's EXPECTED_FLOATS).
+template <typename... Out>
+constexpr int expected_floats(nn::TensorList<Out...>) {
+  return (Out::kRowElems + ...);
+}
+constexpr int kExpectedFloats = expected_floats(nn::LeafEvalSpec::Outputs{});
 // TensorRT's FP32 runs convolutions in TF32 (errors near 1e-4, as the other
 // families measure); a mis-bound tensor moves outputs by order-one amounts.
 constexpr float kFp32Tol = 2e-3f;
@@ -46,6 +50,28 @@ constexpr float kFp32Tol = 2e-3f;
 constexpr int kMaxRows = 4;
 
 std::string g_fixture_dir;
+
+// The largest gap between the net's rows [0, count) of output `Out` and the
+// expected values, which start `offset` floats into each expected row; returns
+// the offset past this output.
+template <typename Out>
+size_t check_output(const LeafNet& net, const std::vector<float>& expected, int first, int count,
+                    size_t offset, float* worst) {
+  const float* got = net.host<Out>();
+  for (int i = 0; i < count; ++i) {
+    const float* e = &expected[size_t(first + i) * kExpectedFloats + offset];
+    for (int k = 0; k < Out::kRowElems; ++k)
+      *worst = std::max(*worst, std::abs(got[Out::kRowElems * i + k] - e[k]));
+  }
+  return offset + size_t(Out::kRowElems);
+}
+
+template <typename... Out>
+void check_outputs(nn::TensorList<Out...>, const LeafNet& net, const std::vector<float>& expected,
+                   int first, int count, float* worst) {
+  size_t offset = 0;
+  ((offset = check_output<Out>(net, expected, first, count, offset, worst)), ...);
+}
 
 class LeafEvalParityTest : public ::testing::Test {
  protected:
@@ -98,17 +124,7 @@ TEST_F(LeafEvalParityTest, Fp32MatchesPyTorch) {
     for (int i = 0; i < count; ++i)
       nn::stage_board_row(net, &rows[size_t(first + i) * LeafEvalInputEncoder::kInputFloats], i);
     net.predict(count);
-    const float* wld = net.host<nn::WldOutput>();
-    const float* score = net.host<nn::ScoreDiffOutput>();
-    for (int i = 0; i < count; ++i) {
-      const float* e = &expected[size_t(first + i) * kExpectedFloats];
-      for (int k = 0; k < nn::WldOutput::kRowElems; ++k)
-        worst = std::max(worst, std::abs(wld[nn::WldOutput::kRowElems * i + k] - e[k]));
-      for (int k = 0; k < nn::ScoreDiffOutput::kRowElems; ++k) {
-        const float got = score[nn::ScoreDiffOutput::kRowElems * i + k];
-        worst = std::max(worst, std::abs(got - e[nn::WldOutput::kRowElems + k]));
-      }
-    }
+    check_outputs(nn::LeafEvalSpec::Outputs{}, net, expected, first, count, &worst);
   }
   std::cout << "  [fp32] worst abs err " << worst << "\n";
   EXPECT_LE(worst, kFp32Tol);

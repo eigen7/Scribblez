@@ -2,13 +2,16 @@
 (engine/include/nn/model_specs.h, LeafEvalSpec).
 
 The graph takes a row (`input_spatial`, (batch, 95, 15, 15), and
-`input_scalar`, (batch, 85)) and emits `wld` logits (batch, 3) and
-`score_diff` (batch, 2: mean, std); the per-square heads are training
-targets until the engine serves them, so the graph drops them. A model
-trained without the join planes still takes the full row; its graph slices
-the planes it reads. The metadata carries the format version, the leave
-values the row's scalars were priced with (which the engine checks before
-loading: nn::check_leave_values), and the generation's provenance.
+`input_scalar`, (batch, 85)) and emits every head, in OUTPUTS order: `wld`
+logits (batch, 3), `score_diff` (batch, 2: mean, std), `ownership` logits
+(batch, 5, 15, 15), `square_points` (batch, 2, 15, 15: mean, variance),
+`going_out` logits (batch, 3) and `end_points` (batch, 2: mean, variance).
+The engine values a rollout's leaf by `wld` and completes the sim's maps and
+end-of-game outcome past the leaf with the rest. A model trained without the
+join planes still takes the full row; its graph slices the planes it reads.
+The metadata carries the format version, the leave values the row's scalars
+were priced with (which the engine checks before loading:
+nn::check_leave_values), and the generation's provenance.
 
 The trainer exports every generation into its tag's models/, where a
 policy_set task pins one. As a script: export a tag's rolling checkpoint as
@@ -31,7 +34,7 @@ from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
 
 # Must match the engine's nn::kGraphDeepBotLeafEval and LeafEvalSpec.
 GRAPH = "deep_bot_leaf_eval"
-OUTPUTS = ("wld", "score_diff")
+OUTPUTS = ("wld", "score_diff", "ownership", "square_points", "going_out", "end_points")
 FORMAT_KEY = "leaf_eval_format_version"
 TABLE_KEY = "leave_values"
 WORKLOAD = "deep_bot_leaf_eval"
