@@ -401,6 +401,26 @@ evals/s: the upload, not the network, bounds it. That is the case for keeping
 the leaf on the device: at parity on the rollouts alone, the leaf network
 would already run 5-6x faster fed from the kernel than from the host.
 
+### The sim maps on the device
+
+A sim also returns maps of the board's future
+([DeepBot plan, "Sims"](deep_bot.md#sims)). The kernel records what each
+rollout settled of them (`rollout_abi::RolloutFates`, one per task, left on
+the device beside the leaf state): for every square its plies filled, who
+filled it, whether in a bingo and the move's signed points; a square still
+empty stays empty for certain when the game ended inside the rollout, and is
+otherwise open; and who went out and the net end-of-game rack adjustment,
+when the game ended. A second kernel sums each start's rollouts into its
+maps (`rollout_abi::SimMaps`: per-square class counts and points sums, the
+end-of-game sums, the rollout count), one block per start, adding the start's
+tasks one at a time in ascending task order; the CPU reference
+(`sim/sim_maps.h`) adds them in the same order, so the two sums are
+bit-identical and `gpu_kernel_tests` asserts so, at 65,536 rollouts of a late
+position with 10,620 finished games among them. Only the per-start sums come
+back to the host (6.3 KB per start), never the per-rollout fates. Completing
+the open squares and ends from the leaf network's continuation heads is the
+next step.
+
 ### Batches of candidates
 
 A launch takes a batch (`sim/hasty_rollout_task.h`'s `RolloutBatch`):
