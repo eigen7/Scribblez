@@ -24,7 +24,8 @@ class GpuHastyRollouts {
   ~GpuHastyRollouts();
 
   // A batch run: results[k] for tasks[k], each drawn as the CPU reference
-  // draws it, and maps[s] for starts[s], its rollouts' fates summed.
+  // draws it, and maps[s] for starts[s], its rollouts' fates summed (empty
+  // unless the batch sums its maps).
   struct Output {
     std::vector<rollout_abi::RolloutResult> results;
     std::vector<rollout_abi::SimMaps> maps;

@@ -415,9 +415,13 @@ maps (`rollout_abi::SimMaps`: per-square class counts and points sums, the
 end-of-game sums, the rollout count), one block per start, adding the start's
 tasks one at a time in ascending task order; the CPU reference
 (`sim/sim_maps.h`) adds them in the same order, so the two sums are
-bit-identical and `gpu_kernel_tests` asserts so, at 65,536 rollouts of a late
-position with 10,620 finished games among them. Only the per-start sums come
-back to the host (6.3 KB per start), never the per-rollout fates. Completing
+bit-identical: `gpu_kernel_tests` asserts so, and `gpu_rollout_demo` found
+every start's maps identical at 65,536 rollouts of a late position with 10,620
+finished games among them. Only the per-start sums come back to the host (6.3
+KB per start), never the per-rollout fates, and only for a batch that asks for
+them (`RolloutBatch::sum_maps`): DeepBot's raced launches run a few rollouts
+per start, so summing and downloading maps nobody reads would cost up to
+30% of a launch. Completing
 the open squares and ends from the leaf network's continuation heads is the
 next step.
 

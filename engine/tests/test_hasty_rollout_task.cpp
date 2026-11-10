@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -332,7 +333,9 @@ TEST(RolloutValues, TheCpuBackendValuesLeavesAndFinishedGames) {
   const Decision d = decision_after(dict, /*seed=*/6, /*plies=*/10);
   const RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/8);
   CpuRolloutValues values(dict, synthetic_leaf());
-  const std::vector<RolloutOutcome> outcomes = values.run(batch).outcomes;
+  const BatchValues valued = values.run(batch);
+  EXPECT_TRUE(valued.maps.empty()) << "the batch does not sum its maps";
+  const std::vector<RolloutOutcome>& outcomes = valued.outcomes;
   const std::vector<rollout_abi::RolloutResult> results = run_hasty_rollouts_cpu(batch, dict);
   ASSERT_EQ(outcomes.size(), results.size());
   for (size_t k = 0; k < outcomes.size(); ++k) {
@@ -371,7 +374,8 @@ TEST(HastyRolloutCpu, AMoveThatGoesOutWithTheBagEmptyEndsTheGame) {
     return m.type() == MoveType::PLAY && m.num_glyphs() == d.rack.size();
   });
   ASSERT_NE(out, ranked.end()) << "no move plays out";
-  const RolloutBatch batch = batch_of(d, {*out}, /*rollouts=*/4);
+  RolloutBatch batch = batch_of(d, {*out}, /*rollouts=*/4);
+  batch.sum_maps = true;
   const BatchValues values = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
   const std::vector<RolloutOutcome>& outcomes = values.outcomes;
   for (size_t i = 0; i < outcomes.size(); ++i) {
@@ -461,6 +465,7 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
   const Decision d = decision_after(dict, /*seed=*/3, /*plies=*/8);
   const std::vector<Move> ranked = ranked_moves(d, dict);
   RolloutBatch batch = batch_of(d, {ranked[0], ranked[1]}, /*rollouts=*/0);
+  batch.sum_maps = true;
   for (uint32_t i = 0; i < 6; ++i) {
     batch.add_rollouts(i % 2, i, 1);
     if (i % 3 == 0) batch.add_rollouts(1, 10 + i, 1);
@@ -472,6 +477,10 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
   run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
   const std::vector<rollout_abi::SimMaps> maps = sum_sim_maps(fates, by_start);
   ASSERT_EQ(maps.size(), 2u);
+  const BatchValues values = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
+  ASSERT_EQ(values.maps.size(), 2u);
+  for (size_t s = 0; s < 2; ++s)
+    EXPECT_EQ(sim_maps_difference(values.maps[s], maps[s]), "") << "start " << s;
   for (size_t s = 0; s < 2; ++s) {
     const rollout_abi::SimMaps& m = maps[s];
     const float n = float(by_start.offsets[s + 1] - by_start.offsets[s]);
@@ -493,11 +502,12 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
   }
 }
 
-TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
-  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
-  const Dictionary& dict = nwl23();
-  // A play that draws the bag's last tiles without going out: the opponent
-  // then moves with the bag empty, so no rollout may stop at a leaf.
+namespace {
+
+// A batch of `rollouts` of a play that draws the bag's last tiles without
+// going out: the opponent then moves with the bag empty, so every rollout
+// plays to the end. Has no tasks if no early game reaches such a play.
+RolloutBatch bag_emptying_batch(const Dictionary& dict, int rollouts) {
   for (uint64_t seed = 1; seed < 64; ++seed) {
     const Decision d = decision_after(dict, seed, /*plies=*/20);
     const int bag = d.board.pov_bag_size(d.rack.size());
@@ -506,15 +516,51 @@ TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
     const auto it = std::ranges::find_if(ranked, [&](const Move& m) {
       return m.type() == MoveType::PLAY && m.num_glyphs() >= bag && m.num_glyphs() < d.rack.size();
     });
-    if (it == ranked.end()) continue;
-    const RolloutBatch batch = batch_of(d, {*it}, /*rollouts=*/8);
-    const std::vector<RolloutOutcome> outcomes =
-      CpuRolloutValues(dict, synthetic_leaf()).run(batch).outcomes;
-    for (size_t i = 0; i < outcomes.size(); ++i) {
-      EXPECT_EQ(outcomes[i].result.game_over, 1) << "seed " << seed << " rollout " << i;
-      EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
-    }
-    return;
+    if (it != ranked.end()) return batch_of(d, {*it}, rollouts);
   }
-  FAIL() << "no game reached a play that empties the bag";
+  return {};
+}
+
+}  // namespace
+
+TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/8);
+  ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
+  const std::vector<RolloutOutcome> outcomes =
+    CpuRolloutValues(dict, synthetic_leaf()).run(batch).outcomes;
+  for (size_t i = 0; i < outcomes.size(); ++i) {
+    EXPECT_EQ(outcomes[i].result.game_over, 1) << "rollout " << i;
+    EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
+  }
+}
+
+// A finished rollout's end of game, against its final racks: whoever went
+// out holds nothing and gains twice the other's rack, signed from player 0's
+// side; in a stalemate each loses its own rack's value.
+TEST(HastyRolloutCpu, FatesRecordWhoWentOutAndTheEndPoints) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/32);
+  ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
+  std::vector<CpuLeaf> leaves(batch.tasks.size());
+  std::vector<rollout_abi::RolloutFates> fates;
+  run_hasty_rollouts_cpu(batch, dict, &leaves, &fates);
+  std::array<int, rollout_abi::kWentOutClasses> seen{};
+  for (size_t k = 0; k < fates.size(); ++k) {
+    const rollout_abi::RolloutFates& f = fates[k];
+    ASSERT_GE(f.went_out, 0) << "rollout " << k;
+    ++seen[size_t(f.went_out)];
+    const int v0 = leaves[k].leaves[0].point_value(), v1 = leaves[k].leaves[1].point_value();
+    if (f.went_out == 2) {
+      EXPECT_EQ(f.end_points, v1 - v0) << "rollout " << k;
+      continue;
+    }
+    const int out = f.went_out;
+    EXPECT_TRUE(leaves[k].leaves[size_t(out)].empty()) << "rollout " << k;
+    const int bonus = 2 * (out == 0 ? v1 : v0);
+    EXPECT_EQ(f.end_points, out == 0 ? bonus : -bonus) << "rollout " << k;
+  }
+  EXPECT_GT(seen[1], 0) << "no rollout's opponent went out";
 }

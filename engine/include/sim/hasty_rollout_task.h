@@ -53,6 +53,9 @@ struct RolloutBatch {
   std::vector<RolloutGroup> groups;
   std::vector<RolloutStart> starts;
   std::vector<rollout_abi::RolloutTask> tasks;
+  // Whether a run sums each start's rollouts into its maps
+  // (rollout_abi::SimMaps); without it the maps come back empty.
+  bool sum_maps = false;
 
   // Tasks for rollouts [first, first + count) of start `start`.
   void add_rollouts(uint32_t start, uint32_t first, uint32_t count);

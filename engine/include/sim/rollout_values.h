@@ -38,7 +38,8 @@ struct RolloutOutcome {
   double win_value() const { return scribblez::win_value(wld); }
 };
 
-// A batch valued: outcomes[k] for batch.tasks[k], maps[s] for batch.starts[s].
+// A batch valued: outcomes[k] for batch.tasks[k], and maps[s] for
+// batch.starts[s] when the batch sums its maps.
 struct BatchValues {
   std::vector<RolloutOutcome> outcomes;
   std::vector<rollout_abi::SimMaps> maps;

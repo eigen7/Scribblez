@@ -135,7 +135,8 @@ std::string maps_mismatch(const std::vector<rollout_abi::SimMaps>& cpu,
 // bit for bit.
 TEST_P(GpuRolloutKernelTest, RolloutsMatchTheCpuReference) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
-  const RolloutBatch batch = batch_at(GetParam());
+  RolloutBatch batch = batch_at(GetParam());
+  batch.sum_maps = true;
   std::vector<rollout_abi::RolloutFates> fates;
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23(), nullptr, &fates);
   const GpuHastyRollouts::Output res = gpu().run(batch, nwl23());

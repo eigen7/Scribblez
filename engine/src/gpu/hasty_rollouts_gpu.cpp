@@ -213,9 +213,11 @@ rollout_gpu::BatchAbi batch_abi(const RolloutBatch& batch, const Dictionary& dic
     abi.groups.push_back(to_abi(g, uint32_t(abi.opp_leaves.size())));
     for (const Rack& leave : g.opp_leaves) abi.opp_leaves.push_back(to_abi(leave));
   }
-  TasksByStart by_start = tasks_by_start(batch);
-  abi.tasks_by_start = std::move(by_start.tasks);
-  abi.start_offsets = std::move(by_start.offsets);
+  if (batch.sum_maps) {
+    TasksByStart by_start = tasks_by_start(batch);
+    abi.tasks_by_start = std::move(by_start.tasks);
+    abi.start_offsets = std::move(by_start.offsets);
+  }
   return abi;
 }
 
@@ -225,11 +227,12 @@ GpuHastyRollouts::Output GpuHastyRollouts::run(const RolloutBatch& batch, const 
   const rollout_gpu::BatchAbi abi = batch_abi(batch, dict);
   Output out;
   out.results.resize(batch.tasks.size());
-  out.maps.resize(batch.starts.size());
+  if (batch.sum_maps) out.maps.resize(batch.starts.size());
   double seconds[3];
   phase_cycles_.assign(rollout_gpu::kPhases, 0);
   counts_.assign(rollout_gpu::kCounts, 0);
-  rollout_gpu::run_rollouts(impl_->tables, abi, out.results.data(), out.maps.data(), seconds,
+  rollout_gpu::run_rollouts(impl_->tables, abi, out.results.data(),
+                            batch.sum_maps ? out.maps.data() : nullptr, seconds,
                             phase_cycles_.data(), counts_.data());
   timings_ = Timings{seconds[0], seconds[1], seconds[2]};
   return out;

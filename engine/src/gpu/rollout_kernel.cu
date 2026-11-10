@@ -1261,7 +1261,8 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
 
 // The fates of the squares the rollout's plies did not fill (place_chosen
 // labelled those): the start's own tiles carry no label, and a square still
-// empty stays so for certain only if the game ended. The whole block.
+// empty stays so for certain only if the game ended. Every thread of the
+// block calls it.
 __device__ void settle_untouched_squares(const PositionAbi& pos, const Smem& s,
                                          RolloutFates& fates) {
   for (int i = threadIdx.x; i < kSquares; i += kThreads) {
@@ -1663,7 +1664,8 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
     return std::chrono::duration<double>(Clock::now() - t0).count();
   };
   const size_t n = batch.tasks.size();
-  const size_t starts = batch.positions.size();
+  // The starts whose maps are summed: all of them, or none.
+  const size_t starts = maps ? batch.positions.size() : 0;
   d->results.reserve(n);
   d->leaves.reserve(n);
   d->fates.reserve(n);
@@ -1677,8 +1679,10 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
   d->positions.upload(batch.positions.data(), batch.positions.size());
   d->groups.upload(batch.groups.data(), batch.groups.size());
   d->opp_leaves.upload(batch.opp_leaves.data(), batch.opp_leaves.size());
-  d->tasks_by_start.upload(batch.tasks_by_start.data(), n);
-  d->start_offsets.upload(batch.start_offsets.data(), starts + 1);
+  if (starts > 0) {
+    d->tasks_by_start.upload(batch.tasks_by_start.data(), n);
+    d->start_offsets.upload(batch.start_offsets.data(), starts + 1);
+  }
   seconds[0] = since(t0);
   t0 = Clock::now();
   if (n > 0) {
@@ -1689,7 +1693,7 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
   }
   if (starts > 0) {
     sim_maps_kernel<<<unsigned(starts), kThreads>>>(d->fates.data, d->tasks_by_start.data,
-                                                     d->start_offsets.data, d->maps.data);
+                                                    d->start_offsets.data, d->maps.data);
     cuda_check(cudaGetLastError(), "sim maps launch");
   }
   cuda_check(cudaDeviceSynchronize(), "kernel");

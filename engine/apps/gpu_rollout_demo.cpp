@@ -214,7 +214,8 @@ int run(int argc, char** argv) {
 
   const DecisionPoint at = self_play_position(dict, seed, plies);
   const std::vector<Move> moves = rollout_candidates(at, dict, num_candidates);
-  const RolloutBatch batch = candidate_batch(at, moves, rollouts, seed);
+  RolloutBatch batch = candidate_batch(at, moves, rollouts, seed);
+  batch.sum_maps = true;
   std::cout << at.board.to_string();
   std::cout << std::format("to move: rack {} | scores {} to {} | unseen {}\n", at.rack.to_string(),
                            at.my_score, at.opp_score, batch.groups[0].pool.size());
