@@ -138,13 +138,27 @@ struct BatchAbi {
   std::vector<uint32_t> start_offsets;   // positions.size() + 1 bounds into tasks_by_start
 };
 
-// The batch's tasks into results[0, tasks), one block each, and, unless
-// `maps` is null, each start's rollouts summed into maps[0, positions). `seconds` receives the
-// batch upload, the kernels and the downloads; `phase_cycles` the summed per-block cycles of each
-// Phase.
+// The batch's tasks into results[0, tasks), one block each, and, with
+// `sum_maps`, each start's rollouts summed into the device's maps, one per
+// position. `seconds` receives the batch upload, the kernels and the results
+// download; `phase_cycles` the summed per-block cycles of each Phase.
 void run_rollouts(DeviceTables* tables, const BatchAbi& batch, rollout_abi::RolloutResult* results,
-                  rollout_abi::SimMaps* maps, double seconds[3],
-                  unsigned long long phase_cycles[kPhases], unsigned long long counts[kCounts]);
+                  bool sum_maps, double seconds[3], unsigned long long phase_cycles[kPhases],
+                  unsigned long long counts[kCounts]);
+
+// Adds to the device's maps the completion of tasks[0, count) by row i of the
+// device buffers `heads` for tasks[i]. The rows come binned by start: start
+// s's are rows_by_start[start_offsets[s], start_offsets[s + 1]), ascending,
+// over `starts` starts (host arrays).
+void complete_maps(DeviceTables* tables, const uint32_t* tasks, int count,
+                   const uint32_t* rows_by_start, const uint32_t* start_offsets, size_t starts,
+                   const rollout_abi::LeafHeadRows& heads);
+// complete_maps, from heads in host memory.
+void complete_maps_from_host(DeviceTables* tables, const uint32_t* tasks, int count,
+                             const uint32_t* rows_by_start, const uint32_t* start_offsets,
+                             size_t starts, const rollout_abi::LeafHeadRows& heads);
+// The device's maps of starts [0, starts) into `maps`.
+void download_maps(const DeviceTables* tables, rollout_abi::SimMaps* maps, size_t starts);
 
 // The last run's leaf states, a device pointer (one per task).
 const rollout_abi::LeafState* device_leaves(const DeviceTables* tables);

@@ -119,12 +119,12 @@ class GpuCrossCheckDeltaTest : public ::testing::TestWithParam<int> {};
 
 }  // namespace
 
-// The first start whose device maps differ from the CPU reference's, with
-// the field; empty when none do.
+// The first start whose device maps differ from the CPU reference's by more
+// than `tolerance` (sim_maps_difference), with the field; empty when none do.
 std::string maps_mismatch(const std::vector<rollout_abi::SimMaps>& cpu,
-                          const std::vector<rollout_abi::SimMaps>& gpu) {
+                          const std::vector<rollout_abi::SimMaps>& gpu, float tolerance = 0.0f) {
   for (size_t s = 0; s < cpu.size(); ++s) {
-    const std::string diff = sim_maps_difference(cpu[s], gpu[s]);
+    const std::string diff = sim_maps_difference(cpu[s], gpu[s], tolerance);
     if (!diff.empty()) return std::format("start {}: {}", s, diff);
   }
   return "";
@@ -139,13 +139,93 @@ TEST_P(GpuRolloutKernelTest, RolloutsMatchTheCpuReference) {
   batch.sum_maps = true;
   std::vector<rollout_abi::RolloutFates> fates;
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23(), nullptr, &fates);
-  const GpuHastyRollouts::Output res = gpu().run(batch, nwl23());
-  ASSERT_EQ(res.results.size(), cpu.size());
-  EXPECT_EQ(mismatches(batch, cpu, res.results), "");
-  for (const rollout_abi::RolloutResult& r : res.results)
-    EXPECT_EQ(r.pad, 0) << "span-list overflow";
-  ASSERT_EQ(res.maps.size(), batch.starts.size());
-  EXPECT_EQ(maps_mismatch(sum_sim_maps(fates, tasks_by_start(batch)), res.maps), "");
+  const std::vector<rollout_abi::RolloutResult> res = gpu().run(batch, nwl23());
+  ASSERT_EQ(res.size(), cpu.size());
+  EXPECT_EQ(mismatches(batch, cpu, res), "");
+  for (const rollout_abi::RolloutResult& r : res) EXPECT_EQ(r.pad, 0) << "span-list overflow";
+  const std::vector<rollout_abi::SimMaps> maps = gpu().maps();
+  ASSERT_EQ(maps.size(), batch.starts.size());
+  EXPECT_EQ(maps_mismatch(sum_sim_maps(fates, tasks_by_start(batch)), maps), "");
+}
+
+namespace {
+
+// Stand-in continuation heads for `rows` leaves, each output's rows
+// contiguous as the leaf network writes them, every value varying by row and
+// square so that a misplaced row, square or plane shows.
+struct ChunkHeads {
+  std::vector<float> ownership, square_points, going_out, end_points;
+
+  // The heads from row `first` on.
+  rollout_abi::LeafHeadRows rows(int first) const {
+    const size_t r = size_t(first);
+    return {ownership.data() + r * rollout_abi::kOwnershipFloats,
+            square_points.data() + r * rollout_abi::kSquarePointsFloats,
+            going_out.data() + r * rollout_abi::kWentOutClasses,
+            end_points.data() + r * rollout_abi::kEndPointsFloats};
+  }
+};
+
+// A value in [-2, 2) from a row and an index, spread over 17 steps.
+float spread(int row, int i) { return 0.25f * float((row * 31 + i * 7) % 17) - 2.0f; }
+
+ChunkHeads chunk_heads(int rows) {
+  ChunkHeads h;
+  for (int r = 0; r < rows; ++r) {
+    for (int i = 0; i < rollout_abi::kOwnershipFloats; ++i) h.ownership.push_back(spread(r, i));
+    for (int sq = 0; sq < rollout_abi::kSquares; ++sq)
+      h.square_points.push_back(0.1f * spread(r, sq));
+    for (int sq = 0; sq < rollout_abi::kSquares; ++sq)
+      h.square_points.push_back(0.01f * (3.0f + spread(r, sq)));
+    for (int c = 0; c < rollout_abi::kWentOutClasses; ++c) h.going_out.push_back(spread(r, c));
+    h.end_points.push_back(0.1f * spread(r, 5));
+    h.end_points.push_back(0.01f * (3.0f + spread(r, 6)));
+  }
+  return h;
+}
+
+// The tasks whose rollouts stopped at a leaf, ascending.
+std::vector<uint32_t> unfinished_tasks(const std::vector<rollout_abi::RolloutResult>& results) {
+  std::vector<uint32_t> out;
+  for (size_t k = 0; k < results.size(); ++k)
+    if (!results[k].game_over) out.push_back(uint32_t(k));
+  return out;
+}
+
+// The completed maps agree with the reference to rounding: the device sums
+// a start's leaves in slices, and its exp and the host's differ in the last
+// bits.
+constexpr float kCompletionTolerance = 1e-5f;
+
+}  // namespace
+
+// The maps completed on the device from leaf heads, in two chunks as the
+// leaf network's row limit splits a batch, against the CPU reference's
+// completion from the same heads; and every rollout counted once.
+TEST_P(GpuRolloutKernelTest, CompletedMapsMatchTheCpuReference) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  RolloutBatch batch = batch_at(GetParam());
+  batch.sum_maps = true;
+  std::vector<rollout_abi::RolloutFates> fates;
+  const auto cpu = run_hasty_rollouts_cpu(batch, nwl23(), nullptr, &fates);
+  gpu().run(batch, nwl23());
+  const std::vector<uint32_t> unfinished = unfinished_tasks(cpu);
+  ASSERT_FALSE(unfinished.empty());
+  const int n = int(unfinished.size()), half = n / 2;
+  const ChunkHeads heads = chunk_heads(n);
+  gpu().complete_maps_from_host(unfinished.data(), half, heads.rows(0));
+  gpu().complete_maps_from_host(unfinished.data() + half, n - half, heads.rows(half));
+
+  std::vector<rollout_abi::LeafHeadRows> task_heads(batch.tasks.size(),
+                                                    rollout_abi::LeafHeadRows{});
+  for (int i = 0; i < n; ++i) task_heads[unfinished[size_t(i)]] = heads.rows(i);
+  const TasksByStart by_start = tasks_by_start(batch);
+  std::vector<rollout_abi::SimMaps> expected = sum_sim_maps(fates, by_start);
+  complete_sim_maps(expected, fates, by_start, task_heads);
+  const std::vector<rollout_abi::SimMaps> got = gpu().maps();
+  ASSERT_EQ(got.size(), expected.size());
+  EXPECT_EQ(maps_mismatch(expected, got, kCompletionTolerance), "");
+  for (size_t s = 0; s < got.size(); ++s) EXPECT_LT(completion_gap(got[s]), 1e-3f) << "start " << s;
 }
 
 INSTANTIATE_TEST_SUITE_P(Plies, GpuRolloutKernelTest, ::testing::Values(2, 10, 16));
@@ -162,7 +242,7 @@ TEST(GpuRolloutKernel, SeatsAFullRackAsTheOpponentsLeave) {
   ASSERT_FALSE(full.empty());
   for (size_t i = 0; i < leaves.size(); ++i) leaves[i] = full[i % full.size()];
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
-  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23()).results), "");
+  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
 }
 
 // The opponent's exchanged tiles going back after its refill, as in Alice's
@@ -179,7 +259,7 @@ TEST(GpuRolloutKernel, PutsTheOpponentsExchangeBackAfterItsRefill) {
   ASSERT_TRUE(group.pool.remove(returned.counts()));
   for (RolloutStart& start : batch.starts) start.opp_returned = returned;
   const auto cpu = run_hasty_rollouts_cpu(batch, nwl23());
-  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23()).results), "");
+  EXPECT_EQ(mismatches(batch, cpu, gpu().run(batch, nwl23())), "");
 }
 
 TEST(GpuRolloutKernel, DeviceLeafRowsMatchTheCpuEncoder) {

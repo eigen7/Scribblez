@@ -3,10 +3,11 @@
 // Rollout batches (sim/hasty_rollout_task.h) valued from the chooser's side:
 // each task's win/draw/loss probabilities, from the leaf at its end state, or
 // exact when the game ended inside the rollout, and each start's rollouts
-// summed into its maps (rollout_abi::SimMaps), as far as the rollouts settled
-// them. One interface over the backends: the CUDA kernel with the leaf
-// network on the device (gpu/gpu_rollout_values.h), and the CPU reference
-// with a leaf function, which the test suites use since they hide the GPU.
+// summed into its maps (rollout_abi::SimMaps), with what a rollout that
+// stopped at a leaf left open completed from the leaf's prediction. One
+// interface over the backends: the CUDA kernel with the leaf network on the
+// device (gpu/gpu_rollout_values.h), and the CPU reference with a leaf
+// function, which the test suites use since they hide the GPU.
 
 #include "gpu/rollout_abi.h"
 #include "sim/hasty_rollout_task.h"
@@ -52,11 +53,27 @@ class RolloutValues {
   virtual BatchValues run(const RolloutBatch& batch) = 0;
 };
 
-// A leaf's value from player 0's side (the player who moved last). Called
-// from worker threads, so it must be thread-safe.
-using CpuLeafFn = std::function<Wld(const CpuLeaf&)>;
+// A leaf network's prediction at a rollout's leaf, from player 0's side (the
+// player who moved last): the value, and the continuation heads as one row of
+// the network's outputs.
+struct LeafPrediction {
+  Wld wld{};
+  std::array<float, rollout_abi::kOwnershipFloats> ownership{};
+  std::array<float, rollout_abi::kSquarePointsFloats> square_points{};
+  std::array<float, rollout_abi::kWentOutClasses> going_out{};
+  std::array<float, rollout_abi::kEndPointsFloats> end_points{};
 
-// A stand-in leaf for tests: a logistic in the score differential, no draws.
+  // A view of this object's arrays, valid while it lives where it is.
+  rollout_abi::LeafHeadRows heads() const {
+    return {ownership.data(), square_points.data(), going_out.data(), end_points.data()};
+  }
+};
+
+// A leaf's prediction. Called from worker threads, so it must be thread-safe.
+using CpuLeafFn = std::function<LeafPrediction(const CpuLeaf&)>;
+
+// A stand-in leaf for tests: a logistic in the score differential, no draws,
+// and continuation heads that are fixed functions of the square.
 CpuLeafFn synthetic_leaf();
 
 class CpuRolloutValues : public RolloutValues {

@@ -1,5 +1,6 @@
 #include "gpu/gpu_rollout_values.h"
 
+#include "encoding/input_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
@@ -8,13 +9,24 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <utility>
 
 namespace scribblez {
 
 namespace {
 
+// The maps' completion reads the heads in their export layout.
+static_assert(nn::OwnershipOutput::kRowElems == rollout_abi::kOwnershipFloats);
+static_assert(nn::SquarePointsOutput::kRowElems == rollout_abi::kSquarePointsFloats);
+static_assert(nn::GoingOutOutput::kRowElems == rollout_abi::kWentOutClasses);
+static_assert(nn::EndPointsOutput::kRowElems == rollout_abi::kEndPointsFloats);
+static_assert(rollout_abi::kLeafPointsScale == kScoreDiffInputScale);
+
 using Clock = std::chrono::steady_clock;
+
+// The device buffer of the net's output `name`.
+const float* device_rows(const nn::NeuralNetBase& net, const char* name) {
+  return static_cast<const float*>(net.device_ptr(name));
+}
 
 double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
@@ -41,26 +53,27 @@ GpuRolloutValues::GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq
 
 BatchValues GpuRolloutValues::run(const RolloutBatch& batch) {
   auto t0 = Clock::now();
-  GpuHastyRollouts::Output run = rollouts_.run(batch, dict_);
+  const std::vector<rollout_abi::RolloutResult> results = rollouts_.run(batch, dict_);
   timings_.rollout_seconds = seconds_since(t0);
   timings_.kernel_seconds = rollouts_.last_timings().kernel_seconds;
   t0 = Clock::now();
   BatchValues out;
-  out.outcomes.resize(run.results.size());
-  out.maps = std::move(run.maps);
+  out.outcomes.resize(results.size());
   std::vector<uint32_t> unfinished;
-  for (size_t k = 0; k < run.results.size(); ++k) {
-    out.outcomes[k].result = run.results[k];
-    if (run.results[k].game_over)
-      out.outcomes[k].wld = terminal_wld(run.results[k].diff);
+  for (size_t k = 0; k < results.size(); ++k) {
+    out.outcomes[k].result = results[k];
+    if (results[k].game_over)
+      out.outcomes[k].wld = terminal_wld(results[k].diff);
     else
       unfinished.push_back(uint32_t(k));
   }
   const int n = int(unfinished.size());
   for (int first = 0; first < n; first += net_.max_rows()) {
-    evaluate_leaves(&unfinished[size_t(first)], std::min(net_.max_rows(), n - first),
-                    &out.outcomes);
+    const int count = std::min(net_.max_rows(), n - first);
+    evaluate_leaves(&unfinished[size_t(first)], count, &out.outcomes);
+    if (batch.sum_maps) rollouts_.complete_maps(&unfinished[size_t(first)], count, device_heads());
   }
+  if (batch.sum_maps) out.maps = rollouts_.maps();
   timings_.leaf_seconds = seconds_since(t0);
   timings_.leaves = int64_t(n);
   totals_.rollout_seconds += timings_.rollout_seconds;
@@ -68,6 +81,12 @@ BatchValues GpuRolloutValues::run(const RolloutBatch& batch) {
   totals_.leaf_seconds += timings_.leaf_seconds;
   totals_.leaves += timings_.leaves;
   return out;
+}
+
+rollout_abi::LeafHeadRows GpuRolloutValues::device_heads() const {
+  return {
+    device_rows(net_, nn::OwnershipOutput::kName), device_rows(net_, nn::SquarePointsOutput::kName),
+    device_rows(net_, nn::GoingOutOutput::kName), device_rows(net_, nn::EndPointsOutput::kName)};
 }
 
 void GpuRolloutValues::evaluate_leaves(const uint32_t* tasks, int count,

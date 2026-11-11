@@ -71,15 +71,27 @@ HostRoute run_host_route(nn::NeuralNet<nn::LeafEvalSpec>& net, const std::vector
   return out;
 }
 
+// The largest completion_gap of the starts' maps, as a share of the start's
+// rollouts.
+double relative_completion_gap(const std::vector<rollout_abi::SimMaps>& maps) {
+  double gap = 0;
+  for (const rollout_abi::SimMaps& m : maps)
+    gap = std::max(gap, double(completion_gap(m)) / std::max(1.0f, m.sims));
+  return gap;
+}
+
 // The batch through GpuRolloutValues (the kernel, the device encoder and the
 // leaf network), then the checks: the device rows of the first leaves
-// against the CPU encoder's on the CPU reference's end states, and those
-// leaves' win values against the host route's. Returns 1 unless the rows
-// match and the values agree.
+// against the CPU encoder's on the CPU reference's end states, those leaves'
+// win values against the host route's, and the maps the network completed
+// for counting every rollout once. Returns 1 unless the rows match, the
+// values agree and the maps count true.
 int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const Dictionary& dict,
                     const std::vector<CpuLeaf>& cpu_leaves, const std::string& onnx_path) {
   values.run(batch);  // the first run builds the TensorRT context's buffers
-  const std::vector<RolloutOutcome> outcomes = values.run(batch).outcomes;
+  const BatchValues valued = values.run(batch);
+  const std::vector<RolloutOutcome>& outcomes = valued.outcomes;
+  const double maps_gap = relative_completion_gap(valued.maps);
   const GpuRolloutValues::Timings& tm = values.last_timings();
   const auto t0 = Clock::now();
   const std::vector<float> cpu_rows = cpu_leaf_rows(cpu_leaves, dict);
@@ -99,10 +111,11 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
     "\nleaf model {}:\n  mean win value from the chooser's side: {:.4f}\n"
     "  rollouts {:.4f} s + leaves {:.4f} s -> {:.0f} valued rollouts/s (leaves alone {:.0f}/s)\n"
     "  device rows vs CPU encoder: {} of {} identical, max |diff| {}\n"
-    "  win values vs the host route on those leaves: max |diff| {:.2g}\n",
+    "  win values vs the host route on those leaves: max |diff| {:.2g}\n"
+    "  completed maps: largest gap from counting every rollout once {:.2g} of the rollouts\n",
     onnx_path, mean_win / n, tm.rollout_seconds, tm.leaf_seconds,
     n / (tm.rollout_seconds + tm.leaf_seconds), tm.leaves / tm.leaf_seconds, check.rows_identical,
-    check.checked, check.max_abs_diff, max_value_diff);
+    check.checked, check.max_abs_diff, max_value_diff, maps_gap);
   std::cout << std::format(
     "  the host route: CPU encoder {:.0f} rows/s per thread, predict with upload {:.0f} evals/s\n",
     check.checked / cpu_seconds, check.checked / host.seconds);
@@ -111,7 +124,12 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
   // FP16 runs of one engine at different batch sizes may pick different
   // kernels; beyond this the routes disagree on more than rounding.
   constexpr double kValueTolerance = 1e-2;
-  return check.rows_identical == check.checked && max_value_diff <= kValueTolerance ? 0 : 1;
+  // Each rollout adds probabilities summing to 1; the float sums over
+  // thousands of rollouts round off parts in a million of the count.
+  constexpr double kMapsTolerance = 1e-3;
+  const bool ok = check.rows_identical == check.checked && max_value_diff <= kValueTolerance &&
+                  maps_gap <= kMapsTolerance;
+  return ok ? 0 : 1;
 }
 
 // How many starts' device maps differ from the CPU reference's.
@@ -242,11 +260,11 @@ int run(int argc, char** argv) {
   const double gpu_setup = seconds_since(t0);
   // The first launch includes module load; time the second.
   gpu.run(batch, dict);
-  const GpuHastyRollouts::Output out = gpu.run(batch, dict);
-  const std::vector<rollout_abi::RolloutResult>& res = out.results;
+  const std::vector<rollout_abi::RolloutResult> res = gpu.run(batch, dict);
+  const std::vector<rollout_abi::SimMaps> gpu_maps = gpu.maps();
   const GpuHastyRollouts::Timings& tm = gpu.last_timings();
   const Agreement a = compare_results(batch, cpu, res);
-  const int maps_differ = differing_maps(sum_sim_maps(cpu_fates, tasks_by_start(batch)), out.maps);
+  const int maps_differ = differing_maps(sum_sim_maps(cpu_fates, tasks_by_start(batch)), gpu_maps);
 
   const double n = double(batch.tasks.size());
   std::cout << std::format(
@@ -254,7 +272,7 @@ int run(int argc, char** argv) {
     "{} games ended within the rollout; {} span-list overflows; sim maps of {} of {} starts "
     "identical\n",
     int(n) - std::max(a.diff_mismatch, a.move_mismatch), int(n), a.diff_mismatch, a.move_mismatch,
-    a.game_over, a.overflow, int(out.maps.size()) - maps_differ, out.maps.size());
+    a.game_over, a.overflow, int(gpu_maps.size()) - maps_differ, gpu_maps.size());
   std::cout << std::format("\n{:<28}{:>12}{:>16}\n", "", "seconds", "rollouts/s");
   std::cout << std::format("{:<28}{:>12.4f}{:>16.0f}\n", std::format("cpu ({} threads)", threads),
                            cpu_seconds, n / cpu_seconds);

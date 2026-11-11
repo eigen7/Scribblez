@@ -1,14 +1,18 @@
 #pragma once
 
-// A start's rollouts summed into its maps (rollout_abi::SimMaps) on the CPU:
-// the reference for the device reduction, which adds the same rollouts in the
-// same order. Both bin a batch's tasks by start here, so the order is one
-// definition.
+// A start's rollouts summed into its maps (rollout_abi::SimMaps) on the CPU,
+// then completed by the leaf network's predictions for what the rollouts that
+// stopped at a leaf left open: the reference for the device reduction. The
+// exact sums add the same rollouts in the same order as the device, so they
+// are bit-identical; both bin a batch's tasks by start here, so the order is
+// one definition. The completion adds the same terms but agrees only to
+// rounding (gpu/rollout_kernel.cu's kSliceRows says why).
 
 #include "gpu/rollout_abi.h"
 #include "sim/hasty_rollout_task.h"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -21,13 +25,32 @@ struct TasksByStart {
   std::vector<uint32_t> tasks;
 };
 
+// Items 0..start_of.size() binned by start: item i belongs to start_of[i],
+// one of `starts`.
+TasksByStart bin_by_start(std::span<const uint32_t> start_of, size_t starts);
 TasksByStart tasks_by_start(const RolloutBatch& batch);
 
 // Each start's maps from every task's fates (fates[k] for batch.tasks[k]).
 std::vector<rollout_abi::SimMaps> sum_sim_maps(const std::vector<rollout_abi::RolloutFates>& fates,
                                                const TasksByStart& by_start);
 
-// The first field of `a` and `b` that differ, as "field[index]", or empty.
-std::string sim_maps_difference(const rollout_abi::SimMaps& a, const rollout_abi::SimMaps& b);
+// Adds to each start's maps the completion of its tasks that stopped at a
+// leaf, in ascending task order: task k's heads are row 0 of heads[k], and a
+// task whose game ended (heads[k].ownership null) adds nothing.
+void complete_sim_maps(std::vector<rollout_abi::SimMaps>& maps,
+                       const std::vector<rollout_abi::RolloutFates>& fates,
+                       const TasksByStart& by_start,
+                       std::span<const rollout_abi::LeafHeadRows> heads);
+
+// The first field of `a` and `b` that differ by more than `tolerance`
+// relative to the larger magnitude (at least 1), as "field[index]: a vs b",
+// or empty. The default asks for bit-identity.
+std::string sim_maps_difference(const rollout_abi::SimMaps& a, const rollout_abi::SimMaps& b,
+                                float tolerance = 0.0f);
+
+// How far completed maps are from counting every rollout once: the largest
+// gap between a square's class counts and 0 (filled at the start) or the
+// rollout count, and between the end's class counts and the rollout count.
+float completion_gap(const rollout_abi::SimMaps& m);
 
 }  // namespace scribblez

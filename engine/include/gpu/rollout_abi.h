@@ -18,6 +18,7 @@
 // the same racks on either, and the outcomes compare exactly.
 // docs/plans/gpu_hasty_rollouts.md is the design.
 
+#include <cmath>
 #include <cstdint>
 
 #if defined(__CUDACC__)
@@ -118,9 +119,11 @@ struct RolloutFates {
 // A start's rollouts summed into its maps, as far as they settled them: per
 // square, how many rollouts gave it each class, and the sum and the sum of
 // squares of its points (0 for the open and the unsettled); who went out,
-// likewise; and the rollouts counted. The sums are float because the leaf
-// network's completion of the open squares and ends will add into them. The
-// device's sums are bit-identical to the CPU reference's (sim/sim_maps.h).
+// likewise; and the rollouts counted. A rollout that stopped at a leaf adds
+// the leaf network's prediction for what it left open (add_square_completion,
+// add_end_completion): class probabilities, and the points' mean and mean
+// square, so the sums are float. The device's sums match the CPU
+// reference's (sim/sim_maps.h says how closely).
 struct SimMaps {
   float class_sum[kFateClasses][kSquares];
   float points_sum[kSquares];
@@ -151,6 +154,65 @@ SCRIBBLEZ_HD inline void add_end_fate(SimMaps& m, const RolloutFates& f) {
   const int p = f.end_points;
   m.end_points_sum += float(p);
   m.end_points_sq_sum += float(p * p);
+}
+
+// One chunk's leaf network continuation heads, each output's rows in its
+// export layout (nn/model_specs.h's OwnershipOutput, SquarePointsOutput,
+// GoingOutOutput and EndPointsOutput; gpu_rollout_values.cpp asserts the
+// widths). They are from the side of the player who moved last, which at a
+// rollout's leaf is player 0, so their classes are the maps' own.
+struct LeafHeadRows {
+  const float* ownership;      // kOwnershipFloats a row: per class, a plane of logits
+  const float* square_points;  // kSquarePointsFloats a row: a mean plane, a variance plane
+  const float* going_out;      // kWentOutClasses logits a row
+  const float* end_points;     // 2 a row: mean, variance
+};
+constexpr int kOwnershipFloats = kFateClasses * kSquares;
+constexpr int kSquarePointsFloats = 2 * kSquares;
+constexpr int kEndPointsFloats = 2;
+// The heads' points unit (encoding/input_encoder.h's kScoreDiffInputScale).
+constexpr float kLeafPointsScale = 100.0f;
+
+// Adds to sum[c * stride] the softmax of logits[c * stride], c < classes.
+SCRIBBLEZ_HD inline void add_softmax(float* sum, const float* logits, int classes, int stride) {
+  constexpr int kMaxClasses = kFateClasses > kWentOutClasses ? kFateClasses : kWentOutClasses;
+  float e[kMaxClasses];
+  float top = logits[0];
+  for (int c = 1; c < classes; ++c) top = fmaxf(top, logits[c * stride]);
+  float total = 0.0f;
+  for (int c = 0; c < classes; ++c) {
+    e[c] = expf(logits[c * stride] - top);
+    total += e[c];
+  }
+  for (int c = 0; c < classes; ++c) sum[c * stride] += e[c] / total;
+}
+
+// Adds a predicted mean and variance, in the heads' unit, to the sums of
+// points and of their squares: E[p] and Var[p] + E[p]^2.
+SCRIBBLEZ_HD inline void add_moments(float& sum, float& sq_sum, float mean, float var) {
+  const float p = mean * kLeafPointsScale;
+  sum += p;
+  sq_sum += var * (kLeafPointsScale * kLeafPointsScale) + p * p;
+}
+
+// Adds square `sq` of a rollout that stopped at a leaf, if the rollout left
+// it open: the leaf's row `row` of the heads.
+SCRIBBLEZ_HD inline void add_square_completion(SimMaps& m, int sq, const RolloutFates& f,
+                                               const LeafHeadRows& h, int row) {
+  if (f.fate[sq] != kFateOpen) return;
+  add_softmax(&m.class_sum[0][sq], h.ownership + row * kOwnershipFloats + sq, kFateClasses,
+              kSquares);
+  const float* points = h.square_points + row * kSquarePointsFloats;
+  add_moments(m.points_sum[sq], m.points_sq_sum[sq], points[sq], points[kSquares + sq]);
+}
+
+// Adds the end of the game of a rollout that stopped at a leaf, if open.
+SCRIBBLEZ_HD inline void add_end_completion(SimMaps& m, const RolloutFates& f,
+                                            const LeafHeadRows& h, int row) {
+  if (f.went_out != kWentOutOpen) return;
+  add_softmax(m.went_out_sum, h.going_out + row * kWentOutClasses, kWentOutClasses, 1);
+  const float* end = h.end_points + row * kEndPointsFloats;
+  add_moments(m.end_points_sum, m.end_points_sq_sum, end[0], end[1]);
 }
 
 // A rollout's start, flattened: a candidate applied to the board, so we

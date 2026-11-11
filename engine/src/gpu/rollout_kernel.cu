@@ -1364,6 +1364,9 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
 // thread t over square t and one more thread over the end of the game, as
 // sim/sim_maps.h's CPU sum does.
 
+// A SimMaps as floats, the way the kernels zero, copy and add them.
+constexpr int kSimMapsFloats = int(sizeof(SimMaps) / sizeof(float));
+
 __global__ void __launch_bounds__(kThreads)
   sim_maps_kernel(const RolloutFates* fates, const uint32_t* tasks_by_start,
                   const uint32_t* start_offsets, SimMaps* maps) {
@@ -1385,7 +1388,63 @@ __global__ void __launch_bounds__(kThreads)
   __syncthreads();
   const float* src = reinterpret_cast<const float*>(&m);
   float* dst = reinterpret_cast<float*>(maps + blockIdx.x);
-  for (int i = t; i < int(sizeof(SimMaps) / sizeof(float)); i += kThreads) dst[i] = src[i];
+  for (int i = t; i < kSimMapsFloats; i += kThreads) dst[i] = src[i];
+}
+
+// A start's chunk rows are summed in slices of up to kSliceRows rows, one
+// block each, and the slices then added to the start's maps in order: a
+// chunk can hold a thousand rows of one start, and one block walking them
+// would be a chain of dependent loads. The grouping is fixed by the chunks,
+// so the device's sums repeat run to run; they differ from sim/sim_maps.h's
+// complete_sim_maps, which adds row by row, only by rounding, from that
+// grouping and from the two sides' exp differing in the last bits.
+constexpr int kSliceRows = 16;
+
+// rows_by_start[first, end): one slice of one start's rows.
+struct CompletionSlice {
+  uint32_t first, end;
+};
+
+// One block per slice: its rows' completions (rollout_abi.h's
+// add_square_completion and add_end_completion) summed from zero in
+// ascending order into partials[slice], thread t over square t and one more
+// over the end of the game.
+__global__ void __launch_bounds__(kThreads)
+  complete_slices_kernel(const RolloutFates* __restrict__ fates, const uint32_t* __restrict__ tasks,
+                         const uint32_t* __restrict__ rows_by_start,
+                         const CompletionSlice* __restrict__ slices, LeafHeadRows heads,
+                         SimMaps* __restrict__ partials) {
+  __shared__ SimMaps m;
+  float* shared = reinterpret_cast<float*>(&m);
+  const int t = threadIdx.x;
+  for (int i = t; i < kSimMapsFloats; i += kThreads) shared[i] = 0.0f;
+  __syncthreads();
+  const CompletionSlice slice = slices[blockIdx.x];
+  for (uint32_t i = slice.first; i < slice.end; ++i) {
+    const int row = int(rows_by_start[i]);
+    const RolloutFates& f = fates[tasks[row]];
+    if (t < kSquares)
+      add_square_completion(m, t, f, heads, row);
+    else if (t == kSquares)
+      add_end_completion(m, f, heads, row);
+  }
+  __syncthreads();
+  float* out = reinterpret_cast<float*>(partials + blockIdx.x);
+  for (int i = t; i < kSimMapsFloats; i += kThreads) out[i] = shared[i];
+}
+
+// One block per start: its slices' partials added to its maps in order.
+__global__ void __launch_bounds__(kThreads)
+  add_slices_kernel(const SimMaps* __restrict__ partials,
+                    const uint32_t* __restrict__ slice_offsets, SimMaps* __restrict__ maps) {
+  const uint32_t first = slice_offsets[blockIdx.x], end = slice_offsets[blockIdx.x + 1];
+  if (first == end) return;
+  float* sums = reinterpret_cast<float*>(maps + blockIdx.x);
+  for (int i = threadIdx.x; i < kSimMapsFloats; i += kThreads) {
+    float v = sums[i];
+    for (uint32_t s = first; s < end; ++s) v += reinterpret_cast<const float*>(partials + s)[i];
+    sums[i] = v;
+  }
 }
 
 // ---- The leaf encoder ----
@@ -1578,6 +1637,13 @@ struct DeviceTables {
   DeviceBuffer<uint32_t> start_offsets;
   DeviceBuffer<SimMaps> maps;
   DeviceBuffer<uint32_t> leaf_tasks;  // the tasks encode_leaves was given
+  // complete_maps' tasks, their rows binned by start, the bins' slices with
+  // each start's first, and the slices' partial sums
+  DeviceBuffer<uint32_t> map_tasks;
+  DeviceBuffer<uint32_t> map_rows;
+  DeviceBuffer<CompletionSlice> map_slices;
+  DeviceBuffer<uint32_t> map_slice_offsets;
+  DeviceBuffer<SimMaps> map_partials;
 };
 
 DeviceTables* upload_tables(const HostTables& host, size_t* bytes) {
@@ -1656,7 +1722,7 @@ void free_tables(DeviceTables* d) {
   delete d;
 }
 
-void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results, SimMaps* maps,
+void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results, bool sum_maps,
                   double seconds[3], unsigned long long phase_cycles[kPhases],
                   unsigned long long counts[kCounts]) {
   using Clock = std::chrono::steady_clock;
@@ -1665,7 +1731,7 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
   };
   const size_t n = batch.tasks.size();
   // The starts whose maps are summed: all of them, or none.
-  const size_t starts = maps ? batch.positions.size() : 0;
+  const size_t starts = sum_maps ? batch.positions.size() : 0;
   d->results.reserve(n);
   d->leaves.reserve(n);
   d->fates.reserve(n);
@@ -1704,16 +1770,69 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
       cudaMemcpy(results, d->results.data, sizeof(RolloutResult) * n, cudaMemcpyDeviceToHost),
       "results download");
   }
-  if (starts > 0) {
-    cuda_check(cudaMemcpy(maps, d->maps.data, sizeof(SimMaps) * starts, cudaMemcpyDeviceToHost),
-               "maps download");
-  }
   seconds[2] = since(t0);
   cuda_check(cudaMemcpyFromSymbol(phase_cycles, g_phase_cycles, sizeof(zero)), "phase readback");
   cuda_check(cudaMemcpyFromSymbol(counts, g_counts, sizeof(zero_counts)), "count readback");
 }
 
 const LeafState* device_leaves(const DeviceTables* d) { return d->leaves.data; }
+
+namespace {
+
+// Each start's rows cut into slices of up to kSliceRows, slice_offsets[s]
+// the first of start s's.
+void slice_rows(const uint32_t* start_offsets, size_t starts, std::vector<CompletionSlice>* slices,
+                std::vector<uint32_t>* slice_offsets) {
+  slice_offsets->assign(1, 0);
+  for (size_t s = 0; s < starts; ++s) {
+    for (uint32_t i = start_offsets[s]; i < start_offsets[s + 1]; i += kSliceRows)
+      slices->push_back({i, std::min(i + kSliceRows, start_offsets[s + 1])});
+    slice_offsets->push_back(uint32_t(slices->size()));
+  }
+}
+
+}  // namespace
+
+void complete_maps(DeviceTables* d, const uint32_t* tasks, int count, const uint32_t* rows_by_start,
+                   const uint32_t* start_offsets, size_t starts, const LeafHeadRows& heads) {
+  if (count <= 0 || starts == 0) return;
+  std::vector<CompletionSlice> slices;
+  std::vector<uint32_t> slice_offsets;
+  slice_rows(start_offsets, starts, &slices, &slice_offsets);
+  d->map_tasks.upload(tasks, size_t(count));
+  d->map_rows.upload(rows_by_start, size_t(count));
+  d->map_slices.upload(slices.data(), slices.size());
+  d->map_slice_offsets.upload(slice_offsets.data(), slice_offsets.size());
+  d->map_partials.reserve(slices.size());
+  complete_slices_kernel<<<unsigned(slices.size()), kThreads>>>(
+    d->fates.data, d->map_tasks.data, d->map_rows.data, d->map_slices.data, heads,
+    d->map_partials.data);
+  cuda_check(cudaGetLastError(), "maps completion launch");
+  add_slices_kernel<<<unsigned(starts), kThreads>>>(d->map_partials.data, d->map_slice_offsets.data,
+                                                    d->maps.data);
+  cuda_check(cudaGetLastError(), "maps completion sum launch");
+  cuda_check(cudaDeviceSynchronize(), "maps completion");
+}
+
+void complete_maps_from_host(DeviceTables* d, const uint32_t* tasks, int count,
+                             const uint32_t* rows_by_start, const uint32_t* start_offsets,
+                             size_t starts, const LeafHeadRows& heads) {
+  if (count <= 0) return;
+  const size_t rows = size_t(count);
+  DeviceBuffer<float> own, points, going_out, end;
+  own.upload(heads.ownership, rows * kOwnershipFloats);
+  points.upload(heads.square_points, rows * kSquarePointsFloats);
+  going_out.upload(heads.going_out, rows * kWentOutClasses);
+  end.upload(heads.end_points, rows * kEndPointsFloats);
+  complete_maps(d, tasks, count, rows_by_start, start_offsets, starts,
+                LeafHeadRows{own.data, points.data, going_out.data, end.data});
+}
+
+void download_maps(const DeviceTables* d, SimMaps* maps, size_t starts) {
+  if (starts == 0) return;
+  cuda_check(cudaMemcpy(maps, d->maps.data, sizeof(SimMaps) * starts, cudaMemcpyDeviceToHost),
+             "maps download");
+}
 
 void encode_leaves(DeviceTables* d, const uint32_t* tasks, int count, float* spatial,
                    float* scalar) {

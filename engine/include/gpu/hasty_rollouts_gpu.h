@@ -23,15 +23,11 @@ class GpuHastyRollouts {
   GpuHastyRollouts(const Dictionary& dict, const HastyEquity& eq);
   ~GpuHastyRollouts();
 
-  // A batch run: results[k] for tasks[k], each drawn as the CPU reference
-  // draws it, and maps[s] for starts[s], its rollouts' fates summed (empty
-  // unless the batch sums its maps).
-  struct Output {
-    std::vector<rollout_abi::RolloutResult> results;
-    std::vector<rollout_abi::SimMaps> maps;
-  };
-  // The end states and fates stay on the device, one per task.
-  Output run(const RolloutBatch& batch, const Dictionary& dict);
+  // The batch's tasks, results[k] for tasks[k], each drawn as the CPU
+  // reference draws it. The end states and fates stay on the device, one per
+  // task, and so, for a batch that sums its maps, does each start's sum of
+  // its rollouts' fates, for complete_maps() and maps().
+  std::vector<rollout_abi::RolloutResult> run(const RolloutBatch& batch, const Dictionary& dict);
 
   struct Timings {
     double upload_seconds = 0;    // the batch
@@ -62,6 +58,16 @@ class GpuHastyRollouts {
   void encode_leaves(const uint32_t* tasks, int count, float* spatial, float* scalar);
   // encode_leaves, with the rows copied back to the host (for checks).
   void encode_leaves_to_host(const uint32_t* tasks, int count, float* spatial, float* scalar);
+  // Adds to the last run's maps the leaf network's completion of tasks
+  // [0, count), ascending, row i of the device buffers `heads` for tasks[i]:
+  // what each of those rollouts left open (rollout_abi::add_square_completion).
+  void complete_maps(const uint32_t* tasks, int count, const rollout_abi::LeafHeadRows& heads);
+  // complete_maps, from heads in host memory (for checks).
+  void complete_maps_from_host(const uint32_t* tasks, int count,
+                               const rollout_abi::LeafHeadRows& heads);
+  // The last run's maps, maps[s] for starts[s], as completed so far; empty
+  // unless the batch sums its maps.
+  std::vector<rollout_abi::SimMaps> maps() const;
   double table_upload_seconds() const { return table_upload_seconds_; }
   size_t table_bytes() const { return table_bytes_; }
 
@@ -69,6 +75,9 @@ class GpuHastyRollouts {
   struct Impl;
   std::unique_ptr<Impl> impl_;
   Timings timings_;
+  // The last run's task starts and start count, while it sums its maps.
+  std::vector<uint32_t> task_starts_;
+  size_t map_starts_ = 0;
   std::vector<unsigned long long> phase_cycles_;
   std::vector<unsigned long long> counts_;
   double table_upload_seconds_ = 0;
