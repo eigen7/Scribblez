@@ -97,7 +97,7 @@ def test_sidecars_are_written_and_delivered_before_their_slog(tmp_path, monkeypa
             slog.with_suffix(".side").write_bytes(b"side")
 
     ctx = _ctx(tmp_path, sink, max_cycles=2)
-    sidecar = selfplay_gen.ChunkSidecar(".side", write)
+    sidecar = selfplay_gen.ChunkSidecar((".side",), write)
     assert selfplay_gen.generate(ctx, "--type=greedy", False, 0.0, sidecar=sidecar) == 0
     want = []
     for c in calls:

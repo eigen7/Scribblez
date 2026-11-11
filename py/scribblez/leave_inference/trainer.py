@@ -408,7 +408,7 @@ def run(ctx: WorkerContext) -> int:
     state = checkpoint.resume(paths, model, optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
-    run_ctx["data_home"] = data_home.start_for(ctx, paths, params, chunk_sidecar=forgone.SUFFIX)
+    run_ctx["data_home"] = data_home.start_for(ctx, paths, params, chunk_sidecars=(forgone.SUFFIX,))
     try:
         run_generational_training(
             model, train_model, optimizer, recorder, paths, device, params, state, run_ctx

@@ -17,10 +17,11 @@ std::random_device. Any deterministic seed partition across a fleet would risk
 two workers playing the same games, so the corpus is deliberately not
 reproducible.
 
-A workload whose rows read a per-.slog sidecar (leave_inference's .forgone)
-passes a ChunkSidecar: each chunk gets its sidecars written before delivery,
-and each sidecar is delivered just before its .slog, so the scheduler never
-sees a .slog whose sidecar is not already staged (scheduler.py).
+A workload whose rows read per-.slog sidecars (leave_inference's .forgone,
+policy_set's .pool and .group) passes a ChunkSidecar: each chunk gets its
+sidecars written before delivery, and each sidecar is delivered just before
+its .slog, so the scheduler never sees a .slog whose sidecars are not already
+staged (scheduler.py).
 
 The work dir is wiped on start. A crash mid-cycle can leave a truncated .slog,
 so leftovers are never delivered; a restart loses at most the in-flight chunk
@@ -62,23 +63,22 @@ def hasty_spec(params) -> str:
 
 
 class ChunkSidecar(NamedTuple):
-    """A sidecar every chunk .slog needs: its file suffix, and
-    write(chunk_dir, threads), which writes one beside each .slog there."""
+    """The sidecars every chunk .slog needs: their file suffixes, and
+    write(chunk_dir, threads), which writes each beside each .slog there."""
 
-    suffix: str
+    suffixes: tuple[str, ...]
     write: Callable[[Path, int], None]
 
 
 def _deliver_chunk_dir(
-    sink, worker_id: str, chunk_dir: Path, sidecar_suffix: str
+    sink, worker_id: str, chunk_dir: Path, sidecar_suffixes: tuple[str, ...]
 ) -> tuple[int, int]:
     """Deliver every .slog in `chunk_dir` to staging, with a -<worker_id> stem
-    suffix for global uniqueness, each preceded by its `sidecar_suffix`
-    sidecar if one is named. Returns (chunks, bytes)."""
+    suffix for global uniqueness, each preceded by its `sidecar_suffixes`
+    sidecars. Returns (chunks, bytes)."""
     chunks, nbytes = 0, 0
     for f in sorted(chunk_dir.glob("*.slog")):
-        suffixes = [sidecar_suffix, ".slog"] if sidecar_suffix else [".slog"]
-        for suffix in suffixes:
+        for suffix in [*sidecar_suffixes, ".slog"]:
             nbytes += sink.deliver(
                 f.with_suffix(suffix), f"{STAGING_DIR}/{f.stem}-{worker_id}{suffix}"
             )
@@ -109,10 +109,10 @@ class Deliverer:
     the background.
     """
 
-    def __init__(self, sink, worker_id: str, sidecar_suffix: str = ""):
+    def __init__(self, sink, worker_id: str, sidecar_suffixes: tuple[str, ...] = ()):
         self._sink = sink
         self._worker_id = worker_id
-        self._sidecar_suffix = sidecar_suffix
+        self._sidecar_suffixes = sidecar_suffixes
         self._pending = queue.Queue()
         self._done = queue.Queue()
         self._error: Exception | None = None
@@ -154,7 +154,7 @@ class Deliverer:
             try:
                 t0 = time.monotonic()
                 chunks, nbytes = _deliver_chunk_dir(
-                    self._sink, self._worker_id, chunk_dir, self._sidecar_suffix
+                    self._sink, self._worker_id, chunk_dir, self._sidecar_suffixes
                 )
                 self._done.put(DeliveryResult(gen_seconds, time.monotonic() - t0, chunks, nbytes))
             except Exception as e:  # noqa: BLE001 -- re-raised by collect()/drain(), not lost
@@ -207,7 +207,7 @@ def generate(
     stats = WorkerStats(ctx)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
 
-    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffix if sidecar is not None else "")
+    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffixes if sidecar is not None else ())
     cycle = 0
     try:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:

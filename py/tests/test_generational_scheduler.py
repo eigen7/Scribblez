@@ -125,7 +125,7 @@ def test_committed_count_self_heals(paths):
 
 def _tick_with_sidecar(paths, hooks, *, games=100):
     cfg = scheduler.SchedulerConfig(
-        games_per_generation=games, open_ahead=1, chunk_sidecar=".forgone"
+        games_per_generation=games, open_ahead=1, chunk_sidecars=(".forgone",)
     )
     scheduler.tick(paths, cfg, hooks, chunk_games=_chunk_games)
 
@@ -173,6 +173,25 @@ def test_duplicates_and_quarantines_take_the_sidecar(paths):
     assert sorted(f.name for f in paths.staging_dir.iterdir()) == ["bad.bad", "bad.forgone.bad"]
 
 
+def test_a_chunk_with_two_sidecars_needs_both(paths):
+    cfg = scheduler.SchedulerConfig(
+        games_per_generation=100, open_ahead=1, chunk_sidecars=(".pool", ".group")
+    )
+    for name in ("whole", "half"):
+        _stage(paths, name, 100)
+        (paths.staging_dir / f"{name}.pool").write_text("pool")
+    (paths.staging_dir / "whole.group").write_text("group")
+    scheduler.tick(paths, cfg, Hooks(), chunk_games=_chunk_games)
+    gen0 = paths.generation_dir(0)
+    assert sorted(f.name for f in gen0.iterdir() if f.suffix != ".json") == [
+        "whole.group",
+        "whole.pool",
+        "whole.slog",
+    ]
+    # The .group-less chunk is quarantined, its .pool along with it.
+    assert sorted(f.name for f in paths.staging_dir.iterdir()) == ["half.bad", "half.pool.bad"]
+
+
 class _FinishHooks(Hooks):
     def __init__(self, paths: TagPaths):
         super().__init__(paths=paths)
@@ -216,7 +235,7 @@ def test_held_out_chunks_fill_the_set_then_are_dropped(paths):
     cfg = scheduler.SchedulerConfig(
         games_per_generation=100,
         open_ahead=1,
-        chunk_sidecar=".forgone",
+        chunk_sidecars=(".forgone",),
         holdout_every=every,
         holdout_chunks=2,
     )
