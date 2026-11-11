@@ -1243,7 +1243,19 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    with the sims' mean to 0.002.
 9. **Grouped pools.** The generator on the pool labeler, as a dashboard
    workload, writing the scalars and the search-noise maps beside the
-   pools. *Measure:* bytes and GPU time per group.
+   pools. *Measure:* bytes and GPU time per group. The generator is
+   `policy_set_pool_tool --group-positions-per-game`, writing a `.group`
+   beside each `.pool` (data/group_log.h); measured 2026-11-11 on 10
+   HastyBot games, one group each, under the `v1` leaf network and leave
+   inference model at the defaults (4 moves, 8 racks, 100 rollouts per
+   reply raced, maps over 4, 8 and 12 rollouts): a group is 32 pools of
+   about 620 replies, 364,000 rollouts and 3.2 s of GPU time on the dev
+   laptop (the leaf network is the larger half of it), and 4.7 MB, of
+   which the pools are 1.5 MB (per pool 22 KB of labels and 26 KB of the
+   rollouts' values cut to the first 12) and the maps 3.1 MB (2.8 leading
+   replies per pool, three 11.8 KB float maps each). A chunk of 50 games
+   with a group per game is then 230 MB and 160 s; the dashboard workload
+   is the next slice.
 10. **The search network with an empty store:** the continuation heads,
     pretrained on game records, and the policy and value heads, trained on
     self-play pools from the mover's side. *Measure:* how often the
