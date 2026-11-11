@@ -133,6 +133,10 @@ struct PoolPosition {
   std::vector<PoolLabel> labels;
   std::vector<float> rollout_values;  // rollout_values(): labels[c].rollouts per candidate
   belief::OppRackSummary opp_rack;
+  // Each candidate's sims summed into its maps (rollout_abi::SimMaps), when
+  // the labeler was asked for them (PoolLabeler::Params::sum_maps); empty
+  // otherwise. Not written to the .pool file.
+  std::vector<rollout_abi::SimMaps> maps;
 };
 
 // Accumulates positions in memory and writes the .pool file atomically on

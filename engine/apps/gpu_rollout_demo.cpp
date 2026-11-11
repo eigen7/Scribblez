@@ -18,6 +18,7 @@
 #include "nn/neural_net.h"
 #include "nn/trt_util.h"
 #include "sim/hasty_rollout_task.h"
+#include "sim/map_residuals.h"
 #include "sim/rollout_values.h"
 #include "sim/sim_maps.h"
 #include "sim/sim_runner.h"
@@ -30,6 +31,7 @@
 #include <cmath>
 #include <cstdint>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -47,26 +49,118 @@ double seconds_since(Clock::time_point t0) {
 
 using LeafEncoder = LeafEvalInputEncoder;
 
-// The host route over `rows`: staged from host memory, predicted, timed.
-// Returns each row's win value.
+// The host route over `leaves`: encoded and staged from host memory
+// (GpuRolloutValues::predict, the sims' prior), timed. Returns each leaf's
+// win value.
 struct HostRoute {
+  std::vector<LeafPrediction> predictions;
   std::vector<double> win_values;
-  double seconds = 0;  // predict() with the upload
+  double seconds = 0;  // the encoding and predict() with the upload
 };
 
-HostRoute run_host_route(nn::NeuralNet<nn::LeafEvalSpec>& net, const std::vector<float>& rows) {
+HostRoute run_host_route(GpuRolloutValues& values, const std::vector<CpuLeaf>& leaves) {
   HostRoute out;
-  const int n = int(rows.size() / LeafEncoder::kInputFloats);
-  for (int first = 0; first < n; first += net.max_rows()) {
-    const int count = std::min(net.max_rows(), n - first);
-    for (int i = 0; i < count; ++i) {
-      nn::stage_board_row(net, &rows[size_t(first + i) * LeafEncoder::kInputFloats], i);
-    }
-    const auto t0 = Clock::now();
-    net.predict(count);
-    out.seconds += seconds_since(t0);
-    const float* z = net.host<nn::WldOutput>();
-    for (int i = 0; i < count; ++i) out.win_values.push_back(win_value(wld_from_logits(z + 3 * i)));
+  const auto t0 = Clock::now();
+  out.predictions = values.predict(leaves);
+  out.seconds = seconds_since(t0);
+  for (const LeafPrediction& p : out.predictions) out.win_values.push_back(win_value(p.wld));
+  return out;
+}
+
+// The tiles the network expects placed over the rest of the game from
+// `leaf`: the placement classes' probability summed over the empty squares.
+double expected_placements(const LeafPrediction& p, const Board& board) {
+  double placed = 0;
+  for (int sq = 0; sq < kBoardCells; ++sq) {
+    if (!board.at(sq / BOARD_SIZE, sq % BOARD_SIZE).is_empty()) continue;
+    float probs[rollout_abi::kFateClasses] = {};
+    class_probabilities(p.ownership.data() + sq, rollout_abi::kFateClasses, kBoardCells, probs);
+    for (int c = 0; c < rollout_abi::kFateClasses - 1; ++c) placed += probs[c];
+  }
+  return placed;
+}
+
+// A consistency read on the network itself over the first `leaves` tasks
+// whose rollout seats a full known leave for the opponent: the tiles it
+// expects placed from the start (both leaves known there) against the tiles
+// the rollout's plies placed plus what it expects from the leaf. The two
+// should agree: the rollout only moves the prediction's clock.
+struct PlacementBalance {
+  int rollouts = 0;
+  double from_start = 0, by_plies = 0, from_leaf = 0;  // means
+};
+
+PlacementBalance placement_balance(GpuRolloutValues& values, const RolloutBatch& batch,
+                                   const std::vector<CpuLeaf>& leaves,
+                                   const std::vector<rollout_abi::RolloutFates>& fates,
+                                   const HostRoute& host) {
+  PlacementBalance out;
+  std::vector<CpuLeaf> starts;
+  std::vector<size_t> which;
+  for (size_t k = 0; k < leaves.size(); ++k) {
+    const rollout_abi::RolloutTask& t = batch.tasks[k];
+    const RolloutStart& start = batch.starts[t.position];
+    const RolloutGroup& group = batch.groups[start.group];
+    if (t.rollout >= group.opp_leaves.size() || group.opp_leaves[t.rollout].size() != RACK_SIZE)
+      continue;
+    if (fates[k].went_out != rollout_abi::kWentOutOpen) continue;
+    starts.push_back({.board = start.board,
+                      .leaves = {start.leave, group.opp_leaves[t.rollout]},
+                      .scores = {start.my_score, start.opp_score}});
+    which.push_back(k);
+  }
+  const std::vector<LeafPrediction> priors = values.predict(starts);
+  for (size_t j = 0; j < which.size(); ++j) {
+    const size_t k = which[j];
+    ++out.rollouts;
+    out.from_start += expected_placements(priors[j], starts[j].board);
+    int placed = 0;
+    for (const int8_t fate : fates[k].fate)
+      placed += fate >= 0 && fate < rollout_abi::kFateStaysEmpty;
+    out.by_plies += placed;
+    out.from_leaf += expected_placements(host.predictions[k], leaves[k].board);
+  }
+  if (out.rollouts > 0) {
+    out.from_start /= out.rollouts;
+    out.by_plies /= out.rollouts;
+    out.from_leaf /= out.rollouts;
+  }
+  return out;
+}
+
+// The device-completed maps against the host route's completion of the
+// same leaves: for every start whose tasks all lie among the first
+// `host.predictions.size()` (start-major, so the first starts), the CPU
+// reference's fates summed and completed from the host route's heads, each
+// task's completion in ascending task order as the device adds them.
+struct CompletionCheck {
+  int starts = 0, within = 0;
+  std::string first_diff;
+};
+
+CompletionCheck check_completion(const RolloutBatch& batch,
+                                 const std::vector<rollout_abi::RolloutFates>& fates,
+                                 const std::vector<rollout_abi::RolloutResult>& results,
+                                 const HostRoute& host,
+                                 const std::vector<rollout_abi::SimMaps>& gpu, double tolerance) {
+  const TasksByStart by_start = tasks_by_start(batch);
+  std::vector<rollout_abi::SimMaps> cpu = sum_sim_maps(fates, by_start);
+  std::vector<rollout_abi::LeafHeadRows> heads(batch.tasks.size(), rollout_abi::LeafHeadRows{});
+  for (size_t k = 0; k < host.predictions.size(); ++k)
+    if (!results[k].game_over) heads[k] = host.predictions[k].heads();
+  complete_sim_maps(cpu, fates, by_start, heads);
+  CompletionCheck out;
+  for (size_t s = 0; s < cpu.size(); ++s) {
+    bool covered = true;
+    for (uint32_t i = by_start.offsets[s]; i < by_start.offsets[s + 1]; ++i)
+      covered = covered && by_start.tasks[i] < host.predictions.size();
+    if (!covered) continue;
+    ++out.starts;
+    const std::string diff = sim_maps_difference(cpu[s], gpu[s], float(tolerance));
+    if (diff.empty())
+      ++out.within;
+    else if (out.first_diff.empty())
+      out.first_diff = std::format("start {}: {}", s, diff);
   }
   return out;
 }
@@ -87,7 +181,9 @@ double relative_completion_gap(const std::vector<rollout_abi::SimMaps>& maps) {
 // for counting every rollout once. Returns 1 unless the rows match, the
 // values agree and the maps count true.
 int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const Dictionary& dict,
-                    const std::vector<CpuLeaf>& cpu_leaves, const std::string& onnx_path) {
+                    const std::vector<CpuLeaf>& cpu_leaves,
+                    const std::vector<rollout_abi::RolloutFates>& cpu_fates,
+                    const std::string& onnx_path) {
   values.run(batch);  // the first run builds the TensorRT context's buffers
   const BatchValues valued = values.run(batch);
   const std::vector<RolloutOutcome>& outcomes = valued.outcomes;
@@ -98,7 +194,7 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
   const double cpu_seconds = seconds_since(t0);
   const RowCheck check = compare_leaf_rows(
     cpu_rows, device_leaf_rows(values.rollouts(), int(cpu_leaves.size()), values.net().max_rows()));
-  const HostRoute host = run_host_route(values.net(), cpu_rows);
+  const HostRoute host = run_host_route(values, cpu_leaves);
   double max_value_diff = 0, mean_win = 0;
   for (size_t i = 0; i < outcomes.size(); ++i) mean_win += outcomes[i].win_value();
   for (size_t i = 0; i < cpu_leaves.size(); ++i) {
@@ -106,29 +202,42 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
     max_value_diff =
       std::max(max_value_diff, std::fabs(outcomes[i].win_value() - host.win_values[i]));
   }
+  // FP16 runs of one engine at different batch sizes may pick different
+  // kernels; beyond this the routes disagree on more than rounding.
+  constexpr double kValueTolerance = 1e-2;
+  std::vector<rollout_abi::RolloutResult> results;
+  for (const RolloutOutcome& o : outcomes) results.push_back(o.result);
+  const CompletionCheck completion =
+    check_completion(batch, cpu_fates, results, host, valued.maps, kValueTolerance);
+  const PlacementBalance balance = placement_balance(values, batch, cpu_leaves, cpu_fates, host);
   const double n = double(outcomes.size());
   std::cout << std::format(
     "\nleaf model {}:\n  mean win value from the chooser's side: {:.4f}\n"
     "  rollouts {:.4f} s + leaves {:.4f} s -> {:.0f} valued rollouts/s (leaves alone {:.0f}/s)\n"
     "  device rows vs CPU encoder: {} of {} identical, max |diff| {}\n"
     "  win values vs the host route on those leaves: max |diff| {:.2g}\n"
-    "  completed maps: largest gap from counting every rollout once {:.2g} of the rollouts\n",
+    "  completed maps: largest gap from counting every rollout once {:.2g} of the rollouts\n"
+    "  completed maps vs the host route's completion: {} of {} starts within {:.0e}\n",
     onnx_path, mean_win / n, tm.rollout_seconds, tm.leaf_seconds,
     n / (tm.rollout_seconds + tm.leaf_seconds), tm.leaves / tm.leaf_seconds, check.rows_identical,
-    check.checked, check.max_abs_diff, max_value_diff, maps_gap);
+    check.checked, check.max_abs_diff, max_value_diff, maps_gap, completion.within,
+    completion.starts, kValueTolerance);
+  if (!completion.first_diff.empty()) std::cout << "  first: " << completion.first_diff << "\n";
+  std::cout << std::format(
+    "  tiles the network expects placed over the rest of the game, over {} rollouts with both "
+    "leaves known at the start: {:.1f} from the start; {:.1f} placed by the plies + {:.1f} from "
+    "the leaf\n",
+    balance.rollouts, balance.from_start, balance.by_plies, balance.from_leaf);
   std::cout << std::format(
     "  the host route: CPU encoder {:.0f} rows/s per thread, predict with upload {:.0f} evals/s\n",
     check.checked / cpu_seconds, check.checked / host.seconds);
   if (check.rows_identical != check.checked)
     std::cout << "  first differences:" << check.first_diffs << "\n";
-  // FP16 runs of one engine at different batch sizes may pick different
-  // kernels; beyond this the routes disagree on more than rounding.
-  constexpr double kValueTolerance = 1e-2;
   // Each rollout adds probabilities summing to 1; the float sums over
   // thousands of rollouts round off parts in a million of the count.
   constexpr double kMapsTolerance = 1e-3;
   const bool ok = check.rows_identical == check.checked && max_value_diff <= kValueTolerance &&
-                  maps_gap <= kMapsTolerance;
+                  maps_gap <= kMapsTolerance && completion.within == completion.starts;
   return ok ? 0 : 1;
 }
 
@@ -187,6 +296,7 @@ int run(int argc, char** argv) {
   int plies = 10, rollouts = 4096, num_candidates = 15,
       threads = int(std::thread::hardware_concurrency());
   int leaf_check = 2048;
+  std::string dump_rows;
   std::string leaf_model, leaf_precision = "fp16";
   int leaf_rows = nn::LeafEvalSpec::kDefaultMaxRows;
   po::options_description desc("gpu_rollout_demo options");
@@ -205,6 +315,10 @@ int run(int argc, char** argv) {
                      "a deep_bot_leaf_eval ONNX export to value every rollout with, on the GPU");
   desc.add_options()("leaf-check", po::value<int>(&leaf_check)->default_value(leaf_check),
                      "leaves whose device-built rows and values are checked against the CPU");
+  desc.add_options()("dump-rows", po::value<std::string>(&dump_rows),
+                     "write the CPU encoder's rows of the checked leaves to this file, as raw "
+                     "float32 (leaf-check x LeafEvalInputEncoder::kInputFloats), for a look at "
+                     "them from Python");
   desc.add_options()("leaf-precision",
                      po::value<std::string>(&leaf_precision)->default_value(leaf_precision),
                      "TensorRT precision for the leaf model: fp32, fp16 or bf16");
@@ -291,7 +405,12 @@ int run(int argc, char** argv) {
                             {.leaf_onnx = leaf_model,
                              .precision = nn::parse_precision(leaf_precision),
                              .leaf_rows = leaf_rows});
-    leaf_status = evaluate_leaves(values, batch, dict, cpu_leaves, leaf_model);
+    leaf_status = evaluate_leaves(values, batch, dict, cpu_leaves, cpu_fates, leaf_model);
+    if (!dump_rows.empty()) {
+      const std::vector<float> rows = cpu_leaf_rows(cpu_leaves, dict);
+      std::ofstream out(dump_rows, std::ios::binary);
+      out.write(reinterpret_cast<const char*>(rows.data()), std::streamsize(rows.size() * 4));
+    }
   }
   return (a.diff_mismatch || a.move_mismatch || maps_differ || leaf_status != 0) ? 1 : 0;
 }

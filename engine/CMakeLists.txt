@@ -76,6 +76,7 @@ add_library(scribblez_core STATIC
   src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
   src/sim/sim_maps.cpp
+  src/sim/map_residuals.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
   src/agent/policy_bot.cpp
@@ -515,6 +516,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(search_tests
     tests/test_best_bot.cpp
     tests/test_deep_bot.cpp
+    tests/test_map_residuals.cpp
     tests/test_endgame.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp

@@ -27,6 +27,11 @@ class LockedRolloutValues : public RolloutValues {
     return inner_->run(batch);
   }
 
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return inner_->predict(leaves);
+  }
+
  private:
   std::unique_ptr<RolloutValues> inner_;
   std::mutex mutex_;

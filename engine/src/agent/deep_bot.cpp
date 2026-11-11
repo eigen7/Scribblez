@@ -245,8 +245,10 @@ std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const Al
   const BobReplies replies =
     bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
                 params_.sims_per_rack, req.dict, turn_seed());
+  // The dump reads the sims' residuals against the leaf network's prior.
   const ReplyPayoffs payoffs =
-    payoffs_after_replies(turn, searched, replies.replies, *backend_.values, req.dict, turn_seed());
+    payoffs_after_replies(turn, searched, replies.replies, *backend_.values, req.dict, turn_seed(),
+                          /*residuals=*/!params_.subtree_dump.empty());
   if (!params_.subtree_dump.empty()) {
     dump_turn(req, turn, hasty, searched, replies, payoffs,
               with_first_pass(payoffs.values, turn.candidates, hasty.labels, req.bag_size));

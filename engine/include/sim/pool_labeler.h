@@ -49,6 +49,8 @@ class PoolLabeler {
     // pending rounds reach it.
     int launch_tasks = 32768;
     int max_in_flight = 256;  // positions
+    // Sum each candidate's sims into its maps (PoolPosition::maps).
+    bool sum_maps = false;
   };
 
   // What run() did, for the tool's report.
@@ -74,6 +76,7 @@ class PoolLabeler {
     size_t order = 0;  // the job's place in pull order
     PoolJob job;
     CandidateRollouts rollouts;
+    std::vector<rollout_abi::SimMaps> maps;  // per candidate, while summing
     std::vector<size_t> alive;
     std::vector<char> keep;  // parallel to rollouts: candidates the race never stops
     size_t round = 0;        // index into checkpoints_ of the round running

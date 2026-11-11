@@ -96,6 +96,28 @@ std::vector<int> sims_of(const BobReply& reply) {
   return out;
 }
 
+// The position after one of Bob's contenders as the leaf network reads it,
+// from his side: his leave, and Alice's, which her sims seat.
+CpuLeaf after_reply_leaf(const RolloutStart& after, const RolloutStart& applied) {
+  return {.board = after.board,
+          .leaves = {after.leave, applied.leave},
+          .scores = {after.my_score, after.opp_score}};
+}
+
+// The residual of each contender's sims of job `p` (its start s is the
+// contender) against the prior at its position.
+std::vector<MapResidual> job_residuals(const PoolJob& job, const PoolPosition& p,
+                                       const RolloutStart& applied, RolloutValues& values) {
+  std::vector<CpuLeaf> leaves;
+  for (const RolloutStart& after : job.starts) leaves.push_back(after_reply_leaf(after, applied));
+  const std::vector<LeafPrediction> priors = values.predict(leaves);
+  std::vector<MapResidual> out;
+  for (size_t k = 0; k < job.starts.size(); ++k) {
+    out.push_back(map_residual(p.maps[k], priors[k], job.starts[k].board, p.labels[k].win_prob));
+  }
+  return out;
+}
+
 // The most sims any one move of the replies to `which` gets: the labeler's
 // budget.
 int most_sims(const std::vector<std::vector<BobReply>>& replies, const std::vector<size_t>& which) {
@@ -144,15 +166,21 @@ BobReplies bob_replies(const AliceTurn& turn, const std::vector<size_t>& which,
 
 ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                    const std::vector<std::vector<BobReply>>& replies,
-                                   RolloutValues& values, const Dictionary& dict, uint64_t seed) {
+                                   RolloutValues& values, const Dictionary& dict, uint64_t seed,
+                                   bool residuals) {
   const size_t racks = turn.bob_racks.size();
   ReplyPayoffs out{.payoffs = std::vector<std::vector<std::vector<double>>>(turn.candidates.size()),
                    .values = std::vector<double>(turn.candidates.size(), kPruned),
+                   .residuals = {},
                    .sims = 0};
+  if (residuals) out.residuals.resize(turn.candidates.size());
   for (size_t c : which) {
     out.payoffs[c].resize(racks);
+    if (residuals) out.residuals[c].resize(racks);
     out.values[c] = 0.0;
   }
+  // The jobs by (candidate, rack), kept for the residuals' positions.
+  std::vector<std::vector<PoolJob>> kept(residuals ? turn.candidates.size() : 0);
   ChunkedJobs jobs(which.size(), [&](size_t chunk) {
     const size_t c = which[chunk];
     std::vector<std::pair<size_t, PoolJob>> made(racks);
@@ -161,19 +189,26 @@ ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size
                                                 moves_of(replies[c][i]), sims_of(replies[c][i]),
                                                 dict, rack_seed(seed, kAfterReplyDomain, i))};
     });
+    if (residuals) {
+      kept[c].clear();
+      for (const auto& [key, job] : made) kept[c].push_back(job);
+    }
     return made;
   });
   // The leaf values each sim from Bob's side, who moved last.
-  out.sims = label_all(values, {.rollouts = most_sims(replies, which), .race = false}, jobs,
-                       [&](size_t key, const PoolPosition& p) {
-                         const size_t c = key / racks;
-                         const size_t i = key % racks;
-                         for (size_t k = 0; k < p.labels.size(); ++k) {
-                           const double payoff = 1.0 - p.labels[k].win_prob;
-                           out.payoffs[c][i].push_back(payoff);
-                           out.values[c] += replies[c][i][k].weight * payoff / double(racks);
-                         }
-                       });
+  out.sims =
+    label_all(values, {.rollouts = most_sims(replies, which), .race = false, .sum_maps = residuals},
+              jobs, [&](size_t key, const PoolPosition& p) {
+                const size_t c = key / racks;
+                const size_t i = key % racks;
+                for (size_t k = 0; k < p.labels.size(); ++k) {
+                  const double payoff = 1.0 - p.labels[k].win_prob;
+                  out.payoffs[c][i].push_back(payoff);
+                  out.values[c] += replies[c][i][k].weight * payoff / double(racks);
+                }
+                if (residuals)
+                  out.residuals[c][i] = job_residuals(kept[c][i], p, turn.applied[c], values);
+              });
   return out;
 }
 

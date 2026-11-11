@@ -52,6 +52,68 @@ double payoff_range(const std::vector<double>& payoffs) {
   return *hi - *lo;
 }
 
+// A MapResidual as one row of numbers, in this order.
+constexpr const char* kResidualFields[] = {"sims",
+                                           "squares",
+                                           "points_r2",
+                                           "points_noise",
+                                           "points_var",
+                                           "points_leaf_var",
+                                           "points_prior_var",
+                                           "ownership_r2",
+                                           "ownership_noise",
+                                           "end_r2",
+                                           "end_noise",
+                                           "end_var",
+                                           "end_leaf_var",
+                                           "end_prior_var",
+                                           "going_out_r2",
+                                           "going_out_noise",
+                                           "value_r",
+                                           "ownership_shift_0",
+                                           "ownership_shift_1",
+                                           "ownership_shift_2",
+                                           "ownership_shift_3",
+                                           "ownership_shift_4",
+                                           "going_out_shift_0",
+                                           "going_out_shift_1",
+                                           "going_out_shift_2"};
+
+json::array residual_json(const MapResidual& r) {
+  json::array out{r.sims,
+                  r.squares,
+                  r.points_r2,
+                  r.points_noise,
+                  r.points_var,
+                  r.points_leaf_var,
+                  r.points_prior_var,
+                  r.ownership_r2,
+                  r.ownership_noise,
+                  r.end_r2,
+                  r.end_noise,
+                  r.end_var,
+                  r.end_leaf_var,
+                  r.end_prior_var,
+                  r.going_out_r2,
+                  r.going_out_noise,
+                  r.value_r};
+  for (const double d : r.ownership_shift) out.push_back(d);
+  for (const double d : r.going_out_shift) out.push_back(d);
+  return out;
+}
+
+// The residual summaries after one candidate, by rack then contender, each
+// in kResidualFields' order.
+json::array residuals_json(const std::vector<std::vector<MapResidual>>& by_rack) {
+  json::array out;
+  for (const std::vector<MapResidual>& contenders : by_rack) {
+    json::array rack;
+    for (const MapResidual& r : contenders) rack.push_back(residual_json(r));
+    out.push_back(std::move(rack));
+  }
+  return out;
+}
+
 // What Bob's replies to one of Alice's candidates looked like.
 json::object reply_summary(const std::vector<BobReply>& replies, const std::vector<BobReply>& rerun,
                            const std::vector<std::vector<double>>& payoffs, const Board& board) {
@@ -97,22 +159,28 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
     if (t.searched[c]) {
       o["replies"] =
         reply_summary((*t.replies)[c], (*t.rerun)[c], t.payoffs->payoffs[c], turn.applied[c].board);
+      if (!t.payoffs->residuals.empty()) o["residuals"] = residuals_json(t.payoffs->residuals[c]);
     }
     candidates.push_back(std::move(o));
   }
-  const json::object out{{"agent", t.agent},
-                         {"thread", t.thread},
-                         {"game", t.game},
-                         {"ply", t.ply},
-                         {"bag", t.bag},
-                         {"bob_racks", turn.bob_racks.size()},
-                         {"subtree_pick", best_candidate(t.subtree_values)},
-                         {"hasty_pick", best_candidate(t.hasty_values)},
-                         {"sims",
-                          {{"first_pass", t.sims.first_pass},
-                           {"subtrees", t.sims.subtrees},
-                           {"after_replies", t.sims.after_replies}}},
-                         {"candidates", std::move(candidates)}};
+  json::object out{{"agent", t.agent},
+                   {"thread", t.thread},
+                   {"game", t.game},
+                   {"ply", t.ply},
+                   {"bag", t.bag},
+                   {"bob_racks", turn.bob_racks.size()},
+                   {"subtree_pick", best_candidate(t.subtree_values)},
+                   {"hasty_pick", best_candidate(t.hasty_values)},
+                   {"sims",
+                    {{"first_pass", t.sims.first_pass},
+                     {"subtrees", t.sims.subtrees},
+                     {"after_replies", t.sims.after_replies}}},
+                   {"candidates", std::move(candidates)}};
+  if (!t.payoffs->residuals.empty()) {
+    json::array fields;
+    for (const char* f : kResidualFields) fields.push_back(f);
+    out["residual_fields"] = std::move(fields);
+  }
   return json::serialize(out);
 }
 

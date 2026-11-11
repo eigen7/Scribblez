@@ -1,6 +1,7 @@
 #include "sim/rollout_values.h"
 
 #include "sim/sim_maps.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -55,6 +56,12 @@ CpuLeafFn synthetic_leaf() {
 
 CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf)
     : dict_(dict), leaf_(std::move(leaf)) {}
+
+std::vector<LeafPrediction> CpuRolloutValues::predict(const std::vector<CpuLeaf>& leaves) {
+  std::vector<LeafPrediction> out(leaves.size());
+  util::parallel_for(leaves.size(), [&](size_t i) { out[i] = leaf_(leaves[i]); });
+  return out;
+}
 
 BatchValues CpuRolloutValues::run(const RolloutBatch& batch) {
   BatchValues out;

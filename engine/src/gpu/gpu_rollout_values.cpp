@@ -1,6 +1,7 @@
 #include "gpu/gpu_rollout_values.h"
 
 #include "encoding/input_encoder.h"
+#include "encoding/leaf_eval_input_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
@@ -47,8 +48,43 @@ nn::NeuralNetParams<nn::LeafEvalSpec> net_params(const GpuRolloutValues::Params&
 
 GpuRolloutValues::GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq,
                                    const Params& params)
-    : dict_(dict), rollouts_(dict, eq), net_(net_params(params, eq)) {
+    : dict_(dict),
+      leave_values_(eq.leave_values()),
+      rollouts_(dict, eq),
+      net_(net_params(params, eq)) {
   net_.load();
+}
+
+std::vector<LeafPrediction> GpuRolloutValues::predict(const std::vector<CpuLeaf>& leaves) {
+  std::vector<LeafPrediction> out(leaves.size());
+  std::vector<float> row(LeafEvalInputEncoder::kInputFloats);
+  const int n = int(leaves.size());
+  for (int first = 0; first < n; first += net_.max_rows()) {
+    const int count = std::min(net_.max_rows(), n - first);
+    for (int i = 0; i < count; ++i) {
+      const CpuLeaf& leaf = leaves[size_t(first + i)];
+      LeafEvalInputEncoder::encode(
+        {&leaf.board, leaf.leaves[0], leaf.leaves[1], leaf.scores[0] - leaf.scores[1]}, dict_,
+        leave_values_, row.data());
+      nn::stage_board_row(net_, row.data(), i);
+    }
+    net_.predict(count);
+    for (int i = 0; i < count; ++i) out[size_t(first + i)] = host_prediction(i);
+  }
+  return out;
+}
+
+LeafPrediction GpuRolloutValues::host_prediction(int row) {
+  LeafPrediction p;
+  p.wld = wld_from_logits(net_.host<nn::WldOutput>() + 3 * row);
+  const auto copy = [row](const float* rows, auto& dst) {
+    std::copy_n(rows + size_t(row) * dst.size(), dst.size(), dst.begin());
+  };
+  copy(net_.host<nn::OwnershipOutput>(), p.ownership);
+  copy(net_.host<nn::SquarePointsOutput>(), p.square_points);
+  copy(net_.host<nn::GoingOutOutput>(), p.going_out);
+  copy(net_.host<nn::EndPointsOutput>(), p.end_points);
+  return p;
 }
 
 BatchValues GpuRolloutValues::run(const RolloutBatch& batch) {

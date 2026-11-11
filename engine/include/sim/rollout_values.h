@@ -39,6 +39,8 @@ struct RolloutOutcome {
   double win_value() const { return scribblez::win_value(wld); }
 };
 
+struct LeafPrediction;
+
 // A batch valued: outcomes[k] for batch.tasks[k], and maps[s] for
 // batch.starts[s] when the batch sums its maps.
 struct BatchValues {
@@ -51,6 +53,10 @@ class RolloutValues {
   virtual ~RolloutValues() = default;
 
   virtual BatchValues run(const RolloutBatch& batch) = 0;
+  // The leaf's prediction at each of `leaves`, as the sims' leaf would be
+  // valued there: the prior a sim's maps are read against when `leaves` are
+  // the sims' starts (agent/bob_subtree.h).
+  virtual std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) = 0;
 };
 
 // A leaf network's prediction at a rollout's leaf, from player 0's side (the
@@ -81,6 +87,7 @@ class CpuRolloutValues : public RolloutValues {
   CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf);
 
   BatchValues run(const RolloutBatch& batch) override;
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override;
 
  private:
   const Dictionary& dict_;

@@ -1,6 +1,7 @@
 #include "sim/pool_labeler.h"
 
 #include "sim/pool_labels.h"
+#include "sim/sim_maps.h"
 #include "util/exception.h"
 
 #include <algorithm>
@@ -72,6 +73,7 @@ void PoolLabeler::top_up(const std::function<std::optional<PoolJob>()>& next) {
     f.order = pulled_++;
     f.job = std::move(*job);
     f.rollouts.resize(f.job.record.moves.size());
+    if (params_.sum_maps) f.maps.assign(f.rollouts.size(), rollout_abi::SimMaps{});
     f.alive.resize(f.rollouts.size());
     std::iota(f.alive.begin(), f.alive.end(), size_t(0));
     for (const Move& m : f.job.record.moves) f.keep.push_back(m.type() == MoveType::PASS);
@@ -96,8 +98,11 @@ void PoolLabeler::begin_round(Flight& f) const {
 
 void PoolLabeler::launch() {
   RolloutBatch batch;
-  // Where each launched task's outcome goes: the flight and its task.
+  batch.sum_maps = params_.sum_maps;
+  // Where each launched task's outcome goes: the flight and its task; and
+  // each batch start's maps: the flight and its candidate.
   std::vector<std::pair<size_t, rollout_abi::RolloutTask>> where;
+  std::vector<std::pair<size_t, uint32_t>> start_where;
   for (size_t k = 0; k < flight_.size() && int(batch.tasks.size()) < params_.launch_tasks; ++k) {
     Flight& f = flight_[k];
     if (f.pending.empty()) continue;
@@ -113,18 +118,24 @@ void PoolLabeler::launch() {
         s = int(batch.starts.size());
         batch.starts.push_back(f.job.starts[t.position]);
         batch.starts.back().group = group;
+        start_where.emplace_back(k, t.position);
       }
       batch.tasks.push_back({uint32_t(s), t.rollout});
       where.emplace_back(k, t);
       ++f.outstanding;
     }
   }
-  const std::vector<RolloutOutcome> outcomes = values_.run(batch).outcomes;
+  const BatchValues values = values_.run(batch);
+  const std::vector<RolloutOutcome>& outcomes = values.outcomes;
   for (size_t j = 0; j < outcomes.size(); ++j) {
     Flight& f = flight_[where[j].first];
     const rollout_abi::RolloutTask& t = where[j].second;
     f.rollouts[t.position][t.rollout] = to_rollout(outcomes[j]);
     --f.outstanding;
+  }
+  for (size_t s = 0; s < values.maps.size(); ++s) {
+    const auto [k, c] = start_where[s];
+    add_sim_maps(flight_[k].maps[c], values.maps[s]);
   }
   ++stats_.launches;
   stats_.tasks += (long long)outcomes.size();
@@ -142,6 +153,7 @@ void PoolLabeler::settle() {
     }
     f.job.record.labels = pool_labels(f.rollouts);
     f.job.record.rollout_values = rollout_values(f.rollouts);
+    f.job.record.maps = std::move(f.maps);
     finished_[f.order - emitted_] = std::move(f.job.record);
     f.finished = true;
   }
