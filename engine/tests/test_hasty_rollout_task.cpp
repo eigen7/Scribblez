@@ -537,8 +537,9 @@ HandHeads::HandHeads() {
 }  // namespace
 
 // A leaf's completion, against values worked by hand: an open square gets
-// the ownership softmax and points E[p] and Var[p] + E[p]^2 in points, a
-// settled square nothing, and an open end of game likewise from its heads.
+// the ownership softmax and its squares, points E[p] and E[p]^2 in points
+// with Var[p] apart, a settled square nothing, and an open end of game
+// likewise from its heads.
 TEST(SimMaps, ALeafCompletesItsOpenSquaresAndEndFromItsOwnRow) {
   const HandHeads hand;
   rollout_abi::RolloutFates f{};
@@ -550,16 +551,24 @@ TEST(SimMaps, ALeafCompletesItsOpenSquaresAndEndFromItsOwnRow) {
   rollout_abi::add_end_completion(m, f, hand.rows(), 1);
   for (int c = 0; c < rollout_abi::kFateClasses; ++c) {
     EXPECT_NEAR(m.class_sum[c][0], kSquareProbs[size_t(c)], 1e-6f) << "class " << c;
+    EXPECT_NEAR(m.class_sq_sum[c][0], kSquareProbs[size_t(c)] * kSquareProbs[size_t(c)], 1e-6f)
+      << "class " << c;
     EXPECT_EQ(m.class_sum[c][1], 0.0f) << "class " << c;
   }
   EXPECT_NEAR(m.points_sum[0], 30.0f, 1e-4f);
-  EXPECT_NEAR(m.points_sq_sum[0], 400.0f + 900.0f, 1e-2f);
+  EXPECT_NEAR(m.points_sq_sum[0], 900.0f, 1e-2f);
+  EXPECT_NEAR(m.points_leaf_var[0], 400.0f, 1e-2f);
   EXPECT_EQ(m.points_sum[1], 0.0f);
   EXPECT_EQ(m.points_sq_sum[1], 0.0f);
-  for (int c = 0; c < rollout_abi::kWentOutClasses; ++c)
+  EXPECT_EQ(m.points_leaf_var[1], 0.0f);
+  for (int c = 0; c < rollout_abi::kWentOutClasses; ++c) {
     EXPECT_NEAR(m.went_out_sum[c], kWentOutProbs[size_t(c)], 1e-6f) << "class " << c;
+    EXPECT_NEAR(m.went_out_sq_sum[c], kWentOutProbs[size_t(c)] * kWentOutProbs[size_t(c)], 1e-6f)
+      << "class " << c;
+  }
   EXPECT_NEAR(m.end_points_sum, -10.0f, 1e-4f);
-  EXPECT_NEAR(m.end_points_sq_sum, 900.0f + 100.0f, 1e-2f);
+  EXPECT_NEAR(m.end_points_sq_sum, 100.0f, 1e-2f);
+  EXPECT_NEAR(m.end_points_leaf_var, 900.0f, 1e-2f);
 
   f.went_out = 1;
   rollout_abi::SimMaps settled{};
@@ -607,7 +616,8 @@ TEST(SimMaps, TheCpuBackendCompletesWhatTheLeavesLeftOpen) {
   const float var =
     predictions[0].end_points[1] * rollout_abi::kLeafPointsScale * rollout_abi::kLeafPointsScale;
   EXPECT_NEAR(m.end_points_sum, m.sims * mean, 1e-3f);
-  EXPECT_NEAR(m.end_points_sq_sum, m.sims * (var + mean * mean), 1e-2f);
+  EXPECT_NEAR(m.end_points_sq_sum, m.sims * mean * mean, 1e-2f);
+  EXPECT_NEAR(m.end_points_leaf_var, m.sims * var, 1e-2f);
 }
 
 namespace {

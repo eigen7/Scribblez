@@ -116,21 +116,29 @@ struct RolloutFates {
   int16_t end_points;  // 0 when open
 };
 
-// A start's rollouts summed into its maps, as far as they settled them: per
-// square, how many rollouts gave it each class, and the sum and the sum of
-// squares of its points (0 for the open and the unsettled); who went out,
-// likewise; and the rollouts counted. A rollout that stopped at a leaf adds
-// the leaf network's prediction for what it left open (add_square_completion,
-// add_end_completion): class probabilities, and the points' mean and mean
-// square, so the sums are float. The device's sums match the CPU
-// reference's (sim/sim_maps.h says how closely).
+// A start's rollouts summed into its maps. Each rollout contributes what it
+// settled and, where it stopped at a leaf, the leaf network's prediction of
+// the rest (add_square_completion, add_end_completion): per square, each
+// class's probability (1 or 0 when settled) and its square, and the expected
+// points (the move's when settled) and their square; who went out and the
+// end-of-game points likewise; and the rollouts counted. A sum of squares is
+// of each rollout's expected value, so sq_sum / n - mean^2 is the rollouts'
+// spread, the sampling noise of the mean; the network's own variance of what
+// it predicted is summed apart (*_leaf_var), for its calibration and for
+// the variance a rollout played to the end would show. The sums are float
+// for the completion's sake. The device's sums match the CPU reference's
+// (sim/sim_maps.h says how closely).
 struct SimMaps {
   float class_sum[kFateClasses][kSquares];
+  float class_sq_sum[kFateClasses][kSquares];
   float points_sum[kSquares];
   float points_sq_sum[kSquares];
+  float points_leaf_var[kSquares];
   float went_out_sum[kWentOutClasses];
+  float went_out_sq_sum[kWentOutClasses];
   float end_points_sum;
   float end_points_sq_sum;
+  float end_points_leaf_var;
   float sims;
 };
 
@@ -141,6 +149,7 @@ SCRIBBLEZ_HD inline void add_square_fate(SimMaps& m, int sq, const RolloutFates&
   const int fate = f.fate[sq];
   if (fate < 0 || fate >= kFateClasses) return;
   m.class_sum[fate][sq] += 1.0f;
+  m.class_sq_sum[fate][sq] += 1.0f;
   const int p = f.points[sq];
   m.points_sum[sq] += float(p);
   m.points_sq_sum[sq] += float(p * p);
@@ -151,6 +160,7 @@ SCRIBBLEZ_HD inline void add_end_fate(SimMaps& m, const RolloutFates& f) {
   m.sims += 1.0f;
   if (f.went_out < 0) return;
   m.went_out_sum[f.went_out] += 1.0f;
+  m.went_out_sq_sum[f.went_out] += 1.0f;
   const int p = f.end_points;
   m.end_points_sum += float(p);
   m.end_points_sq_sum += float(p * p);
@@ -173,8 +183,10 @@ constexpr int kEndPointsFloats = 2;
 // The heads' points unit (encoding/input_encoder.h's kScoreDiffInputScale).
 constexpr float kLeafPointsScale = 100.0f;
 
-// Adds to sum[c * stride] the softmax of logits[c * stride], c < classes.
-SCRIBBLEZ_HD inline void add_softmax(float* sum, const float* logits, int classes, int stride) {
+// Adds to sum[c * stride] the softmax of logits[c * stride], c < classes,
+// and its square to sq_sum[c * stride].
+SCRIBBLEZ_HD inline void add_softmax(float* sum, float* sq_sum, const float* logits, int classes,
+                                     int stride) {
   constexpr int kMaxClasses = kFateClasses > kWentOutClasses ? kFateClasses : kWentOutClasses;
   float e[kMaxClasses];
   float top = logits[0];
@@ -184,15 +196,21 @@ SCRIBBLEZ_HD inline void add_softmax(float* sum, const float* logits, int classe
     e[c] = expf(logits[c * stride] - top);
     total += e[c];
   }
-  for (int c = 0; c < classes; ++c) sum[c * stride] += e[c] / total;
+  for (int c = 0; c < classes; ++c) {
+    const float p = e[c] / total;
+    sum[c * stride] += p;
+    sq_sum[c * stride] += p * p;
+  }
 }
 
 // Adds a predicted mean and variance, in the heads' unit, to the sums of
-// points and of their squares: E[p] and Var[p] + E[p]^2.
-SCRIBBLEZ_HD inline void add_moments(float& sum, float& sq_sum, float mean, float var) {
+// points, of their squares and of the network's variance, in points.
+SCRIBBLEZ_HD inline void add_moments(float& sum, float& sq_sum, float& var_sum, float mean,
+                                     float var) {
   const float p = mean * kLeafPointsScale;
   sum += p;
-  sq_sum += var * (kLeafPointsScale * kLeafPointsScale) + p * p;
+  sq_sum += p * p;
+  var_sum += var * (kLeafPointsScale * kLeafPointsScale);
 }
 
 // Adds square `sq` of a rollout that stopped at a leaf, if the rollout left
@@ -200,19 +218,21 @@ SCRIBBLEZ_HD inline void add_moments(float& sum, float& sq_sum, float mean, floa
 SCRIBBLEZ_HD inline void add_square_completion(SimMaps& m, int sq, const RolloutFates& f,
                                                const LeafHeadRows& h, int row) {
   if (f.fate[sq] != kFateOpen) return;
-  add_softmax(&m.class_sum[0][sq], h.ownership + row * kOwnershipFloats + sq, kFateClasses,
-              kSquares);
+  add_softmax(&m.class_sum[0][sq], &m.class_sq_sum[0][sq],
+              h.ownership + row * kOwnershipFloats + sq, kFateClasses, kSquares);
   const float* points = h.square_points + row * kSquarePointsFloats;
-  add_moments(m.points_sum[sq], m.points_sq_sum[sq], points[sq], points[kSquares + sq]);
+  add_moments(m.points_sum[sq], m.points_sq_sum[sq], m.points_leaf_var[sq], points[sq],
+              points[kSquares + sq]);
 }
 
 // Adds the end of the game of a rollout that stopped at a leaf, if open.
 SCRIBBLEZ_HD inline void add_end_completion(SimMaps& m, const RolloutFates& f,
                                             const LeafHeadRows& h, int row) {
   if (f.went_out != kWentOutOpen) return;
-  add_softmax(m.went_out_sum, h.going_out + row * kWentOutClasses, kWentOutClasses, 1);
+  add_softmax(m.went_out_sum, m.went_out_sq_sum, h.going_out + row * kWentOutClasses,
+              kWentOutClasses, 1);
   const float* end = h.end_points + row * kEndPointsFloats;
-  add_moments(m.end_points_sum, m.end_points_sq_sum, end[0], end[1]);
+  add_moments(m.end_points_sum, m.end_points_sq_sum, m.end_points_leaf_var, end[0], end[1]);
 }
 
 // A rollout's start, flattened: a candidate applied to the board, so we

@@ -1374,14 +1374,22 @@ __global__ void __launch_bounds__(kThreads)
   const int t = threadIdx.x;
   const uint32_t first = start_offsets[blockIdx.x], end = start_offsets[blockIdx.x + 1];
   if (t < kSquares) {
-    for (int c = 0; c < kFateClasses; ++c) m.class_sum[c][t] = 0.0f;
+    for (int c = 0; c < kFateClasses; ++c) {
+      m.class_sum[c][t] = 0.0f;
+      m.class_sq_sum[c][t] = 0.0f;
+    }
     m.points_sum[t] = 0.0f;
     m.points_sq_sum[t] = 0.0f;
+    m.points_leaf_var[t] = 0.0f;
     for (uint32_t i = first; i < end; ++i) add_square_fate(m, t, fates[tasks_by_start[i]]);
   } else if (t == kSquares) {
-    for (int c = 0; c < kWentOutClasses; ++c) m.went_out_sum[c] = 0.0f;
+    for (int c = 0; c < kWentOutClasses; ++c) {
+      m.went_out_sum[c] = 0.0f;
+      m.went_out_sq_sum[c] = 0.0f;
+    }
     m.end_points_sum = 0.0f;
     m.end_points_sq_sum = 0.0f;
+    m.end_points_leaf_var = 0.0f;
     m.sims = 0.0f;
     for (uint32_t i = first; i < end; ++i) add_end_fate(m, fates[tasks_by_start[i]]);
   }

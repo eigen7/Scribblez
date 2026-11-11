@@ -28,6 +28,12 @@ TasksByStart tasks_by_start(const RolloutBatch& batch) {
   return bin_by_start(start_of, batch.starts.size());
 }
 
+void add_sim_maps(SimMaps& maps, const SimMaps& more) {
+  float* dst = reinterpret_cast<float*>(&maps);
+  const float* src = reinterpret_cast<const float*>(&more);
+  for (size_t i = 0; i < sizeof(SimMaps) / sizeof(float); ++i) dst[i] += src[i];
+}
+
 std::vector<SimMaps> sum_sim_maps(const std::vector<RolloutFates>& fates,
                                   const TasksByStart& by_start) {
   std::vector<SimMaps> maps(by_start.offsets.size() - 1);
@@ -62,11 +68,15 @@ namespace {
 // The arrays of a SimMaps, in order, as (name, elements).
 constexpr std::pair<const char*, int> kSimMapsFields[] = {
   {"class_sum", rollout_abi::kFateClasses* rollout_abi::kSquares},
+  {"class_sq_sum", rollout_abi::kFateClasses* rollout_abi::kSquares},
   {"points_sum", rollout_abi::kSquares},
   {"points_sq_sum", rollout_abi::kSquares},
+  {"points_leaf_var", rollout_abi::kSquares},
   {"went_out_sum", rollout_abi::kWentOutClasses},
+  {"went_out_sq_sum", rollout_abi::kWentOutClasses},
   {"end_points_sum", 1},
   {"end_points_sq_sum", 1},
+  {"end_points_leaf_var", 1},
   {"sims", 1},
 };
 
