@@ -685,9 +685,16 @@ between subtrees lies there.
 **Training data: grouped pools.** The store input learns from the same kind
 of decision Bob's subtrees make, a player to move choosing by hasty-reply
 sims, grouped the way a turn's evidence is. A generator on the pool labeler
-takes a self-play position, the parent, with Alice to move; her proposer's
-moves there (the static-equity top `M`); and `R` racks sampled for Bob from
-her belief, the same racks under every move, as her search deals them. The
+takes a self-play position, the parent, with Alice to move; her candidates
+there; and `R` racks sampled for Bob from her belief, the same racks under
+every move, as her search deals them. The candidates are the move the game
+played, her proposer's (the static-equity top), and a stratified draw from
+the ranking below them: a few from the contention zone, one from the tail,
+and an exchange or pass. The draws put candidates that differ in mechanism
+beside the proposer's near-duplicates (at Richards–Johnson, the exchange
+beside the scoring plays), which is where evidence under one candidate says
+the most about another, and they train the network on the candidates the
+search's [steering](#steering) may admit. The
 parent keeps more than a rack in the bag, so that Bob draws from a bag after
 any of her moves ([When Alice's move empties the
 bag](#when-alices-move-empties-the-bag) is the search's concern). At each of
@@ -1247,15 +1254,19 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    `policy_set_pool_tool --group-positions-per-game`, writing a `.group`
    beside each `.pool` (data/group_log.h); measured 2026-11-11 on 10
    HastyBot games, one group each, under the `v1` leaf network and leave
-   inference model at the defaults (4 moves, 8 racks, 100 rollouts per
-   reply raced, maps over 4, 8 and 12 rollouts): a group is 32 pools of
-   about 620 replies, 364,000 rollouts and 3.2 s of GPU time on the dev
-   laptop (the leaf network is the larger half of it), and 4.7 MB, of
-   which the pools are 1.5 MB (per pool 22 KB of labels and 26 KB of the
-   rollouts' values cut to the first 12) and the maps 3.1 MB (2.8 leading
-   replies per pool, three 11.8 KB float maps each). A chunk of 50 games
-   with a group per game is then 230 MB and 160 s; the dashboard workload
-   is the next slice.
+   inference model at the defaults (the played move and the static-equity
+   top 3, two draws from ranks 4 to 31, one from the tail and one exchange,
+   8 racks, 100 rollouts per reply raced, maps over 4, 8 and 12 rollouts): a
+   group is 64 pools of about 730 replies, 1.23 million rollouts and 11 s
+   of GPU time on the dev laptop (the rollout kernel is the larger part),
+   and 10.9 MB, of which the pools are 3.7 MB (58 KB each: labels, and the
+   rollouts' values cut to the first 12) and the maps 7.2 MB (3.2 leading
+   replies per pool, three 11.8 KB float maps each). The deep candidates'
+   pools cost what the head's do: Bob's replies and the race's rollouts are
+   about the same at every stratum. A chunk of 50 games with a group per
+   game is then 550 MB and 9 minutes; groups per game is the lever, and
+   fp16 maps would halve the bytes. The dashboard workload is the next
+   slice.
 10. **The search network with an empty store:** the continuation heads,
     pretrained on game records, and the policy and value heads, trained on
     self-play pools from the mover's side. *Measure:* how often the
