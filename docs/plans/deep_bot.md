@@ -1214,7 +1214,20 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    network's predictions, and the agent forms residuals against the leaf
    network's prediction on the post-move position (v0, [The search
    network](#the-search-network)). *Measure:* the noise of a square's
-   residual against the rollout count.
+   residual against the rollout count. Done; measured on DeepBot's
+   after-reply sims under the `v1` leaf network, 3 games each at 4, 12 and
+   48 sims per rack (`py/scripts/deep_bot/residual_noise.py`), per start
+   summed over its ~180 empty squares: the points residual's squared signal
+   is about 1,300 points² (2.7 points rms per square) at every rollout
+   count, and its sampling noise about 23,000 / n, so the noise falls below
+   the signal between 12 and 24 sims, at 12 (the agent's) it is 1.6x the
+   signal and at 48 0.4x. The ownership residual's signal is within its
+   noise at every count (about 1 summed squared share against 1.0 at 12):
+   two plies move the prior's ownership little. The end-of-game points
+   residual carries a signal of about 8 points² against a noise of 0.7 at
+   12 sims. The prior's variance is calibrated: it equals the rollouts'
+   spread plus the leaf's variance at every count, and its value agrees
+   with the sims' mean to 0.002.
 9. **Grouped pools.** The generator on the pool labeler, as a dashboard
    workload, writing the scalars and the search-noise maps beside the
    pools. *Measure:* bytes and GPU time per group.
