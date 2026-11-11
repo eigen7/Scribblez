@@ -5,7 +5,8 @@
 // row straight into the leaf network's TensorRT input buffers, and the
 // network's win/draw/loss logits come back to the host. For a batch that sums
 // its maps, a third kernel completes them from the network's continuation
-// heads in its output buffers, and only the maps come back.
+// heads where it wrote them, in its device output buffers, and the maps come
+// back.
 
 #include "gpu/hasty_rollouts_gpu.h"
 #include "nn/model_specs.h"

@@ -499,6 +499,74 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
   }
 }
 
+namespace {
+
+// The fate classes' probabilities the hand-built heads below predict.
+constexpr std::array<float, rollout_abi::kFateClasses> kSquareProbs = {0.1f, 0.2f, 0.3f, 0.15f,
+                                                                       0.25f};
+constexpr std::array<float, rollout_abi::kWentOutClasses> kWentOutProbs = {0.5f, 0.3f, 0.2f};
+
+// Two rows of heads: row 0 junk, row 1 predicting kSquareProbs on square 0
+// with points mean 0.3 and variance 0.04 (in the heads' unit), and
+// kWentOutProbs with end points mean -0.1 and variance 0.09.
+struct HandHeads {
+  std::vector<float> ownership = std::vector<float>(2 * rollout_abi::kOwnershipFloats, 9.0f);
+  std::vector<float> square_points = std::vector<float>(2 * rollout_abi::kSquarePointsFloats, 9.0f);
+  std::vector<float> going_out = std::vector<float>(2 * rollout_abi::kWentOutClasses, 9.0f);
+  std::vector<float> end_points = std::vector<float>(2 * rollout_abi::kEndPointsFloats, 9.0f);
+
+  HandHeads();
+  rollout_abi::LeafHeadRows rows() const {
+    return {ownership.data(), square_points.data(), going_out.data(), end_points.data()};
+  }
+};
+
+HandHeads::HandHeads() {
+  float* own = ownership.data() + rollout_abi::kOwnershipFloats;
+  for (int c = 0; c < rollout_abi::kFateClasses; ++c)
+    own[c * rollout_abi::kSquares] = std::log(kSquareProbs[size_t(c)]);
+  float* points = square_points.data() + rollout_abi::kSquarePointsFloats;
+  points[0] = 0.3f;
+  points[rollout_abi::kSquares] = 0.04f;
+  for (int c = 0; c < rollout_abi::kWentOutClasses; ++c)
+    going_out[size_t(rollout_abi::kWentOutClasses + c)] = std::log(kWentOutProbs[size_t(c)]);
+  end_points[2] = -0.1f;
+  end_points[3] = 0.09f;
+}
+
+}  // namespace
+
+// A leaf's completion, against values worked by hand: an open square gets
+// the ownership softmax and points E[p] and Var[p] + E[p]^2 in points, a
+// settled square nothing, and an open end of game likewise from its heads.
+TEST(SimMaps, ALeafCompletesItsOpenSquaresAndEndFromItsOwnRow) {
+  const HandHeads hand;
+  rollout_abi::RolloutFates f{};
+  for (int sq = 0; sq < rollout_abi::kSquares; ++sq) f.fate[sq] = rollout_abi::kFateStaysEmpty;
+  f.fate[0] = rollout_abi::kFateOpen;
+  f.went_out = rollout_abi::kWentOutOpen;
+  rollout_abi::SimMaps m{};
+  for (int sq = 0; sq < 2; ++sq) rollout_abi::add_square_completion(m, sq, f, hand.rows(), 1);
+  rollout_abi::add_end_completion(m, f, hand.rows(), 1);
+  for (int c = 0; c < rollout_abi::kFateClasses; ++c) {
+    EXPECT_NEAR(m.class_sum[c][0], kSquareProbs[size_t(c)], 1e-6f) << "class " << c;
+    EXPECT_EQ(m.class_sum[c][1], 0.0f) << "class " << c;
+  }
+  EXPECT_NEAR(m.points_sum[0], 30.0f, 1e-4f);
+  EXPECT_NEAR(m.points_sq_sum[0], 400.0f + 900.0f, 1e-2f);
+  EXPECT_EQ(m.points_sum[1], 0.0f);
+  EXPECT_EQ(m.points_sq_sum[1], 0.0f);
+  for (int c = 0; c < rollout_abi::kWentOutClasses; ++c)
+    EXPECT_NEAR(m.went_out_sum[c], kWentOutProbs[size_t(c)], 1e-6f) << "class " << c;
+  EXPECT_NEAR(m.end_points_sum, -10.0f, 1e-4f);
+  EXPECT_NEAR(m.end_points_sq_sum, 900.0f + 100.0f, 1e-2f);
+
+  f.went_out = 1;
+  rollout_abi::SimMaps settled{};
+  rollout_abi::add_end_completion(settled, f, hand.rows(), 1);
+  EXPECT_EQ(sim_maps_difference(settled, rollout_abi::SimMaps{}), "");
+}
+
 // Mid-game, where every rollout stops at a leaf: the CPU backend's maps are
 // the exact sums completed by each leaf's heads, every rollout counted once,
 // and the end of the game is the leaf's prediction alone.
@@ -573,6 +641,25 @@ TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
   for (size_t i = 0; i < outcomes.size(); ++i) {
     EXPECT_EQ(outcomes[i].result.game_over, 1) << "rollout " << i;
     EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
+  }
+}
+
+// A game that ended inside its rollout leaves nothing open, so the CPU
+// backend's maps are the exact sums alone, every rollout counted once.
+TEST(SimMaps, FinishedGamesAddNoCompletion) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/8);
+  ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
+  batch.sum_maps = true;
+  std::vector<rollout_abi::RolloutFates> fates;
+  run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
+  const std::vector<rollout_abi::SimMaps> exact = sum_sim_maps(fates, tasks_by_start(batch));
+  const BatchValues values = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
+  ASSERT_EQ(values.maps.size(), exact.size());
+  for (size_t s = 0; s < exact.size(); ++s) {
+    EXPECT_EQ(sim_maps_difference(values.maps[s], exact[s]), "") << "start " << s;
+    EXPECT_EQ(completion_gap(values.maps[s]), 0.0f) << "start " << s;
   }
 }
 

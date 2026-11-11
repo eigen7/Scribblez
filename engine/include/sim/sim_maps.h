@@ -5,8 +5,8 @@
 // stopped at a leaf left open: the reference for the device reduction. The
 // exact sums add the same rollouts in the same order as the device, so they
 // are bit-identical; both bin a batch's tasks by start here, so the order is
-// one definition. The completion adds the same terms, grouped otherwise on
-// the device (gpu/rollout_kernel.cu), so it agrees to rounding.
+// one definition. The completion adds the same terms but agrees only to
+// rounding (gpu/rollout_kernel.cu's kSliceRows says why).
 
 #include "gpu/rollout_abi.h"
 #include "sim/hasty_rollout_task.h"

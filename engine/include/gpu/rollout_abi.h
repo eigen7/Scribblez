@@ -122,10 +122,8 @@ struct RolloutFates {
 // likewise; and the rollouts counted. A rollout that stopped at a leaf adds
 // the leaf network's prediction for what it left open (add_square_completion,
 // add_end_completion): class probabilities, and the points' mean and mean
-// square, so the sums are float. The exact sums of the device are
-// bit-identical to the CPU reference's (sim/sim_maps.h); the completed ones
-// agree to rounding, since the device sums a start's leaves in slices and
-// the two sides' exp differ in the last bits.
+// square, so the sums are float. The device's sums match the CPU
+// reference's (sim/sim_maps.h says how closely).
 struct SimMaps {
   float class_sum[kFateClasses][kSquares];
   float points_sum[kSquares];

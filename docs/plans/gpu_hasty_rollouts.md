@@ -438,8 +438,7 @@ and keeps the device's sums repeatable. They match the CPU reference
 (`complete_sim_maps`) to rounding, not bit for bit (the grouping and the two
 sides' exp differ), which `gpu_kernel_tests` checks from stand-in heads;
 `gpu_rollout_demo --leaf-model` checks a real network's completed maps count
-every rollout once (2.6e-6 of the rollouts off, at the demo's defaults with
-`--plies 16`).
+every rollout once.
 
 ### Batches of candidates
 

@@ -1364,6 +1364,9 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
 // thread t over square t and one more thread over the end of the game, as
 // sim/sim_maps.h's CPU sum does.
 
+// A SimMaps as floats, the way the kernels zero, copy and add them.
+constexpr int kSimMapsFloats = int(sizeof(SimMaps) / sizeof(float));
+
 __global__ void __launch_bounds__(kThreads)
   sim_maps_kernel(const RolloutFates* fates, const uint32_t* tasks_by_start,
                   const uint32_t* start_offsets, SimMaps* maps) {
@@ -1385,7 +1388,7 @@ __global__ void __launch_bounds__(kThreads)
   __syncthreads();
   const float* src = reinterpret_cast<const float*>(&m);
   float* dst = reinterpret_cast<float*>(maps + blockIdx.x);
-  for (int i = t; i < int(sizeof(SimMaps) / sizeof(float)); i += kThreads) dst[i] = src[i];
+  for (int i = t; i < kSimMapsFloats; i += kThreads) dst[i] = src[i];
 }
 
 // A start's chunk rows are summed in slices of up to kSliceRows rows, one
@@ -1393,7 +1396,8 @@ __global__ void __launch_bounds__(kThreads)
 // chunk can hold a thousand rows of one start, and one block walking them
 // would be a chain of dependent loads. The grouping is fixed by the chunks,
 // so the device's sums repeat run to run; they differ from sim/sim_maps.h's
-// complete_sim_maps, which adds row by row, only by rounding.
+// complete_sim_maps, which adds row by row, only by rounding, from that
+// grouping and from the two sides' exp differing in the last bits.
 constexpr int kSliceRows = 16;
 
 // rows_by_start[first, end): one slice of one start's rows.
@@ -1411,10 +1415,9 @@ __global__ void __launch_bounds__(kThreads)
                          const CompletionSlice* __restrict__ slices, LeafHeadRows heads,
                          SimMaps* __restrict__ partials) {
   __shared__ SimMaps m;
-  constexpr int kFloats = int(sizeof(SimMaps) / sizeof(float));
   float* shared = reinterpret_cast<float*>(&m);
   const int t = threadIdx.x;
-  for (int i = t; i < kFloats; i += kThreads) shared[i] = 0.0f;
+  for (int i = t; i < kSimMapsFloats; i += kThreads) shared[i] = 0.0f;
   __syncthreads();
   const CompletionSlice slice = slices[blockIdx.x];
   for (uint32_t i = slice.first; i < slice.end; ++i) {
@@ -1427,7 +1430,7 @@ __global__ void __launch_bounds__(kThreads)
   }
   __syncthreads();
   float* out = reinterpret_cast<float*>(partials + blockIdx.x);
-  for (int i = t; i < kFloats; i += kThreads) out[i] = shared[i];
+  for (int i = t; i < kSimMapsFloats; i += kThreads) out[i] = shared[i];
 }
 
 // One block per start: its slices' partials added to its maps in order.
@@ -1436,9 +1439,8 @@ __global__ void __launch_bounds__(kThreads)
                     const uint32_t* __restrict__ slice_offsets, SimMaps* __restrict__ maps) {
   const uint32_t first = slice_offsets[blockIdx.x], end = slice_offsets[blockIdx.x + 1];
   if (first == end) return;
-  constexpr int kFloats = int(sizeof(SimMaps) / sizeof(float));
   float* sums = reinterpret_cast<float*>(maps + blockIdx.x);
-  for (int i = threadIdx.x; i < kFloats; i += kThreads) {
+  for (int i = threadIdx.x; i < kSimMapsFloats; i += kThreads) {
     float v = sums[i];
     for (uint32_t s = first; s < end; ++s) v += reinterpret_cast<const float*>(partials + s)[i];
     sums[i] = v;
@@ -1812,33 +1814,18 @@ void complete_maps(DeviceTables* d, const uint32_t* tasks, int count, const uint
   cuda_check(cudaDeviceSynchronize(), "maps completion");
 }
 
-namespace {
-
-// `rows` rows of `row_floats` floats each, copied to a new device buffer.
-float* rows_to_device(const float* host, int rows, int row_floats) {
-  const size_t bytes = sizeof(float) * size_t(rows) * size_t(row_floats);
-  float* dev = nullptr;
-  cuda_check(cudaMalloc(&dev, bytes), "malloc heads");
-  cuda_check(cudaMemcpy(dev, host, bytes, cudaMemcpyHostToDevice), "heads upload");
-  return dev;
-}
-
-}  // namespace
-
 void complete_maps_from_host(DeviceTables* d, const uint32_t* tasks, int count,
                              const uint32_t* rows_by_start, const uint32_t* start_offsets,
                              size_t starts, const LeafHeadRows& heads) {
   if (count <= 0) return;
-  float* own = rows_to_device(heads.ownership, count, kOwnershipFloats);
-  float* points = rows_to_device(heads.square_points, count, kSquarePointsFloats);
-  float* going_out = rows_to_device(heads.going_out, count, kWentOutClasses);
-  float* end = rows_to_device(heads.end_points, count, kEndPointsFloats);
+  const size_t rows = size_t(count);
+  DeviceBuffer<float> own, points, going_out, end;
+  own.upload(heads.ownership, rows * kOwnershipFloats);
+  points.upload(heads.square_points, rows * kSquarePointsFloats);
+  going_out.upload(heads.going_out, rows * kWentOutClasses);
+  end.upload(heads.end_points, rows * kEndPointsFloats);
   complete_maps(d, tasks, count, rows_by_start, start_offsets, starts,
-                LeafHeadRows{own, points, going_out, end});
-  cudaFree(own);
-  cudaFree(points);
-  cudaFree(going_out);
-  cudaFree(end);
+                LeafHeadRows{own.data, points.data, going_out.data, end.data});
 }
 
 void download_maps(const DeviceTables* d, SimMaps* maps, size_t starts) {

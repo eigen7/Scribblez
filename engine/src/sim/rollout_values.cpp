@@ -60,7 +60,8 @@ BatchValues CpuRolloutValues::run(const RolloutBatch& batch) {
   BatchValues out;
   out.outcomes.resize(batch.tasks.size());
   // What the maps need, kept only for a batch that sums them.
-  const size_t kept = batch.sum_maps ? batch.tasks.size() : 0;
+  const bool sum_maps = batch.sum_maps;
+  const size_t kept = sum_maps ? batch.tasks.size() : 0;
   std::vector<rollout_abi::RolloutFates> fates(kept);
   std::vector<LeafPrediction> predictions(kept);
   std::vector<rollout_abi::LeafHeadRows> heads(kept, rollout_abi::LeafHeadRows{});
@@ -68,18 +69,18 @@ BatchValues CpuRolloutValues::run(const RolloutBatch& batch) {
                              [&](size_t k, const rollout_abi::RolloutResult& result,
                                  const CpuLeaf& leaf, const rollout_abi::RolloutFates& f) {
                                out.outcomes[k].result = result;
-                               if (kept) fates[k] = f;
+                               if (sum_maps) fates[k] = f;
                                if (result.game_over) {
                                  out.outcomes[k].wld = terminal_wld(result.diff);
                                  return;
                                }
                                const LeafPrediction p = leaf_(leaf);
                                out.outcomes[k].wld = p.wld;
-                               if (!kept) return;
+                               if (!sum_maps) return;
                                predictions[k] = p;
                                heads[k] = predictions[k].heads();
                              });
-  if (!kept) return out;
+  if (!sum_maps) return out;
   const TasksByStart by_start = tasks_by_start(batch);
   out.maps = sum_sim_maps(fates, by_start);
   complete_sim_maps(out.maps, fates, by_start, heads);
