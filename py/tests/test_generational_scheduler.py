@@ -130,9 +130,10 @@ def _tick_with_sidecar(paths, hooks, *, games=100):
     scheduler.tick(paths, cfg, hooks, chunk_games=_chunk_games)
 
 
-def _stage_sidecar(paths: TagPaths, name: str):
+def _stage_sidecar(paths: TagPaths, name: str, suffixes=(".forgone",)):
     paths.staging_dir.mkdir(parents=True, exist_ok=True)
-    (paths.staging_dir / f"{name}.forgone").write_text("sidecar")
+    for suffix in suffixes:
+        (paths.staging_dir / f"{name}{suffix}").write_text("sidecar")
 
 
 def test_chunks_move_with_their_sidecars(paths):
@@ -231,11 +232,11 @@ def test_held_out_chunks_fill_the_set_then_are_dropped(paths):
     held, kept = _names(True, 3, every), _names(False, 2, every)
     for name in held + kept:
         _stage(paths, name, 60)
-        _stage_sidecar(paths, name)
+        _stage_sidecar(paths, name, (".pool", ".group"))
     cfg = scheduler.SchedulerConfig(
         games_per_generation=100,
         open_ahead=1,
-        chunk_sidecars=(".forgone",),
+        chunk_sidecars=(".pool", ".group"),
         holdout_every=every,
         holdout_chunks=2,
     )
@@ -244,7 +245,8 @@ def test_held_out_chunks_fill_the_set_then_are_dropped(paths):
     # The first two held-out chunks, with their sidecars, make the set
     # complete; the third is ledgered and dropped.
     assert sorted(f.stem for f in held_dir.glob("*.slog")) == sorted(held[:2])
-    assert sorted(f.stem for f in held_dir.glob("*.forgone")) == sorted(held[:2])
+    for suffix in (".pool", ".group"):
+        assert sorted(f.stem for f in held_dir.glob(f"*{suffix}")) == sorted(held[:2])
     assert lifecycle.is_complete(held_dir)
     assert lifecycle.read_manifest(held_dir)["committed_games"] == 120
     assert not list(paths.staging_dir.iterdir())

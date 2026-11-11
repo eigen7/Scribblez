@@ -136,6 +136,21 @@ def test_groups_add_their_flags_and_sidecar_only_when_labeled():
     assert cmd[cmd.index("--group-top-moves") + 1] == "3"
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"group_map_sims": 101},  # above rollouts
+        {"group_map_steps": 13},  # above group_map_sims
+        {"group_mid_rank_limit": 3},  # not above group_top_moves
+        {"group_racks": 0},
+    ],
+)
+def test_bad_group_params_are_refused_at_configure_time(changes):
+    with pytest.raises(params.ParamsError):
+        PolicySetParams(group_positions_per_game=1, **changes)
+    PolicySetParams(**changes)  # groups off: the group_* params are unused
+
+
 def test_a_chunk_labels_its_groups_beside_its_pools(tmp_path):
     if not LEAVES.exists():
         pytest.skip("HastyBot leave values not installed")

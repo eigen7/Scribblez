@@ -94,14 +94,15 @@ def test_sidecars_are_written_and_delivered_before_their_slog(tmp_path, monkeypa
 
     def write(chunk_dir, threads):
         for slog in chunk_dir.glob("*.slog"):
-            slog.with_suffix(".side").write_bytes(b"side")
+            for suffix in (".a", ".b"):
+                slog.with_suffix(suffix).write_bytes(b"side")
 
     ctx = _ctx(tmp_path, sink, max_cycles=2)
-    sidecar = selfplay_gen.ChunkSidecar((".side",), write)
+    sidecar = selfplay_gen.ChunkSidecar((".a", ".b"), write)
     assert selfplay_gen.generate(ctx, "--type=greedy", False, 0.0, sidecar=sidecar) == 0
     want = []
     for c in calls:
-        want += [f"staging/{c.name}-local-0.side", f"staging/{c.name}-local-0.slog"]
+        want += [f"staging/{c.name}-local-0{s}" for s in (".a", ".b", ".slog")]
     assert [d[1] for d in sink.delivered] == want
 
 

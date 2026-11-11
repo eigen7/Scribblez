@@ -139,21 +139,50 @@ class PoolGroupParams:
     group_tail_moves: int = param(
         1, "groups: moves drawn from the ranks at group_mid_rank_limit and below"
     )
-    group_exchanges: int = param(1, "groups: exchanges or passes drawn among the mover's")
+    group_exchanges: int = param(
+        1, "groups: exchanges or passes drawn among the mover's candidates"
+    )
     group_mid_rank_limit: int = param(
         32, "groups: the exclusive rank bound between the mid and tail draws"
     )
     group_racks: int = param(8, "groups: racks sampled for the opponent, the same under every move")
     group_map_sims: int = param(
-        12, "groups: a search's sims per rack, the most rollouts a reply's maps sum"
+        12, "groups: rollouts per rack in the search whose replies are mapped; at most rollouts"
     )
     group_map_steps: int = param(
-        3, "groups: maps per leading reply, over its first map_sims * j / steps rollouts"
+        3,
+        "groups: maps per leading reply; map j (1..steps) covers its first "
+        "group_map_sims * j / steps rollouts; at most group_map_sims",
     )
 
     @property
     def groups(self) -> bool:
         return self.group_positions_per_game > 0
+
+    def group_errors(self, rollouts: int) -> list[str]:
+        """What GroupParams::validate (sim/grouped_pools.cpp) would reject, by
+        param name, so a bad tag fails when configured rather than at its
+        first labeled chunk. Empty with groups off."""
+        if not self.groups:
+            return []
+        checks = [
+            (self.group_top_moves >= 1, "group_top_moves must be >= 1"),
+            (
+                min(self.group_mid_moves, self.group_tail_moves, self.group_exchanges) >= 0,
+                "group_mid_moves, group_tail_moves and group_exchanges must be >= 0",
+            ),
+            (
+                self.group_mid_rank_limit > self.group_top_moves,
+                "group_mid_rank_limit must be > group_top_moves",
+            ),
+            (self.group_racks >= 1, "group_racks must be >= 1"),
+            (1 <= self.group_map_sims <= rollouts, "group_map_sims must be in [1, rollouts]"),
+            (
+                1 <= self.group_map_steps <= self.group_map_sims,
+                "group_map_steps must be in [1, group_map_sims]",
+            ),
+        ]
+        return [msg for ok, msg in checks if not ok]
 
 
 def chunk_sidecars(params: PoolGroupParams) -> tuple[str, ...]:
@@ -221,6 +250,8 @@ class PolicySetParams(PoolGroupParams, PoolLabelParams):
             raise params_mod.ParamsError(
                 "no form to train: set one of " + ", ".join(f"train_{n}" for n in FORM_NAMES)
             )
+        if errors := self.group_errors(self.rollouts):
+            raise params_mod.ParamsError(*errors)
 
 
 def _leave_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:
@@ -331,17 +362,16 @@ def pool_command(
     if model is not None:
         cmd += ["--leave-inference", str(model)]
     if groups is not None and groups.groups:
-        g = groups
         cmd += [
-            "--group-positions-per-game", str(g.group_positions_per_game),
-            "--group-top-moves", str(g.group_top_moves),
-            "--group-mid-moves", str(g.group_mid_moves),
-            "--group-tail-moves", str(g.group_tail_moves),
-            "--group-exchanges", str(g.group_exchanges),
-            "--group-mid-rank-limit", str(g.group_mid_rank_limit),
-            "--group-racks", str(g.group_racks),
-            "--group-map-sims", str(g.group_map_sims),
-            "--group-map-steps", str(g.group_map_steps),
+            "--group-positions-per-game", str(groups.group_positions_per_game),
+            "--group-top-moves", str(groups.group_top_moves),
+            "--group-mid-moves", str(groups.group_mid_moves),
+            "--group-tail-moves", str(groups.group_tail_moves),
+            "--group-exchanges", str(groups.group_exchanges),
+            "--group-mid-rank-limit", str(groups.group_mid_rank_limit),
+            "--group-racks", str(groups.group_racks),
+            "--group-map-sims", str(groups.group_map_sims),
+            "--group-map-steps", str(groups.group_map_steps),
         ]  # fmt: skip
     return cmd
 
