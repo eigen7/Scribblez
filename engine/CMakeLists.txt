@@ -75,6 +75,7 @@ add_library(scribblez_core STATIC
   src/sim/pool_labeler.cpp
   src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
+  src/sim/sim_maps.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
   src/agent/policy_bot.cpp

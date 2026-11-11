@@ -11,6 +11,7 @@
 #include "lexicon/leave_values.h"
 #include "lexicon/word_map.h"
 #include "rollout_kernel.h"
+#include "sim/sim_maps.h"
 
 #include <bit>
 #include <chrono>
@@ -212,22 +213,29 @@ rollout_gpu::BatchAbi batch_abi(const RolloutBatch& batch, const Dictionary& dic
     abi.groups.push_back(to_abi(g, uint32_t(abi.opp_leaves.size())));
     for (const Rack& leave : g.opp_leaves) abi.opp_leaves.push_back(to_abi(leave));
   }
+  if (batch.sum_maps) {
+    TasksByStart by_start = tasks_by_start(batch);
+    abi.tasks_by_start = std::move(by_start.tasks);
+    abi.start_offsets = std::move(by_start.offsets);
+  }
   return abi;
 }
 
 }  // namespace
 
-std::vector<rollout_abi::RolloutResult> GpuHastyRollouts::run(const RolloutBatch& batch,
-                                                              const Dictionary& dict) {
+GpuHastyRollouts::Output GpuHastyRollouts::run(const RolloutBatch& batch, const Dictionary& dict) {
   const rollout_gpu::BatchAbi abi = batch_abi(batch, dict);
-  std::vector<rollout_abi::RolloutResult> results(batch.tasks.size());
+  Output out;
+  out.results.resize(batch.tasks.size());
+  if (batch.sum_maps) out.maps.resize(batch.starts.size());
   double seconds[3];
   phase_cycles_.assign(rollout_gpu::kPhases, 0);
   counts_.assign(rollout_gpu::kCounts, 0);
-  rollout_gpu::run_rollouts(impl_->tables, abi, results.data(), seconds, phase_cycles_.data(),
-                            counts_.data());
+  rollout_gpu::run_rollouts(impl_->tables, abi, out.results.data(),
+                            batch.sum_maps ? out.maps.data() : nullptr, seconds,
+                            phase_cycles_.data(), counts_.data());
   timings_ = Timings{seconds[0], seconds[1], seconds[2]};
-  return results;
+  return out;
 }
 
 std::vector<GpuHastyRollouts::PhaseShare> GpuHastyRollouts::last_phase_shares() const {

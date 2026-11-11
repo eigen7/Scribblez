@@ -2,6 +2,7 @@
 
 #include "agent/agent.h"
 #include "agent/hasty_bot.h"
+#include "encoding/square_fates.h"
 #include "game/glyph.h"
 #include "game/tile.h"
 #include "util/work_pool.h"
@@ -15,7 +16,17 @@ namespace scribblez {
 
 using rollout_abi::PackedMove;
 using rollout_abi::PositionAbi;
+using rollout_abi::RolloutFates;
 using rollout_abi::RolloutResult;
+
+// The fates' classes are square_fates.h's.
+static_assert(rollout_abi::placer_fate(0, true) == int(SquareFate::kEvaluatorBingo));
+static_assert(rollout_abi::placer_fate(0, false) == int(SquareFate::kEvaluatorOther));
+static_assert(rollout_abi::placer_fate(1, true) == int(SquareFate::kOpponentBingo));
+static_assert(rollout_abi::placer_fate(1, false) == int(SquareFate::kOpponentOther));
+static_assert(rollout_abi::kFateStaysEmpty == int(SquareFate::kStaysEmpty));
+static_assert(rollout_abi::kFateFilledAtStart == int(SquareFate::kFilled));
+static_assert(rollout_abi::kFateClasses == kSquareFateClasses);
 
 void RolloutBatch::add_rollouts(uint32_t start, uint32_t first, uint32_t count) {
   for (uint32_t i = first; i < first + count; ++i) tasks.push_back({start, i});
@@ -175,7 +186,47 @@ struct RolloutState {
   rollout_abi::Bag bag;
   int scoreless = 0;  // consecutive passes and exchanges
   bool game_over = false;
+  RolloutFates fates;
 };
+
+// The fates before any ply: the start's tiles carry no label, every other
+// square is open, and the game has not ended.
+RolloutFates open_fates(const Board& board) {
+  RolloutFates f;
+  for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+    const bool empty = board.at(sq / BOARD_SIZE, sq % BOARD_SIZE).is_empty();
+    f.fate[sq] = empty ? rollout_abi::kFateOpen : rollout_abi::kFateFilledAtStart;
+    f.points[sq] = 0;
+  }
+  f.went_out = rollout_abi::kWentOutOpen;
+  f.end_points = 0;
+  return f;
+}
+
+// `mover` went out: the play-out bonus, and the end of the game.
+void go_out(RolloutState& st, int mover) {
+  const int bonus = 2 * st.racks[1 - mover].point_value();
+  st.scores[mover] += bonus;
+  st.game_over = true;
+  st.fates.went_out = int8_t(mover);
+  st.fates.end_points = int16_t(mover == 0 ? bonus : -bonus);
+}
+
+// Labels the squares `m` (by `mover`) fills.
+void record_placed(RolloutState& st, int mover, const Move& m) {
+  const int8_t fate = rollout_abi::placer_fate(mover, m.num_glyphs() == RACK_SIZE);
+  const int16_t points = int16_t(mover == 0 ? m.score() : -m.score());
+  visit_placed_squares(m, [&](int r, int c) {
+    st.fates.fate[r * BOARD_SIZE + c] = fate;
+    st.fates.points[r * BOARD_SIZE + c] = points;
+  });
+}
+
+// With the game over, a square still open stays empty for certain.
+void settle_open_squares(RolloutFates& f) {
+  for (int8_t& fate : f.fate)
+    if (fate == rollout_abi::kFateOpen) fate = rollout_abi::kFateStaysEmpty;
+}
 
 // The racks and the bag, in rollout_abi.h's order.
 RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::RolloutTask& task) {
@@ -186,7 +237,8 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   RolloutState st{.board = start.board,
                   .racks = {start.leave, opp_leave},
                   .scores = {start.my_score, start.opp_score},
-                  .bag = {}};
+                  .bag = {},
+                  .fates = open_fates(start.board)};
   fill_bag(group.pool, st.bag);
   for (int i = 0; i < opp_leave.size(); ++i)
     rollout_abi::remove_from_bag(st.bag, uint8_t(opp_leave.tiles()[size_t(i)].index()));
@@ -198,10 +250,7 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
   }
   st.leaves = st.racks;  // a player who never moves keeps its full rack as its leave
   // Our move went out with the bag empty: the game ended with it.
-  if (st.racks[0].empty()) {
-    st.scores[0] += 2 * st.racks[1].point_value();
-    st.game_over = true;
-  }
+  if (st.racks[0].empty()) go_out(st, 0);
   return st;
 }
 
@@ -209,8 +258,12 @@ RolloutState start_rollout(const RolloutBatch& batch, const rollout_abi::Rollout
 // (rollout_abi.h): each player loses its rack's value.
 void end_if_stalemate(RolloutState& st) {
   if (st.bag.remaining() > 0 || st.scoreless < 2) return;
-  for (int p = 0; p < 2; ++p) st.scores[p] -= st.racks[p].point_value();
+  const int v0 = st.racks[0].point_value(), v1 = st.racks[1].point_value();
+  st.scores[0] -= v0;
+  st.scores[1] -= v1;
   st.game_over = true;
+  st.fates.went_out = 2;
+  st.fates.end_points = int16_t(v1 - v0);
 }
 
 // HastyBot's move for `mover`, or a pass from an empty rack.
@@ -234,19 +287,16 @@ Move hasty_move(const RolloutState& st, int mover, const Dictionary& dict) {
 Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed,
               uint32_t rollout) {
   Rack& rack = st.racks[mover];
-  const Rack& other = st.racks[1 - mover];
   const Move m = hasty_move(st, mover, dict);
   for (int i = 0; i < m.num_glyphs(); ++i) rack.remove(m.glyph(i).rack_tile());
   st.leaves[mover] = rack;
   if (m.type() == MoveType::PLAY) {
     st.board.apply(m);
+    record_placed(st, mover, m);
     st.scores[mover] += m.score();
     st.scoreless = 0;
     draw_into(rack, st.bag, std::min(m.num_glyphs(), st.bag.remaining()), mover);
-    if (rack.empty()) {
-      st.scores[mover] += 2 * other.point_value();
-      st.game_over = true;
-    }
+    if (rack.empty()) go_out(st, mover);
   } else if (m.type() == MoveType::EXCHANGE) {
     draw_into(rack, st.bag, m.num_glyphs(), mover);
     for (int i = 0; i < m.num_glyphs(); ++i)
@@ -260,7 +310,7 @@ Move play_ply(RolloutState& st, int mover, const Dictionary& dict, uint64_t seed
 }
 
 RolloutResult run_one(const RolloutBatch& batch, const rollout_abi::RolloutTask& task,
-                      const Dictionary& dict, CpuLeaf* leaf) {
+                      const Dictionary& dict, CpuLeaf* leaf, RolloutFates* fates) {
   RolloutState st = start_rollout(batch, task);
   const uint64_t seed = batch.groups[batch.starts[task.position].group].seed;
   RolloutResult out;
@@ -274,7 +324,9 @@ RolloutResult run_one(const RolloutBatch& batch, const rollout_abi::RolloutTask&
   }
   out.game_over = st.game_over ? 1 : 0;
   out.diff = int16_t(st.scores[0] - st.scores[1]);
+  if (st.game_over) settle_open_squares(st.fates);
   if (leaf) *leaf = CpuLeaf{.board = st.board, .leaves = st.leaves, .scores = st.scores};
+  *fates = st.fates;
   return out;
 }
 
@@ -290,19 +342,26 @@ void for_each_hasty_rollout_cpu(const RolloutBatch& batch, const Dictionary& dic
   for (const RolloutStart& s : batch.starts) s.board.ensure_movegen_caches(dict);
   util::parallel_lanes(batch.tasks.size(), [&](util::LaneCursor& cursor) {
     CpuLeaf leaf;
-    for (size_t i; cursor.next(i);) each(i, run_one(batch, batch.tasks[i], dict, &leaf), leaf);
+    RolloutFates fates;
+    for (size_t i; cursor.next(i);) {
+      each(i, run_one(batch, batch.tasks[i], dict, &leaf, &fates), leaf, fates);
+    }
   });
 }
 
 std::vector<RolloutResult> run_hasty_rollouts_cpu(const RolloutBatch& batch, const Dictionary& dict,
-                                                  std::vector<CpuLeaf>* leaves_out) {
+                                                  std::vector<CpuLeaf>* leaves_out,
+                                                  std::vector<RolloutFates>* fates_out) {
   std::vector<RolloutResult> results(batch.tasks.size());
   const size_t leaves = leaves_out ? leaves_out->size() : 0;
-  for_each_hasty_rollout_cpu(batch, dict,
-                             [&](size_t k, const RolloutResult& result, const CpuLeaf& leaf) {
-                               results[k] = result;
-                               if (k < leaves) (*leaves_out)[k] = leaf;
-                             });
+  if (fates_out) fates_out->resize(batch.tasks.size());
+  for_each_hasty_rollout_cpu(
+    batch, dict,
+    [&](size_t k, const RolloutResult& result, const CpuLeaf& leaf, const RolloutFates& fates) {
+      results[k] = result;
+      if (k < leaves) (*leaves_out)[k] = leaf;
+      if (fates_out) (*fates_out)[k] = fates;
+    });
   return results;
 }
 

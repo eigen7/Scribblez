@@ -1008,47 +1008,67 @@ __device__ inline void record_leave(Smem& s, int player) {
 
 // With the bag empty, a second scoreless turn in a row ends the game as
 // rollout_abi.h describes: each player loses its rack's value.
-__device__ void end_if_stalemate(Smem& s) {
+__device__ void end_if_stalemate(Smem& s, RolloutFates& fates) {
   if (s.bag.remaining() > 0 || s.scoreless < 2) return;
   const int v0 = rack_value(s, 0), v1 = rack_value(s, 1);
   s.scores[0] -= v0;
   s.scores[1] -= v1;
   s.game_over = 1;
+  fates.went_out = 2;
+  fates.end_points = int16_t(v1 - v0);
+}
+
+// The mover went out: the play-out bonus, and the end of the game.
+__device__ void go_out(Smem& s, RolloutFates& fates) {
+  const int mover = s.mover;
+  s.scores[mover] += 2 * s.other_pv;
+  s.game_over = 1;
+  fates.went_out = int8_t(mover);
+  fates.end_points = int16_t(mover == 0 ? 2 * s.other_pv : -2 * s.other_pv);
+}
+
+// Places the chosen play's tiles, taking them from the mover's rack and
+// labelling the squares it fills.
+__device__ void place_chosen(Smem& s, RolloutFates& fates) {
+  const Cand& c = s.chosen;
+  const int mover = s.mover;
+  const int8_t fate = placer_fate(mover, c.n == kRackSize);
+  const int16_t points = int16_t(mover == 0 ? int(c.score) : -int(c.score));
+  int gi = 0;
+  for (int col = 0; col < kBoardSize; ++col) {
+    if (((c.mask >> col) & 1u) == 0) continue;
+    const uint8_t g = c.glyphs[gi];
+    const int r = c.view ? col : c.vrow, cc = c.view ? c.vrow : col;
+    s.sq[r * kBoardSize + cc] = g;
+    fates.fate[r * kBoardSize + cc] = fate;
+    fates.points[r * kBoardSize + cc] = points;
+    s.placed_r[gi] = uint8_t(r);
+    s.placed_c[gi] = uint8_t(cc);
+    --s.rack[mover][glyph_is_blank(g) ? kBlankTile : glyph_letter(g)];
+    ++gi;
+  }
+  s.num_tiles += c.n;
 }
 
 // Applies s.chosen for the mover: tiles, score, draw, play-out bonus,
 // stalemate. One thread; the cross-check update follows in parallel.
-__device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout) {
+__device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout, RolloutFates& fates) {
   const Cand& c = s.chosen;
   const int mover = s.mover;
   if (!c.valid) {
     record_leave(s, mover);
     ++s.scoreless;
-    end_if_stalemate(s);
+    end_if_stalemate(s, fates);
     return;
   }
   if (c.type == 0) {
-    int gi = 0;
-    for (int col = 0; col < kBoardSize; ++col) {
-      if (((c.mask >> col) & 1u) == 0) continue;
-      const uint8_t g = c.glyphs[gi];
-      const int r = c.view ? col : c.vrow, cc = c.view ? c.vrow : col;
-      s.sq[r * kBoardSize + cc] = g;
-      s.placed_r[gi] = uint8_t(r);
-      s.placed_c[gi] = uint8_t(cc);
-      --s.rack[mover][glyph_is_blank(g) ? kBlankTile : glyph_letter(g)];
-      ++gi;
-    }
-    s.num_tiles += c.n;
+    place_chosen(s, fates);
     s.scores[mover] += c.score;
     s.scoreless = 0;
     record_leave(s, mover);
     const int draws = min(int(c.n), s.bag.remaining());
     for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(mover)];
-    if (rack_total(s, mover) == 0) {
-      s.scores[mover] += 2 * s.other_pv;
-      s.game_over = 1;
-    }
+    if (rack_total(s, mover) == 0) go_out(s, fates);
   } else {
     for (int i = 0; i < c.n; ++i) {
       --s.rack[mover][c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1];
@@ -1130,7 +1150,7 @@ __device__ void run_items_pass(Smem& s, Scratch& sc, int tid, int bag, Cand& loc
 
 // One ply by s.mover.
 __device__ void play_ply(Smem& s, Scratch& sc, int tid, uint64_t seed, uint32_t rollout,
-                         PackedMove& out, PhaseClock& pc, WorkCounts& wc) {
+                         PackedMove& out, RolloutFates& fates, PhaseClock& pc, WorkCounts& wc) {
   const int warp = tid / 32, lane = tid % 32;
   if (tid == 0) prepare_rack(s);
   __syncthreads();
@@ -1168,7 +1188,7 @@ __device__ void play_ply(Smem& s, Scratch& sc, int tid, uint64_t seed, uint32_t 
   reduce_best(s, tid, local);
   if (tid == 0) {
     write_move(s.chosen, out);
-    apply_chosen(s, seed, rollout);
+    apply_chosen(s, seed, rollout, fates);
     pc.lap(kPhaseApply);
   }
   __syncthreads();
@@ -1209,7 +1229,7 @@ __device__ void refill_at_deal(Smem& s, int p, const uint8_t* returned, int num_
 // The racks and the bag, in rollout_abi.h's order (hasty_rollout_task.cpp's
 // start_rollout). Thread 0, after the scores are set.
 __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLeaveAbi* leaves,
-                     uint32_t rollout, Smem& s) {
+                     uint32_t rollout, Smem& s, RolloutFates& fates) {
   for (int t = 0; t < kTileKinds; ++t) {
     s.rack[0][t] = pos.leave[t];
     s.rack[1][t] = 0;
@@ -1233,17 +1253,38 @@ __device__ void deal(const PositionAbi& pos, const GroupAbi& group, const OppLea
   record_leave(s, 1);
   // Our move went out with the bag empty: the game ended with it.
   if (rack_total(s, 0) == 0) {
-    s.scores[0] += 2 * rack_value(s, 1);
-    s.game_over = 1;
+    s.mover = 0;
+    s.other_pv = rack_value(s, 1);
+    go_out(s, fates);
+  }
+}
+
+// The fates of the squares the rollout's plies did not fill (place_chosen
+// labelled those): the start's own tiles carry no label, and a square still
+// empty stays so for certain only if the game ended. Every thread of the
+// block calls it.
+__device__ void settle_untouched_squares(const PositionAbi& pos, const Smem& s,
+                                         RolloutFates& fates) {
+  for (int i = threadIdx.x; i < kSquares; i += kThreads) {
+    if (pos.squares[i] != 0) {
+      fates.fate[i] = kFateFilledAtStart;
+    } else if (s.sq[i] != 0) {
+      continue;
+    } else {
+      fates.fate[i] = s.game_over ? kFateStaysEmpty : kFateOpen;
+    }
+    fates.points[i] = 0;
   }
 }
 
 __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
   rollout_kernel(const RolloutTask* tasks, const PositionAbi* positions, const GroupAbi* groups,
-                 const OppLeaveAbi* opp_leaves, RolloutResult* out, LeafState* leaves) {
+                 const OppLeaveAbi* opp_leaves, RolloutResult* out, LeafState* leaves,
+                 RolloutFates* fates) {
   __shared__ Smem s;
   const int tid = threadIdx.x;
   const RolloutTask task = tasks[blockIdx.x];
+  RolloutFates& fate = fates[blockIdx.x];
   const PositionAbi& pos = positions[task.position];
   const GroupAbi& group = groups[pos.group];
   const uint32_t rollout = task.rollout;
@@ -1261,7 +1302,9 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     s.game_over = 0;
     s.scoreless = 0;
     s.overflow = 0;
-    deal(pos, group, opp_leaves, rollout, s);
+    fate.went_out = kWentOutOpen;
+    fate.end_points = 0;
+    deal(pos, group, opp_leaves, rollout, s, fate);
   }
   __syncthreads();
   Scratch& sc = c_tables.scratch[s.slot];
@@ -1273,7 +1316,7 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
        ++ply) {
     if (tid == 0) s.mover = ply % 2 == 0 ? 1 : 0;
     __syncthreads();
-    play_ply(s, sc, tid, seed, rollout, ply < 2 ? res.moves[ply] : later, pc, wc);
+    play_ply(s, sc, tid, seed, rollout, ply < 2 ? res.moves[ply] : later, fate, pc, wc);
     __syncthreads();
     if (tid == 0) atomicAdd(&g_counts[kCountPlies], 1ull);
   }
@@ -1289,6 +1332,7 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     atomicAdd(&g_counts[kCountWords], (unsigned long long)sums[2]);
     atomicAdd(&g_counts[kCountPlays], (unsigned long long)sums[3]);
   }
+  settle_untouched_squares(pos, s, fate);
   // The leaf: the end state, left on the device for a leaf evaluator.
   LeafState& leaf = leaves[blockIdx.x];
   for (int i = tid; i < kSquares; i += kThreads) {
@@ -1313,6 +1357,35 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     __threadfence();
     atomicExch(&c_tables.scratch_busy[s.slot], 0);
   }
+}
+
+// ---- The sim maps ----
+// One block per start: its rollouts' fates summed in ascending task order,
+// thread t over square t and one more thread over the end of the game, as
+// sim/sim_maps.h's CPU sum does.
+
+__global__ void __launch_bounds__(kThreads)
+  sim_maps_kernel(const RolloutFates* fates, const uint32_t* tasks_by_start,
+                  const uint32_t* start_offsets, SimMaps* maps) {
+  __shared__ SimMaps m;
+  const int t = threadIdx.x;
+  const uint32_t first = start_offsets[blockIdx.x], end = start_offsets[blockIdx.x + 1];
+  if (t < kSquares) {
+    for (int c = 0; c < kFateClasses; ++c) m.class_sum[c][t] = 0.0f;
+    m.points_sum[t] = 0.0f;
+    m.points_sq_sum[t] = 0.0f;
+    for (uint32_t i = first; i < end; ++i) add_square_fate(m, t, fates[tasks_by_start[i]]);
+  } else if (t == kSquares) {
+    for (int c = 0; c < kWentOutClasses; ++c) m.went_out_sum[c] = 0.0f;
+    m.end_points_sum = 0.0f;
+    m.end_points_sq_sum = 0.0f;
+    m.sims = 0.0f;
+    for (uint32_t i = first; i < end; ++i) add_end_fate(m, fates[tasks_by_start[i]]);
+  }
+  __syncthreads();
+  const float* src = reinterpret_cast<const float*>(&m);
+  float* dst = reinterpret_cast<float*>(maps + blockIdx.x);
+  for (int i = t; i < int(sizeof(SimMaps) / sizeof(float)); i += kThreads) dst[i] = src[i];
 }
 
 // ---- The leaf encoder ----
@@ -1500,6 +1573,10 @@ struct DeviceTables {
   DeviceBuffer<OppLeaveAbi> opp_leaves;
   DeviceBuffer<RolloutResult> results;
   DeviceBuffer<LeafState> leaves;
+  DeviceBuffer<RolloutFates> fates;
+  DeviceBuffer<uint32_t> tasks_by_start;
+  DeviceBuffer<uint32_t> start_offsets;
+  DeviceBuffer<SimMaps> maps;
   DeviceBuffer<uint32_t> leaf_tasks;  // the tasks encode_leaves was given
 };
 
@@ -1579,15 +1656,20 @@ void free_tables(DeviceTables* d) {
   delete d;
 }
 
-void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results, double seconds[3],
-                  unsigned long long phase_cycles[kPhases], unsigned long long counts[kCounts]) {
+void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results, SimMaps* maps,
+                  double seconds[3], unsigned long long phase_cycles[kPhases],
+                  unsigned long long counts[kCounts]) {
   using Clock = std::chrono::steady_clock;
   const auto since = [](Clock::time_point t0) {
     return std::chrono::duration<double>(Clock::now() - t0).count();
   };
   const size_t n = batch.tasks.size();
+  // The starts whose maps are summed: all of them, or none.
+  const size_t starts = maps ? batch.positions.size() : 0;
   d->results.reserve(n);
   d->leaves.reserve(n);
+  d->fates.reserve(n);
+  d->maps.reserve(starts);
   const unsigned long long zero[kPhases] = {};
   cuda_check(cudaMemcpyToSymbol(g_phase_cycles, zero, sizeof(zero)), "phase counters");
   const unsigned long long zero_counts[kCounts] = {};
@@ -1597,12 +1679,22 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
   d->positions.upload(batch.positions.data(), batch.positions.size());
   d->groups.upload(batch.groups.data(), batch.groups.size());
   d->opp_leaves.upload(batch.opp_leaves.data(), batch.opp_leaves.size());
+  if (starts > 0) {
+    d->tasks_by_start.upload(batch.tasks_by_start.data(), n);
+    d->start_offsets.upload(batch.start_offsets.data(), starts + 1);
+  }
   seconds[0] = since(t0);
   t0 = Clock::now();
   if (n > 0) {
     rollout_kernel<<<unsigned(n), kThreads>>>(d->tasks.data, d->positions.data, d->groups.data,
-                                              d->opp_leaves.data, d->results.data, d->leaves.data);
+                                              d->opp_leaves.data, d->results.data, d->leaves.data,
+                                              d->fates.data);
     cuda_check(cudaGetLastError(), "launch");
+  }
+  if (starts > 0) {
+    sim_maps_kernel<<<unsigned(starts), kThreads>>>(d->fates.data, d->tasks_by_start.data,
+                                                    d->start_offsets.data, d->maps.data);
+    cuda_check(cudaGetLastError(), "sim maps launch");
   }
   cuda_check(cudaDeviceSynchronize(), "kernel");
   seconds[1] = since(t0);
@@ -1611,6 +1703,10 @@ void run_rollouts(DeviceTables* d, const BatchAbi& batch, RolloutResult* results
     cuda_check(
       cudaMemcpy(results, d->results.data, sizeof(RolloutResult) * n, cudaMemcpyDeviceToHost),
       "results download");
+  }
+  if (starts > 0) {
+    cuda_check(cudaMemcpy(maps, d->maps.data, sizeof(SimMaps) * starts, cudaMemcpyDeviceToHost),
+               "maps download");
   }
   seconds[2] = since(t0);
   cuda_check(cudaMemcpyFromSymbol(phase_cycles, g_phase_cycles, sizeof(zero)), "phase readback");

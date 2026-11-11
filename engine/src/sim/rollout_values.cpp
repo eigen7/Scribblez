@@ -1,5 +1,7 @@
 #include "sim/rollout_values.h"
 
+#include "sim/sim_maps.h"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -37,13 +39,19 @@ CpuLeafFn synthetic_leaf() {
 CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf)
     : dict_(dict), leaf_(std::move(leaf)) {}
 
-std::vector<RolloutOutcome> CpuRolloutValues::run(const RolloutBatch& batch) {
-  std::vector<RolloutOutcome> out(batch.tasks.size());
-  for_each_hasty_rollout_cpu(
-    batch, dict_, [&](size_t k, const rollout_abi::RolloutResult& result, const CpuLeaf& leaf) {
-      out[k].result = result;
-      out[k].wld = result.game_over ? terminal_wld(result.diff) : leaf_(leaf);
-    });
+BatchValues CpuRolloutValues::run(const RolloutBatch& batch) {
+  BatchValues out;
+  out.outcomes.resize(batch.tasks.size());
+  std::vector<rollout_abi::RolloutFates> fates(batch.sum_maps ? batch.tasks.size() : 0);
+  for_each_hasty_rollout_cpu(batch, dict_,
+                             [&](size_t k, const rollout_abi::RolloutResult& result,
+                                 const CpuLeaf& leaf, const rollout_abi::RolloutFates& f) {
+                               out.outcomes[k].result = result;
+                               out.outcomes[k].wld =
+                                 result.game_over ? terminal_wld(result.diff) : leaf_(leaf);
+                               if (batch.sum_maps) fates[k] = f;
+                             });
+  if (batch.sum_maps) out.maps = sum_sim_maps(fates, tasks_by_start(batch));
   return out;
 }
 

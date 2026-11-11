@@ -19,6 +19,7 @@
 #include "nn/trt_util.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/rollout_values.h"
+#include "sim/sim_maps.h"
 #include "sim/sim_runner.h"
 #include "util/work_pool.h"
 
@@ -78,7 +79,7 @@ HostRoute run_host_route(nn::NeuralNet<nn::LeafEvalSpec>& net, const std::vector
 int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const Dictionary& dict,
                     const std::vector<CpuLeaf>& cpu_leaves, const std::string& onnx_path) {
   values.run(batch);  // the first run builds the TensorRT context's buffers
-  const std::vector<RolloutOutcome> outcomes = values.run(batch);
+  const std::vector<RolloutOutcome> outcomes = values.run(batch).outcomes;
   const GpuRolloutValues::Timings& tm = values.last_timings();
   const auto t0 = Clock::now();
   const std::vector<float> cpu_rows = cpu_leaf_rows(cpu_leaves, dict);
@@ -111,6 +112,14 @@ int evaluate_leaves(GpuRolloutValues& values, const RolloutBatch& batch, const D
   // kernels; beyond this the routes disagree on more than rounding.
   constexpr double kValueTolerance = 1e-2;
   return check.rows_identical == check.checked && max_value_diff <= kValueTolerance ? 0 : 1;
+}
+
+// How many starts' device maps differ from the CPU reference's.
+int differing_maps(const std::vector<rollout_abi::SimMaps>& cpu,
+                   const std::vector<rollout_abi::SimMaps>& gpu) {
+  int n = 0;
+  for (size_t s = 0; s < cpu.size(); ++s) n += !sim_maps_difference(cpu[s], gpu[s]).empty();
+  return n;
 }
 
 struct Agreement {
@@ -205,7 +214,8 @@ int run(int argc, char** argv) {
 
   const DecisionPoint at = self_play_position(dict, seed, plies);
   const std::vector<Move> moves = rollout_candidates(at, dict, num_candidates);
-  const RolloutBatch batch = candidate_batch(at, moves, rollouts, seed);
+  RolloutBatch batch = candidate_batch(at, moves, rollouts, seed);
+  batch.sum_maps = true;
   std::cout << at.board.to_string();
   std::cout << std::format("to move: rack {} | scores {} to {} | unseen {}\n", at.rack.to_string(),
                            at.my_score, at.opp_score, batch.groups[0].pool.size());
@@ -222,8 +232,9 @@ int run(int argc, char** argv) {
   auto t0 = Clock::now();
   std::vector<CpuLeaf> cpu_leaves(
     leaf_model.empty() ? 0 : std::min(size_t(leaf_check), batch.tasks.size()));
+  std::vector<rollout_abi::RolloutFates> cpu_fates;
   const std::vector<rollout_abi::RolloutResult> cpu =
-    run_hasty_rollouts_cpu(batch, dict, &cpu_leaves);
+    run_hasty_rollouts_cpu(batch, dict, &cpu_leaves, &cpu_fates);
   const double cpu_seconds = seconds_since(t0);
 
   t0 = Clock::now();
@@ -231,16 +242,19 @@ int run(int argc, char** argv) {
   const double gpu_setup = seconds_since(t0);
   // The first launch includes module load; time the second.
   gpu.run(batch, dict);
-  const std::vector<rollout_abi::RolloutResult> res = gpu.run(batch, dict);
+  const GpuHastyRollouts::Output out = gpu.run(batch, dict);
+  const std::vector<rollout_abi::RolloutResult>& res = out.results;
   const GpuHastyRollouts::Timings& tm = gpu.last_timings();
   const Agreement a = compare_results(batch, cpu, res);
+  const int maps_differ = differing_maps(sum_sim_maps(cpu_fates, tasks_by_start(batch)), out.maps);
 
   const double n = double(batch.tasks.size());
   std::cout << std::format(
     "\nagreement: {} of {} rollouts identical ({} outcome mismatches, {} move mismatches); "
-    "{} games ended within the rollout; {} span-list overflows\n",
+    "{} games ended within the rollout; {} span-list overflows; sim maps of {} of {} starts "
+    "identical\n",
     int(n) - std::max(a.diff_mismatch, a.move_mismatch), int(n), a.diff_mismatch, a.move_mismatch,
-    a.game_over, a.overflow);
+    a.game_over, a.overflow, int(out.maps.size()) - maps_differ, out.maps.size());
   std::cout << std::format("\n{:<28}{:>12}{:>16}\n", "", "seconds", "rollouts/s");
   std::cout << std::format("{:<28}{:>12.4f}{:>16.0f}\n", std::format("cpu ({} threads)", threads),
                            cpu_seconds, n / cpu_seconds);
@@ -261,7 +275,7 @@ int run(int argc, char** argv) {
                              .leaf_rows = leaf_rows});
     leaf_status = evaluate_leaves(values, batch, dict, cpu_leaves, leaf_model);
   }
-  return (a.diff_mismatch || a.move_mismatch || leaf_status != 0) ? 1 : 0;
+  return (a.diff_mismatch || a.move_mismatch || maps_differ || leaf_status != 0) ? 1 : 0;
 }
 
 }  // namespace

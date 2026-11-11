@@ -23,9 +23,15 @@ class GpuHastyRollouts {
   GpuHastyRollouts(const Dictionary& dict, const HastyEquity& eq);
   ~GpuHastyRollouts();
 
-  // The batch's tasks, results[k] for tasks[k], each drawn as the CPU
-  // reference draws it. The end states stay on the device, one per task.
-  std::vector<rollout_abi::RolloutResult> run(const RolloutBatch& batch, const Dictionary& dict);
+  // A batch run: results[k] for tasks[k], each drawn as the CPU reference
+  // draws it, and maps[s] for starts[s], its rollouts' fates summed (empty
+  // unless the batch sums its maps).
+  struct Output {
+    std::vector<rollout_abi::RolloutResult> results;
+    std::vector<rollout_abi::SimMaps> maps;
+  };
+  // The end states and fates stay on the device, one per task.
+  Output run(const RolloutBatch& batch, const Dictionary& dict);
 
   struct Timings {
     double upload_seconds = 0;    // the batch
