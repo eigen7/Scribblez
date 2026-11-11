@@ -8,12 +8,15 @@
 // File layout (little-endian, packed):
 //
 //   [PoolFileHeader                                        128 B]
-//   per position:
+//   per position, a pool block:
 //     [PoolPositionHeader                                   16 B]
 //     [PoolOppRack                                         120 B]
 //     [PoolCandidate x num_candidates                       36 B each]
 //     [float32 x the sum of the candidates' rollouts: each candidate's
 //      rollout win values in turn (rollout_values)]
+//
+// The pool block is also the form a grouped pool takes (data/group_log.h),
+// there with each candidate's values cut to the first few rollouts.
 
 #include "belief/opp_rack_summary.h"
 #include "data/slog_sampling.h"
@@ -42,6 +45,17 @@ inline constexpr size_t kPoolTagSize = 32;
 
 #pragma pack(push, 1)
 
+// A model a file's labels came from: its ONNX's util::file_content_hash,
+// its tag (NUL-padded), generation and format version. A test's synthetic
+// leaf has no hash; uniform beliefs leave the leave model all zero.
+struct PoolModelRecord {
+  char hash[kPoolHashSize];
+  char tag[kPoolTagSize];
+  int32_t generation;
+  int32_t format_version;
+};
+static_assert(sizeof(PoolModelRecord) == 56, "PoolModelRecord must be 56 bytes");
+
 struct PoolFileHeader {
   uint32_t magic;    // kPoolMagic
   uint16_t version;  // kPoolFormatVersion
@@ -49,18 +63,10 @@ struct PoolFileHeader {
   uint32_t num_positions;
   uint32_t rollouts;  // the budget per candidate; racing stops some early
   // The leaf network every unfinished rollout ended at, after the candidate
-  // and two mechanical replies: its ONNX's util::file_content_hash, its tag
-  // (NUL-padded), generation and format version. A test's synthetic leaf
-  // has no hash.
-  char leaf_model_hash[kPoolHashSize];
-  char leaf_model_tag[kPoolTagSize];
-  int32_t leaf_model_generation;
-  int32_t leaf_model_format_version;
-  // The leave inference model, all zero under uniform beliefs, likewise.
-  char leave_model_hash[kPoolHashSize];
-  char leave_model_tag[kPoolTagSize];
-  int32_t leave_model_generation;
-  int32_t leave_model_format_version;
+  // and two mechanical replies.
+  PoolModelRecord leaf_model;
+  // The leave inference model the opponents' leaves came from.
+  PoolModelRecord leave_model;
 };
 static_assert(sizeof(PoolFileHeader) == 128, "PoolFileHeader must be 128 bytes");
 
@@ -106,6 +112,10 @@ struct PoolModel {
   int generation = 0;
   int format_version = 0;
 
+  static PoolModel of(const PoolModelRecord& r);
+  // As a header records it; a hash or tag over the field's width throws.
+  PoolModelRecord record(const char* what) const;
+
   bool operator==(const PoolModel&) const = default;
 };
 
@@ -119,9 +129,12 @@ struct PoolSources {
 
   // The sources a written file's header records.
   static PoolSources of(const PoolFileHeader& h);
+  static PoolSources of(const PoolModelRecord& leaf, const PoolModelRecord& leave, int rollouts);
   // The name of the first field in which this and `other` differ; nullptr if
   // they agree.
   const char* first_difference(const PoolSources& other) const;
+
+  bool operator==(const PoolSources&) const = default;
 };
 
 // One position's pool, as a writer takes it: parallel per-candidate arrays.
@@ -138,6 +151,25 @@ struct PoolPosition {
   // otherwise. Not written to the .pool file.
   std::vector<rollout_abi::SimMaps> maps;
 };
+
+// A pool block's bytes appended to `buffer`: `p` with each candidate's values
+// cut to its first `max_values` rollouts.
+void append_pool_block(std::vector<char>* buffer, const PoolPosition& p, size_t max_values);
+
+// A pool block's view into a file's buffer; valid while the buffer lives.
+struct PoolPositionView {
+  const PoolPositionHeader* header;
+  const PoolOppRack* opp_rack;
+  const PoolCandidate* candidates;  // header->num_candidates
+  // Each candidate's rollout win values in turn, min(candidates[c].rollouts,
+  // the writer's max_values) of them.
+  const float* rollout_values;
+};
+
+// The pool block at `*off` of `buf`, written with `max_values`, advancing
+// `*off` past it; a truncated block throws util::Exception naming `context`.
+PoolPositionView take_pool_block(const std::vector<char>& buf, size_t* off, size_t max_values,
+                                 const std::string& context);
 
 // Accumulates positions in memory and writes the .pool file atomically on
 // close().
@@ -168,14 +200,7 @@ class PoolWriter {
 class PoolReader {
  public:
   // Per-position view into the reader's buffer; valid while the reader lives.
-  struct Position {
-    const PoolPositionHeader* header;
-    const PoolOppRack* opp_rack;
-    const PoolCandidate* candidates;  // header->num_candidates
-    // Each candidate's rollout win values in turn, candidates[c].rollouts of
-    // them.
-    const float* rollout_values;
-  };
+  using Position = PoolPositionView;
 
   explicit PoolReader(const std::string& path);
 

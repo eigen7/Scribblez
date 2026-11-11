@@ -43,7 +43,7 @@ struct SubtreeParams {
 // The move a subtree chose, with what the diagnostics read.
 struct SubtreeMove {
   Move move;
-  int equity_rank = 0;  // among the candidates; 0 is HastyBot's move
+  int equity_rank = 0;  // its index among the candidates, in equity order; 0 is HastyBot's move
   int candidates = 1;   // how many were simmed (1: no sims)
   double q = 1;         // the probability the sims gave that it is the best
   // Its share of the outer search's value at the rack: q renormalized over
@@ -68,6 +68,11 @@ size_t best_candidate(const std::vector<double>& values);
 // Seeds by rack index, one domain per use, so every candidate of Alice's meets
 // rack i's samples and draws: her candidates are compared on paired samples.
 uint64_t rack_seed(uint64_t seed, uint64_t domain, size_t rack);
+
+// The racks the chooser's rollouts seat for the other player: rollout i's for
+// i < count, from the group the chooser's candidates share (any of its
+// starts, all in `group`).
+std::vector<Rack> other_racks(const RolloutGroup& group, const RolloutStart& start, int count);
 
 // The other player to move after `applied` (a move applied from its mover's
 // side), holding `rack`; the new mover is player 0.

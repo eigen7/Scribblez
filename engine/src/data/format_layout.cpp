@@ -1,6 +1,7 @@
 #include "data/format_layout.h"
 
 #include "data/binary_log.h"
+#include "data/group_log.h"
 #include "data/pool_log.h"
 #include "data/probe_log.h"
 #include "data/probe_replay.h"
@@ -11,6 +12,7 @@
 #include "game/move.h"
 #include "game/rack.h"
 #include "lexicon/leave_value_arrays.h"
+#include "sim/sim_maps.h"
 #include "sim/sim_runner.h"
 #include "sim/transfer_candidates.h"
 #include "sim/win_pct_table.h"
@@ -70,7 +72,7 @@ consteval const char* scalar_code(std::meta::info t) {
 // keyed by the type's own identifier (build_structs serves them under it).
 consteval bool is_served_struct(std::meta::info t) {
   return util::type_is<Move>(t) || util::type_is<RolloutStats>(t) ||
-         util::type_is<WinTableFeature>(t);
+         util::type_is<WinTableFeature>(t) || util::type_is<PoolModelRecord>(t);
 }
 
 // Fills in the dtype of one field: a nested struct reference, a char array
@@ -145,6 +147,11 @@ json::object build_structs() {
   s["PoolPositionHeader"] = struct_json<PoolPositionHeader>();
   s["PoolOppRack"] = struct_json<PoolOppRack>();
   s["PoolCandidate"] = struct_json<PoolCandidate>();
+  s["PoolModelRecord"] = struct_json<PoolModelRecord>();
+  s["GroupFileHeader"] = struct_json<GroupFileHeader>();
+  s["GroupHeader"] = struct_json<GroupHeader>();
+  s["GroupRack"] = struct_json<GroupRack>();
+  s["GroupMapHeader"] = struct_json<GroupMapHeader>();
   s["WinTableFeature"] = struct_json<WinTableFeature>();
   s["WinTableSample"] = struct_json<WinTableSample>();
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
@@ -184,6 +191,15 @@ json::object build_constants() {
   c["pool"] = {{"magic", kPoolMagic},
                {"version", kPoolFormatVersion},
                {"flag_leave_inference", kPoolFlagLeaveInference}};
+  {
+    // SimMaps' layout, [name, rows, cols] per field in order.
+    json::array fields;
+    for (const SimMapsField& f : sim_maps_fields())
+      fields.push_back(json::array{f.name, f.rows, f.cols});
+    c["group"] = {{"magic", kGroupMagic},
+                  {"version", kGroupFormatVersion},
+                  {"sim_maps_fields", std::move(fields)}};
+  }
   c["sprobe"] = {{"magic", kProbeMagic},
                  {"version", kProbeVersion},
                  {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},

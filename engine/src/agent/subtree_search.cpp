@@ -23,6 +23,16 @@ uint64_t rack_seed(uint64_t seed, uint64_t domain, size_t rack) {
   return util::splitmix64(seed ^ domain ^ util::splitmix64(uint64_t(rack)));
 }
 
+std::vector<Rack> other_racks(const RolloutGroup& group, const RolloutStart& start, int count) {
+  RolloutBatch batch{.groups = {group}, .starts = {start}, .tasks = {}};
+  batch.starts[0].group = 0;
+  std::vector<Rack> out;
+  out.reserve(size_t(count));
+  for (int i = 0; i < count; ++i)
+    out.push_back(rollout_racks(batch, {.position = 0, .rollout = uint32_t(i)}).opp);
+  return out;
+}
+
 SimPosition mover_position(const RolloutStart& applied, const Rack& rack) {
   return {.board = applied.board,
           .scores = {applied.opp_score, applied.my_score},

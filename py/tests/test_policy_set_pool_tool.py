@@ -22,6 +22,7 @@ if not LEAVES.exists():
     pytest.skip("HastyBot leave values not installed", allow_module_level=True)
 
 from scribblez import ffi  # noqa: E402
+from scribblez.policy_set.groups import read_groups  # noqa: E402
 from scribblez.policy_set.pools import read_pools  # noqa: E402
 from scribblez.selfplay import run_games  # noqa: E402
 
@@ -61,7 +62,7 @@ def test_header_names_the_sources(pooled):
     hdr, positions = read_pools(pooled.with_suffix(".pool"))
     assert hdr["flags"] == 0  # uniform opponent leaves
     assert hdr["rollouts"] == ROLLOUTS
-    assert hdr["leaf_model_tag"] == b"synthetic" and hdr["leaf_model_hash"] == b""
+    assert hdr["leaf_model"]["tag"] == b"synthetic" and hdr["leaf_model"]["hash"] == b""
     assert len(positions) == 2  # one per game
 
 
@@ -152,3 +153,56 @@ def test_leave_inference_needs_forgone_sidecars(pooled, tmp_path):
     cmd = [str(TOOL), "--slog-file", str(pooled), *CPU, "--leave-inference", str(model)]
     run = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert run.returncode != 0 and "forgone_play_tool" in run.stderr
+
+
+GROUP_FLAGS = [
+    "--group-positions-per-game", "1", "--group-moves", "2", "--group-racks", "2",
+    "--group-map-sims", "4", "--group-map-steps", "2",
+]  # fmt: skip
+
+
+@pytest.fixture(scope="module")
+def grouped(tmp_path_factory) -> Path:
+    """A chunk labeled with a group per game beside its pools."""
+    games = tmp_path_factory.mktemp("group") / "games"
+    assert (
+        run_games(games, num_games=2, threads=2, player_spec="--type=hastybot-endgame", seed=7) == 0
+    )
+    run = _label(games, *GROUP_FLAGS)
+    assert run.returncode == 0, run.stderr
+    assert "groups: 2 of 4 pools" in run.stderr
+    (slog,) = games.glob("*.slog")
+    return slog
+
+
+def test_groups_hold_the_opponents_pools_at_each_move_and_rack(grouped):
+    hdr, groups = read_groups(grouped.with_suffix(".group"))
+    assert hdr["rollouts"] == ROLLOUTS and hdr["map_sims"] == 4 and hdr["map_steps"] == 2
+    assert hdr["leaf_model"]["tag"] == b"synthetic"
+    assert len(groups) == 2
+    for g in groups:
+        assert len(g.moves) == 2 and g.racks.shape == (2, 27)
+        assert (g.racks.sum(axis=1) == 7).all()
+        for row in g.pools:
+            for p in row:
+                assert p.turn == g.turn
+                np.testing.assert_allclose(p.q.sum(), 1.0, atol=1e-5)
+                assert (p.moves["type"] == MOVE_TYPES["pass"]).sum() == 1
+                assert len(p.rollout_values) == np.minimum(p.rollouts, 4).sum()
+        assert len(g.maps) % 2 == 0 and g.maps
+        for m in g.maps:
+            assert m.sims in (2, 4) and m.maps["sims"] == m.sims
+            assert m.maps["class_sum"].shape == (5, 225)
+            # Every rollout settles each empty square into one class.
+            empty = m.maps["class_sum"].sum(axis=0) > 0
+            np.testing.assert_allclose(m.maps["class_sum"].sum(axis=0)[empty], m.sims, atol=1e-3)
+            assert g.pools[m.move][m.rack].rollouts[m.reply] == ROLLOUTS
+
+
+def test_a_finished_group_file_is_skipped_and_its_counts_checked(grouped):
+    run = _label(grouped.parent, *GROUP_FLAGS)
+    assert run.returncode == 0, run.stderr
+    assert "0 file(s)" in run.stderr
+    run = _label(grouped.parent, *GROUP_FLAGS[:-1], "1")
+    assert run.returncode != 0
+    assert "maps' rollout counts" in run.stderr

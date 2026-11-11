@@ -206,7 +206,7 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
   // Alice's rollout i seats rack i for Bob in every sim of hers, hasty or not.
   const PoolJob root =
     position_job(sim_position_from(req), moves, turn_seed(), belief, req.dict, params_.bob_racks);
-  const std::vector<Rack> racks = bob_racks(root.group, root.starts[0], params_.bob_racks);
+  const std::vector<Rack> racks = other_racks(root.group, root.starts[0], params_.bob_racks);
   const std::vector<belief::ChooserMove> earlier = recorder_.own_moves(req.dict);
   const belief::ReplyPosition position{.board = req.board,
                                        .chooser_rack = req.my_rack,

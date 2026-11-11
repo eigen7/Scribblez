@@ -5353,11 +5353,11 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   const PoolReader r(path);
   EXPECT_EQ(r.header().version, kPoolFormatVersion);
   EXPECT_EQ(r.header().flags, kPoolFlagLeaveInference);
-  EXPECT_EQ(std::string(r.header().leave_model_tag), "tilted2");
-  EXPECT_EQ(r.header().leave_model_generation, 40);
+  EXPECT_EQ(std::string(r.header().leave_model.tag), "tilted2");
+  EXPECT_EQ(r.header().leave_model.generation, 40);
   EXPECT_EQ(r.header().rollouts, 300u);
-  EXPECT_EQ(r.header().leaf_model_generation, 12);
-  EXPECT_EQ(std::string(r.header().leaf_model_tag), "leaf-conv");
+  EXPECT_EQ(r.header().leaf_model.generation, 12);
+  EXPECT_EQ(std::string(r.header().leaf_model.tag), "leaf-conv");
   ASSERT_EQ(r.num_positions(), 2);
   const PoolReader::Position pos = r.position(1);
   EXPECT_EQ(pos.header->game_index, 3u);

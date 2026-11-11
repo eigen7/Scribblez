@@ -77,6 +77,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_values.cpp
   src/sim/sim_maps.cpp
   src/sim/map_residuals.cpp
+  src/sim/grouped_pools.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
   src/agent/policy_bot.cpp
@@ -108,6 +109,7 @@ add_library(scribblez_core STATIC
   src/data/sidecar_io.cpp
   src/data/probe_log.cpp
   src/data/pool_log.cpp
+  src/data/group_log.cpp
   src/data/probe_replay.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
@@ -517,6 +519,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_best_bot.cpp
     tests/test_deep_bot.cpp
     tests/test_map_residuals.cpp
+    tests/test_grouped_pools.cpp
     tests/test_endgame.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp

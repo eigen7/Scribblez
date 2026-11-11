@@ -95,13 +95,15 @@ def read_pools(path: str | Path) -> tuple[np.void, list[Pool]]:
             raise ValueError(f"{path}: truncated at position {len(pools)}")
         values = np.frombuffer(buf, np.float32, count=k, offset=off)
         off += 4 * k
-        pools.append(_pool(ph, rack, c, values))
+        pools.append(parse_pool(ph, rack, c, values))
     if off != len(buf):
         raise ValueError(f"{path}: {len(buf) - off} bytes past the last position")
     return hdr, pools
 
 
-def _pool(ph: np.void, rack: np.void, c: np.ndarray, values: np.ndarray) -> Pool:
+def parse_pool(ph: np.void, rack: np.void, c: np.ndarray, values: np.ndarray) -> Pool:
+    """A pool from its block's parsed parts: the position header, the
+    opponent-rack record, the candidates and their rollout values."""
     return Pool(
         game=int(ph["game_index"]),
         turn=int(ph["turn_index"]),

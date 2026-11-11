@@ -23,6 +23,8 @@
 
 #include "agent/subtree_search.h"
 #include "belief/leave_params.h"
+#include "belief/leave_query.h"
+#include "belief/leave_sampler.h"
 #include "belief/reply_query.h"
 #include "game/move.h"
 #include "game/rack.h"
@@ -33,11 +35,30 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace scribblez {
 
 class Dictionary;
+
+// Bob's belief inputs after `candidate`, one query per rack, and the model's
+// parameters for them; both empty without a model. Each rack's sampler is
+// built only where it is used, so a turn never holds a candidate's hundred
+// table passes at once.
+struct BobBeliefs {
+  std::vector<belief::LeaveQuery> queries;
+  std::vector<belief::LeaveParams> params;
+
+  std::shared_ptr<const belief::LeaveSampler> sampler(size_t rack,
+                                                      const LeaveValueArrays& table) const;
+};
+
+// Bob's beliefs about Alice's leave after `candidate` at `position`, holding
+// each of `racks`.
+BobBeliefs bob_beliefs(const belief::ReplyPosition& position, const Move& candidate,
+                       const std::vector<Rack>& racks, const BeliefModel& model,
+                       const Dictionary& dict);
 
 // What the subtrees read of Alice's turn. `applied` is parallel to
 // `candidates`: each applied to the board as its sims' start
@@ -92,9 +113,5 @@ ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size
                                    const std::vector<std::vector<BobReply>>& replies,
                                    RolloutValues& values, const Dictionary& dict, uint64_t seed,
                                    bool residuals = false);
-
-// The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
-// group her candidates share (any of `starts`, all in `group`).
-std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count);
 
 }  // namespace scribblez

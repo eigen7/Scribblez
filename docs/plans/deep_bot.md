@@ -685,21 +685,34 @@ between subtrees lies there.
 **Training data: grouped pools.** The store input learns from the same kind
 of decision Bob's subtrees make, a player to move choosing by hasty-reply
 sims, grouped the way a turn's evidence is. A generator on the pool labeler
-takes a self-play position, the parent, and several of the moves available
-there; at each resulting position it samples several racks for the player
-to move, and labels each rack's pool. It writes:
+takes a self-play position, the parent, with Alice to move; her proposer's
+moves there (the static-equity top `M`); and `R` racks sampled for Bob from
+her belief, the same racks under every move, as her search deals them. The
+parent keeps more than a rack in the bag, so that Bob draws from a bag after
+any of her moves ([When Alice's move empties the
+bag](#when-alices-move-empties-the-bag) is the search's concern). At each of
+the `M · R` positions after a move it labels Bob's pool: every legal move of
+the rack, simmed from Bob's side with Alice's leave drawn from his
+belief after the move ([Beliefs](#beliefs)), up to the pools' rollout count,
+raced, the same seed per rack under every move so his sims are paired across
+moves. It writes, beside the `.pool` sidecar and in its own:
 
-- per (move from the parent, rack, reply): the value residual and the
-  reply's chance of being best, a scalar item's content;
-- per (move from the parent, reply): one map, averaged over the racks that
-  played the reply, a map item's. The map describes the board after both
-  moves, which is the same for every such rack; whether a rack can use it
-  is the per-rack scalars' part.
+- per (move from the parent, rack): the pool, in the `.pool` record's form:
+  Bob's belief about Alice's rack, and per reply its value, its chance of
+  being best and its rollouts' values, a scalar item's content;
+- per (move from the parent, rack, leading reply): the sims' maps, summed
+  over the first `n` of the reply's rollouts for a few `n` up to a search's
+  count per rack, a map item's content. The leading replies are the ones a
+  search would sim: the contenders at that count ([Bob's
+  subtree](#bobs-subtree)). The map's rollouts are the pool's own first `n`,
+  rerun with their maps summed, so the map is a subsample of the labels'
+  evidence.
 
-Maps are written only for each rack's leading replies, the ones a search
-would sim, in a sidecar beside the pools. Moves, racks and replies per
-group are the generator's parameters, and they set the size of a group's
-record.
+The map of a (move, reply) that a turn's store holds is the sum over the
+racks that played the reply; it is written per rack so that training can
+withhold a hidden rack's sims from it, and the trainer sums the racks it
+shows. Moves, racks, the search's count and its steps are the generator's
+parameters, and they set the size of a group's record.
 
 **The evidence has a search's noise.** A search's store holds a few
 rollouts per move, and only for the moves it admitted; a pool labels every
@@ -1230,7 +1243,19 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    with the sims' mean to 0.002.
 9. **Grouped pools.** The generator on the pool labeler, as a dashboard
    workload, writing the scalars and the search-noise maps beside the
-   pools. *Measure:* bytes and GPU time per group.
+   pools. *Measure:* bytes and GPU time per group. The generator is
+   `policy_set_pool_tool --group-positions-per-game`, writing a `.group`
+   beside each `.pool` (data/group_log.h); measured 2026-11-11 on 10
+   HastyBot games, one group each, under the `v1` leaf network and leave
+   inference model at the defaults (4 moves, 8 racks, 100 rollouts per
+   reply raced, maps over 4, 8 and 12 rollouts): a group is 32 pools of
+   about 620 replies, 364,000 rollouts and 3.2 s of GPU time on the dev
+   laptop (the leaf network is the larger half of it), and 4.7 MB, of
+   which the pools are 1.5 MB (per pool 22 KB of labels and 26 KB of the
+   rollouts' values cut to the first 12) and the maps 3.1 MB (2.8 leading
+   replies per pool, three 11.8 KB float maps each). A chunk of 50 games
+   with a group per game is then 230 MB and 160 s; the dashboard workload
+   is the next slice.
 10. **The search network with an empty store:** the continuation heads,
     pretrained on game records, and the policy and value heads, trained on
     self-play pools from the mover's side. *Measure:* how often the

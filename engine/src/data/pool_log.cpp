@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 
 namespace scribblez {
 
@@ -26,31 +27,14 @@ std::string get_field(const char (&field)[N]) {
   return std::string(field, strnlen(field, N));
 }
 
-template <size_t H, size_t T>
-void set_model(const PoolModel& m, const char* what, char (&hash)[H], char (&tag)[T],
-               int32_t* generation, int32_t* format_version) {
-  set_field(hash, m.hash, what);
-  set_field(tag, m.tag, what);
-  *generation = m.generation;
-  *format_version = m.format_version;
-}
-
-template <size_t H, size_t T>
-PoolModel get_model(const char (&hash)[H], const char (&tag)[T], int32_t generation,
-                    int32_t format_version) {
-  return {get_field(hash), get_field(tag), generation, format_version};
-}
-
 PoolFileHeader make_header(const PoolSources& s) {
   PoolFileHeader h{};
   h.magic = kPoolMagic;
   h.version = kPoolFormatVersion;
   h.flags = s.leave_model.hash.empty() ? 0 : kPoolFlagLeaveInference;
   h.rollouts = uint32_t(s.rollouts);
-  set_model(s.leaf_model, "leaf model", h.leaf_model_hash, h.leaf_model_tag,
-            &h.leaf_model_generation, &h.leaf_model_format_version);
-  set_model(s.leave_model, "leave model", h.leave_model_hash, h.leave_model_tag,
-            &h.leave_model_generation, &h.leave_model_format_version);
+  h.leaf_model = s.leaf_model.record("leaf model");
+  h.leave_model = s.leave_model.record("leave model");
   return h;
 }
 
@@ -72,12 +56,27 @@ belief::OppRackSummary opp_rack_summary(const PoolOppRack& r) {
           .leave_value_sd = r.leave_value_sd};
 }
 
+PoolModel PoolModel::of(const PoolModelRecord& r) {
+  return {get_field(r.hash), get_field(r.tag), r.generation, r.format_version};
+}
+
+PoolModelRecord PoolModel::record(const char* what) const {
+  PoolModelRecord r{};
+  set_field(r.hash, hash, what);
+  set_field(r.tag, tag, what);
+  r.generation = generation;
+  r.format_version = format_version;
+  return r;
+}
+
 PoolSources PoolSources::of(const PoolFileHeader& h) {
-  return {.leaf_model = get_model(h.leaf_model_hash, h.leaf_model_tag, h.leaf_model_generation,
-                                  h.leaf_model_format_version),
-          .leave_model = get_model(h.leave_model_hash, h.leave_model_tag, h.leave_model_generation,
-                                   h.leave_model_format_version),
-          .rollouts = int(h.rollouts)};
+  return of(h.leaf_model, h.leave_model, int(h.rollouts));
+}
+
+PoolSources PoolSources::of(const PoolModelRecord& leaf, const PoolModelRecord& leave,
+                            int rollouts) {
+  return {
+    .leaf_model = PoolModel::of(leaf), .leave_model = PoolModel::of(leave), .rollouts = rollouts};
 }
 
 const char* PoolSources::first_difference(const PoolSources& o) const {
@@ -96,25 +95,50 @@ PoolWriter::~PoolWriter() {
   if (!closed_ && std::uncaught_exceptions() == uncaught_at_open_) close();
 }
 
-void PoolWriter::add_position(const PoolPosition& p) {
-  RELEASE_ASSERT(!closed_);
+void append_pool_block(std::vector<char>* buffer, const PoolPosition& p, size_t max_values) {
   const size_t k = p.moves.size();
   RELEASE_ASSERT(p.equity_ranks.size() == k && p.labels.size() == k);
   size_t values = 0;
   for (const PoolLabel& l : p.labels) values += size_t(l.rollouts);
   RELEASE_ASSERT(p.rollout_values.size() == values);
   const PoolPositionHeader h{p.at.game_idx, p.at.turn_idx, uint32_t(k), p.num_legal_moves};
-  append_bytes(&buffer_, &h, sizeof(h));
+  append_bytes(buffer, &h, sizeof(h));
   const PoolOppRack opp_rack = pool_opp_rack(p.opp_rack);
-  append_bytes(&buffer_, &opp_rack, sizeof(opp_rack));
+  append_bytes(buffer, &opp_rack, sizeof(opp_rack));
   for (size_t c = 0; c < k; ++c) {
     const PoolLabel& l = p.labels[c];
     const PoolCandidate cand{p.moves[c], float(l.win_prob), float(l.paired_se),
                              float(l.q), p.equity_ranks[c], uint16_t(l.rollouts),
                              0};
-    append_bytes(&buffer_, &cand, sizeof(cand));
+    append_bytes(buffer, &cand, sizeof(cand));
   }
-  append_bytes(&buffer_, p.rollout_values.data(), p.rollout_values.size() * sizeof(float));
+  const float* v = p.rollout_values.data();
+  for (const PoolLabel& l : p.labels) {
+    append_bytes(buffer, v, std::min(size_t(l.rollouts), max_values) * sizeof(float));
+    v += l.rollouts;
+  }
+}
+
+PoolPositionView take_pool_block(const std::vector<char>& buf, size_t* off, size_t max_values,
+                                 const std::string& context) {
+  PoolPositionView pos{};
+  pos.header = reinterpret_cast<const PoolPositionHeader*>(
+    take_bytes(buf, off, sizeof(PoolPositionHeader), context));
+  pos.opp_rack =
+    reinterpret_cast<const PoolOppRack*>(take_bytes(buf, off, sizeof(PoolOppRack), context));
+  pos.candidates = reinterpret_cast<const PoolCandidate*>(
+    take_bytes(buf, off, pos.header->num_candidates * sizeof(PoolCandidate), context));
+  size_t values = 0;
+  for (uint32_t c = 0; c < pos.header->num_candidates; ++c)
+    values += std::min(size_t(pos.candidates[c].rollouts), max_values);
+  pos.rollout_values =
+    reinterpret_cast<const float*>(take_bytes(buf, off, values * sizeof(float), context));
+  return pos;
+}
+
+void PoolWriter::add_position(const PoolPosition& p) {
+  RELEASE_ASSERT(!closed_);
+  append_pool_block(&buffer_, p, std::numeric_limits<size_t>::max());
   ++num_positions_;
 }
 
@@ -140,18 +164,8 @@ PoolReader::PoolReader(const std::string& path) {
                           header().version, kPoolFormatVersion);
   }
   for (uint32_t i = 0; i < header().num_positions; ++i) {
-    Position pos{};
-    pos.header = reinterpret_cast<const PoolPositionHeader*>(
-      take_bytes(buffer_, &off, sizeof(PoolPositionHeader), context));
-    pos.opp_rack =
-      reinterpret_cast<const PoolOppRack*>(take_bytes(buffer_, &off, sizeof(PoolOppRack), context));
-    pos.candidates = reinterpret_cast<const PoolCandidate*>(
-      take_bytes(buffer_, &off, pos.header->num_candidates * sizeof(PoolCandidate), context));
-    size_t values = 0;
-    for (uint32_t c = 0; c < pos.header->num_candidates; ++c) values += pos.candidates[c].rollouts;
-    pos.rollout_values =
-      reinterpret_cast<const float*>(take_bytes(buffer_, &off, values * sizeof(float), context));
-    positions_.push_back(pos);
+    positions_.push_back(
+      take_pool_block(buffer_, &off, std::numeric_limits<size_t>::max(), context));
   }
 }
 

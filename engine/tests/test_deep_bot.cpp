@@ -410,7 +410,7 @@ TEST(DeepBot, TheSecondTurnIsTheRolloutsFirstPly) {
   constexpr int kRacks = 24;
   const PoolJob root =
     position_job(sim_position_from(req), moves, /*seed=*/9, nullptr, nwl23(), kRacks);
-  const std::vector<Rack> racks = bob_racks(root.group, root.starts[0], kRacks);
+  const std::vector<Rack> racks = other_racks(root.group, root.starts[0], kRacks);
   const belief::ReplyPosition position{.board = at.board,
                                        .chooser_rack = at.rack,
                                        .chooser_score = at.my_score,
@@ -529,7 +529,7 @@ TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
   constexpr int kRacks = 3;
   const PoolJob root =
     position_job(sim_position_from(req), moves, /*seed=*/11, nullptr, nwl23(), kRacks);
-  const std::vector<Rack> racks = bob_racks(root.group, root.starts[0], kRacks);
+  const std::vector<Rack> racks = other_racks(root.group, root.starts[0], kRacks);
   const belief::ReplyPosition position{.board = at.board,
                                        .chooser_rack = at.rack,
                                        .chooser_score = at.my_score,

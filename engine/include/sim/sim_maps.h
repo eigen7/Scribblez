@@ -30,6 +30,15 @@ struct TasksByStart {
 TasksByStart bin_by_start(std::span<const uint32_t> start_of, size_t starts);
 TasksByStart tasks_by_start(const RolloutBatch& batch);
 
+// SimMaps as a table of named float fields, in layout order, covering the
+// struct exactly: what a file of maps records of its layout.
+struct SimMapsField {
+  const char* name;
+  int rows;  // 1 for a vector or scalar
+  int cols;
+};
+std::span<const SimMapsField> sim_maps_fields();
+
 // Adds `more` to `maps`, field by field: a start's maps over several runs.
 void add_sim_maps(rollout_abi::SimMaps& maps, const rollout_abi::SimMaps& more);
 
