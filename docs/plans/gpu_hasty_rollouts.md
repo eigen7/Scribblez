@@ -421,9 +421,25 @@ finished games among them. Only the per-start sums come back to the host (6.3
 KB per start), never the per-rollout fates, and only for a batch that asks for
 them (`RolloutBatch::sum_maps`): DeepBot's raced launches run a few rollouts
 per start, so summing and downloading maps nobody reads would cost up to
-30% of a launch. Completing
-the open squares and ends from the leaf network's continuation heads is the
-next step.
+30% of a launch.
+
+What a rollout that stopped at a leaf left open, the leaf network completes
+(`GpuRolloutValues`): after each chunk of leaves, a kernel reads the
+network's continuation heads in place in its output buffers and adds, for
+each open square, the class probabilities, the points' mean and their mean
+square (variance plus squared mean), and likewise for the end of the game,
+to the start's sums, so a completed map counts every rollout once on every
+square empty at the start. A chunk can hold a thousand leaves of one start;
+summed by one block, those were a chain of dependent loads costing 1.2 ms a
+chunk, 18% of the leaf stage at 16 starts of 4,096 rollouts. The kernel sums
+each start's leaves in slices of 16, one block each, and adds the slices in
+order, which brings the cost under the run-to-run noise of the leaf stage
+and keeps the device's sums repeatable. They match the CPU reference
+(`complete_sim_maps`) to rounding, not bit for bit (the grouping and the two
+sides' exp differ), which `gpu_kernel_tests` checks from stand-in heads;
+`gpu_rollout_demo --leaf-model` checks a real network's completed maps count
+every rollout once (2.6e-6 of the rollouts off, at the demo's defaults with
+`--plies 16`).
 
 ### Batches of candidates
 
