@@ -156,7 +156,8 @@ def test_leave_inference_needs_forgone_sidecars(pooled, tmp_path):
 
 
 GROUP_FLAGS = [
-    "--group-positions-per-game", "1", "--group-moves", "2", "--group-racks", "2",
+    "--group-positions-per-game", "1", "--group-top-moves", "2", "--group-mid-moves", "1",
+    "--group-tail-moves", "0", "--group-exchanges", "0", "--group-racks", "2",
     "--group-map-sims", "4", "--group-map-steps", "2",
 ]  # fmt: skip
 
@@ -170,7 +171,7 @@ def grouped(tmp_path_factory) -> Path:
     )
     run = _label(games, *GROUP_FLAGS)
     assert run.returncode == 0, run.stderr
-    assert "groups: 2 of 4 pools" in run.stderr
+    assert "groups: 2 of " in run.stderr
     (slog,) = games.glob("*.slog")
     return slog
 
@@ -181,7 +182,11 @@ def test_groups_hold_the_opponents_pools_at_each_move_and_rack(grouped):
     assert hdr["leaf_model"]["tag"] == b"synthetic"
     assert len(groups) == 2
     for g in groups:
-        assert len(g.moves) == 2 and g.racks.shape == (2, 27)
+        # The top 2, a draw from ranks [2, 32), and the played move if it is neither.
+        assert 3 <= len(g.moves) <= 4 and g.racks.shape == (2, 27)
+        assert list(g.equity_ranks[:2]) == [0, 1]
+        assert (np.diff(g.equity_ranks[g.equity_ranks >= 0]) > 0).all()
+        assert ((g.equity_ranks >= 2) & (g.equity_ranks < 32)).sum() >= 1
         assert (g.racks.sum(axis=1) == 7).all()
         for row in g.pools:
             for p in row:

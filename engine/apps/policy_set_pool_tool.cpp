@@ -17,8 +17,10 @@
 //
 // --group-positions-per-game N also labels N grouped pools per game
 // (sim/grouped_pools.h) into a same-stem .group (data/group_log.h): at each
-// parent, Alice's --group-moves top moves and --group-racks racks sampled for
-// Bob, Bob's pool at each (move, rack), raced with the file's pools, then the
+// parent, Alice's candidates (the move played, her static-equity top
+// --group-top-moves, and --group-mid-moves, --group-tail-moves and
+// --group-exchanges drawn from the ranking below them) and --group-racks racks
+// sampled for Bob, Bob's pool at each (move, rack), raced with the file's pools, then the
 // maps of each rack's leading replies over their first --group-map-sims
 // rollouts in --group-map-steps steps, in launches of their own. A file is
 // then done only with both sidecars.
@@ -60,6 +62,7 @@
 
 #include <boost/program_options.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -71,6 +74,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <thread>
@@ -286,17 +290,35 @@ JobProducer::Batch JobProducer::prepare_pools(const std::vector<binlog::GamePosi
   return out;
 }
 
+// `cands` best equity first, a move the ranking lacks last.
+SimCandidates by_equity_rank(const SimCandidates& cands) {
+  std::vector<size_t> order(cands.moves.size());
+  std::iota(order.begin(), order.end(), size_t(0));
+  const auto key = [&](size_t i) { return uint32_t(cands.equity_ranks[i]); };
+  std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return key(a) < key(b); });
+  SimCandidates out;
+  out.num_legal_moves = cands.num_legal_moves;
+  for (const size_t i : order) {
+    out.moves.push_back(cands.moves[i]);
+    out.equity_ranks.push_back(cands.equity_ranks[i]);
+    out.highlighted.push_back(cands.highlighted[i]);
+  }
+  return out;
+}
+
 JobProducer::Batch JobProducer::prepare_groups(
   const std::vector<binlog::GamePositionIndex>& batch) {
   const std::vector<SimmedPosition> selected =
-    select(slog_, dict_, opt_, recipe_selector({.top_k = opt_.group.moves, .quotas = {}}), batch);
+    select(slog_, dict_, opt_, recipe_selector({.top_k = 0, .quotas = opt_.group.quotas}), batch);
   Batch out;
   for (const SimmedPosition& sel : selected) {
+    const SimCandidates cands = by_equity_rank(sel.candidates);
     GroupParent parent{
       .at = sel.pos,
       .position = sel.position,
       .bag = sel.bag_size,
-      .moves = sel.candidates.moves,
+      .moves = cands.moves,
+      .equity_ranks = cands.equity_ranks,
       .belief = beliefs_ ? beliefs_->belief(sel.pos) : nullptr,
       .earlier = beliefs_ ? beliefs_->chooser_moves(sel.pos) : std::vector<belief::ChooserMove>{}};
     auto group = std::make_unique<GroupBuild>(
@@ -409,6 +431,7 @@ struct FileReport {
   PoolLabeler::Stats maps;       // the second stage
   double map_seconds = 0;
   size_t groups = 0;
+  size_t group_pools = 0;
   size_t group_bytes = 0;
 
   void print(const binlog::PendingSlog& slog, const Options& opt) const;
@@ -427,9 +450,9 @@ void FileReport::print(const binlog::PendingSlog& slog, const Options& opt) cons
   const double group_seconds =
     (st.tasks ? seconds * double(group_rollouts) / double(st.tasks) : 0.0) + map_seconds;
   std::cerr << std::format(
-    "  groups: {} of {} pools, {:.2f} MB and {:.2f} s each ({} rollouts each, maps {} "
+    "  groups: {} of {:.1f} pools, {:.2f} MB and {:.2f} s each ({} rollouts each, maps {} "
     "launches, {} rollouts, {:.1f} s)\n",
-    groups, opt.group.moves * opt.group.racks, double(group_bytes) / double(groups) / 1e6,
+    groups, double(group_pools) / double(groups), double(group_bytes) / double(groups) / 1e6,
     group_seconds / double(groups), (group_rollouts + maps.tasks) / (long long)groups,
     maps.launches, maps.tasks, map_seconds);
 }
@@ -451,6 +474,7 @@ void write_groups(const JobProducer& producer, RolloutValues& values, const Opti
   GroupWriter writer(path.string(), sources, opt.group.map_sims, opt.group.map_steps);
   for (const auto& g : producer.groups()) writer.add_group(g->record());
   report->groups = producer.groups().size();
+  for (const auto& g : producer.groups()) report->group_pools += g->num_pools();
   report->group_bytes = writer.bytes();
   writer.close();
 }
@@ -484,8 +508,7 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
                 } else {
                   report.group_rollouts += rollouts_of(p);
                   target.group->pool_labeled(target.index, std::move(p));
-                  if (target.index + 1 == size_t(opt.group.moves * opt.group.racks))
-                    meter.add_done();
+                  if (target.index + 1 == target.group->num_pools()) meter.add_done();
                 }
               });
   writer.close();
@@ -540,8 +563,17 @@ void add_options(boost::program_options::options_description& desc, Options& opt
     "group-positions-per-game",
     po::value<int>(&opt.group_positions_per_game)->default_value(opt.group_positions_per_game),
     "eligible turns per game labeled as grouped pools into a .group sidecar (0 = none)")(
-    "group-moves", po::value<int>(&g.moves)->default_value(g.moves),
-    "groups: the mover's static-equity top moves")(
+    "group-top-moves", po::value<int>(&g.quotas.top)->default_value(g.quotas.top),
+    "groups: the mover's static-equity top moves, beside the move the game played")(
+    "group-mid-moves", po::value<int>(&g.quotas.mid)->default_value(g.quotas.mid),
+    "groups: moves drawn from the ranks between the top and the mid rank limit")(
+    "group-tail-moves", po::value<int>(&g.quotas.tail)->default_value(g.quotas.tail),
+    "groups: moves drawn from the ranks at the mid rank limit and below")(
+    "group-exchanges", po::value<int>(&g.quotas.exchange)->default_value(g.quotas.exchange),
+    "groups: exchanges or passes drawn among the mover's")(
+    "group-mid-rank-limit",
+    po::value<int>(&g.quotas.mid_rank_limit)->default_value(g.quotas.mid_rank_limit),
+    "groups: the exclusive rank bound between the mid and tail draws")(
     "group-racks", po::value<int>(&g.racks)->default_value(g.racks),
     "groups: racks sampled for the opponent, the same under every move")(
     "group-map-sims", po::value<int>(&g.map_sims)->default_value(g.map_sims),
@@ -583,9 +615,10 @@ int main(int argc, char** argv) {
       "candidate{}, opponent leaves {}{}\n",
       pending.size(), opt.rollouts.backend, opt.rollouts.leaf_model, opt.labeler.rollouts,
       opt.labeler.race ? " (raced)" : "", leave_model ? opt.leave_inference_path : "uniform",
-      opt.groups() ? std::format(", {} groups per game of {} moves x {} racks",
-                                 opt.group_positions_per_game, opt.group.moves, opt.group.racks)
-                   : "");
+      opt.groups()
+        ? std::format(", {} groups per game of up to {} moves x {} racks",
+                      opt.group_positions_per_game, opt.group.max_moves(), opt.group.racks)
+        : "");
     if (pending.empty()) return 0;
     const std::unique_ptr<RolloutValues> values = opt.rollouts.make(dict);
     for (const binlog::PendingSlog& p : pending) {

@@ -3,8 +3,8 @@
 // The .group sidecar: grouped pools, the search network's store input's
 // training data (docs/plans/deep_bot.md, "Training data: grouped pools"). A
 // companion of a .slog, whose (game_index, turn_index) names each group's
-// parent position, with Alice to move. A group holds her proposer's moves
-// there, the racks sampled for Bob, Bob's pool at each (move, rack) in the
+// parent position, with Alice to move. A group holds her candidates there
+// with their static-equity ranks, the racks sampled for Bob, Bob's pool at each (move, rack) in the
 // .pool record's form (data/pool_log.h), and the maps of each rack's leading
 // replies, each summed over the first n of the reply's rollouts.
 //
@@ -14,6 +14,7 @@
 //   per group:
 //     [GroupHeader                                          24 B]
 //     [Move x num_moves                   Alice's, best equity first]
+//     [int32 x num_moves                  their static-equity ranks]
 //     [GroupRack x num_racks                                28 B each]
 //     per (move, rack), move-major: a pool block (data/pool_log.h), each
 //       candidate's values cut to its first map_sims rollouts
@@ -40,7 +41,7 @@ inline constexpr uint32_t kGroupMagic = 0x50555247u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it
 // whenever the layout or a field's meaning changes; readers accept only this
 // version.
-inline constexpr uint16_t kGroupFormatVersion = 1;
+inline constexpr uint16_t kGroupFormatVersion = 2;
 inline constexpr const char* kGroupExtension = ".group";
 
 #pragma pack(push, 1)
@@ -100,6 +101,9 @@ struct GroupMap {
 struct GroupRecord {
   binlog::GamePositionIndex at;
   std::vector<Move> moves;
+  // Parallel to `moves`: 0-based rank in the parent's static-equity ranking,
+  // or -1 for a move the ranking lacks (a PASS while other moves were legal).
+  std::vector<int32_t> equity_ranks;
   std::vector<Rack> racks;
   std::vector<PoolPosition> pools;  // move-major: pools[move * racks.size() + rack]
   std::vector<GroupMap> maps;
@@ -143,6 +147,7 @@ class GroupReader {
   struct Group {
     const GroupHeader* header;
     const Move* moves;                        // header->num_moves
+    const int32_t* equity_ranks;              // header->num_moves
     const GroupRack* racks;                   // header->num_racks
     std::vector<PoolPositionView> pools;      // move-major
     std::vector<const GroupMapHeader*> maps;  // header->num_maps, each followed by its SimMaps
