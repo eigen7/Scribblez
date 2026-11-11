@@ -19,12 +19,14 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 import policy_set_chunk  # noqa: E402
 from scribblez import ffi, params  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
-from scribblez.policy_set import pools  # noqa: E402
+from scribblez.policy_set import groups, pools  # noqa: E402
+from scribblez.selfplay import run_games  # noqa: E402
 from scribblez.workloads import policy_set, selfplay_gen  # noqa: E402
 from scribblez.workloads.policy_set import (  # noqa: E402
     BELIEFS_INFERRED,
     BELIEFS_UNIFORM,
     LEAF_INPUT,
+    LEAF_SYNTHETIC,
     MODEL_INPUT,
     PolicySetParams,
 )
@@ -119,6 +121,40 @@ def test_inferred_beliefs_write_forgone_sidecars_and_pass_the_model(tmp_path, mo
     assert cmd[cmd.index("--leave-inference") + 1] == "m.onnx"
     assert cmd[cmd.index("--rollouts") + 1] == "100"
     assert "--backend" not in cmd  # the GPU, the tool's default
+
+
+def test_groups_add_their_flags_and_sidecar_only_when_labeled():
+    p = PolicySetParams()
+    assert policy_set.chunk_sidecars(p) == (".pool",)
+    cmd = policy_set.pool_command(p, Path("d"), "leaf", None, 1, 2, groups=p)
+    assert not any(a.startswith("--group") for a in cmd)
+    p = PolicySetParams(group_positions_per_game=1, group_racks=5)
+    assert policy_set.chunk_sidecars(p) == (".pool", ".group")
+    cmd = policy_set.pool_command(p, Path("d"), "leaf", None, 1, 2, groups=p)
+    assert cmd[cmd.index("--group-positions-per-game") + 1] == "1"
+    assert cmd[cmd.index("--group-racks") + 1] == "5"
+    assert cmd[cmd.index("--group-top-moves") + 1] == "3"
+
+
+def test_a_chunk_labels_its_groups_beside_its_pools(tmp_path):
+    if not LEAVES.exists():
+        pytest.skip("HastyBot leave values not installed")
+    chunk = tmp_path / "chunk"
+    assert (
+        run_games(chunk, num_games=1, threads=2, player_spec="--type=hastybot-endgame", seed=1) == 0
+    )
+    (slog,) = chunk.glob("*.slog")
+    p = PolicySetParams(
+        leave_beliefs=BELIEFS_UNIFORM, rollouts=8, positions_per_game=1,
+        group_positions_per_game=1, group_top_moves=1, group_mid_moves=0, group_tail_moves=0,
+        group_exchanges=0, group_racks=1, group_map_sims=2, group_map_steps=1,
+    )  # fmt: skip
+    policy_set.write_pools(p, LEAF_SYNTHETIC, None, chunk, threads=4, groups=p)
+    assert slog.with_suffix(pools.SUFFIX).exists()
+    hdr, read = groups.read_groups(slog.with_suffix(groups.SUFFIX))
+    assert hdr["rollouts"] == 8 and hdr["map_sims"] == 2 and hdr["map_steps"] == 1
+    assert len(read) == 1 and len(read[0].racks) == 1 and 1 <= len(read[0].moves) <= 2
+    assert read[0].equity_ranks[0] == 0
 
 
 def test_games_per_chunk_is_bounded_by_play_games_file_size(tmp_path):

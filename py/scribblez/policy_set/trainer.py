@@ -53,6 +53,7 @@ from scribblez.policy_set.onnx_export import export_onnx
 from scribblez.position_eval.trainer import OutputDeliverer, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.policy_set import chunk_sidecars
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # The baseline's record key prefix; each form's records carry its own.
@@ -318,7 +319,7 @@ def run(ctx: WorkerContext) -> int:
         ctx,
         paths,
         params,
-        chunk_sidecar=pools.SUFFIX,
+        chunk_sidecars=chunk_sidecars(params),
         holdout_every=params.holdout_every,
         holdout_chunks=params.holdout_chunks,
     )
