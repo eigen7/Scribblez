@@ -66,23 +66,23 @@ void complete_sim_maps(std::vector<SimMaps>& maps, const std::vector<RolloutFate
 namespace {
 
 // The arrays of a SimMaps, in order, as (name, elements).
-constexpr std::pair<const char*, int> kSimMapsFields[] = {
-  {"class_sum", rollout_abi::kFateClasses* rollout_abi::kSquares},
-  {"class_sq_sum", rollout_abi::kFateClasses* rollout_abi::kSquares},
-  {"points_sum", rollout_abi::kSquares},
-  {"points_sq_sum", rollout_abi::kSquares},
-  {"points_leaf_var", rollout_abi::kSquares},
-  {"went_out_sum", rollout_abi::kWentOutClasses},
-  {"went_out_sq_sum", rollout_abi::kWentOutClasses},
-  {"end_points_sum", 1},
-  {"end_points_sq_sum", 1},
-  {"end_points_leaf_var", 1},
-  {"sims", 1},
+constexpr SimMapsField kSimMapsFields[] = {
+  {"class_sum", rollout_abi::kFateClasses, rollout_abi::kSquares},
+  {"class_sq_sum", rollout_abi::kFateClasses, rollout_abi::kSquares},
+  {"points_sum", 1, rollout_abi::kSquares},
+  {"points_sq_sum", 1, rollout_abi::kSquares},
+  {"points_leaf_var", 1, rollout_abi::kSquares},
+  {"went_out_sum", 1, rollout_abi::kWentOutClasses},
+  {"went_out_sq_sum", 1, rollout_abi::kWentOutClasses},
+  {"end_points_sum", 1, 1},
+  {"end_points_sq_sum", 1, 1},
+  {"end_points_leaf_var", 1, 1},
+  {"sims", 1, 1},
 };
 
 constexpr int simmaps_table_floats() {
   int n = 0;
-  for (const auto& field : kSimMapsFields) n += field.second;
+  for (const SimMapsField& field : kSimMapsFields) n += field.rows * field.cols;
   return n;
 }
 
@@ -91,11 +91,14 @@ static_assert(sizeof(SimMaps) == sizeof(float) * simmaps_table_floats());
 
 }  // namespace
 
+std::span<const SimMapsField> sim_maps_fields() { return kSimMapsFields; }
+
 std::string sim_maps_difference(const SimMaps& a, const SimMaps& b, float tolerance) {
   const float* fa = reinterpret_cast<const float*>(&a);
   const float* fb = reinterpret_cast<const float*>(&b);
   int i = 0;
-  for (const auto& [name, elements] : kSimMapsFields) {
+  for (const auto& [name, rows, cols] : kSimMapsFields) {
+    const int elements = rows * cols;
     for (int j = 0; j < elements; ++j, ++i) {
       const float scale = std::max({1.0f, std::abs(fa[i]), std::abs(fb[i])});
       if (std::abs(fa[i] - fb[i]) > tolerance * scale)

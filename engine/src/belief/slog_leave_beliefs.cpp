@@ -1,5 +1,6 @@
 #include "belief/slog_leave_beliefs.h"
 
+#include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "encoding/input_encoder.h"
 #include "lexicon/dictionary.h"
@@ -49,6 +50,13 @@ std::shared_ptr<const LeaveSampler> SlogLeaveBeliefs::belief(
   const binlog::GamePositionIndex& at) const {
   const LeaveQuery q = query(at);
   return beliefs_of({&q, 1}, predict_, table_)[0];
+}
+
+std::vector<ChooserMove> SlogLeaveBeliefs::chooser_moves(
+  const binlog::GamePositionIndex& at) const {
+  std::vector<TurnRecord> scratch;
+  const GameLog g = binlog::make_game_view(slog_.data(), at.game_idx, scratch, nullptr);
+  return chooser_moves_from_replay(g, int(at.turn_idx), forgone_.game(at.game_idx), dict_);
 }
 
 }  // namespace scribblez::belief

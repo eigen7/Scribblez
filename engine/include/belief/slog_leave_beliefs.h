@@ -11,6 +11,7 @@
 #include "belief/leave_params.h"
 #include "belief/leave_query.h"
 #include "belief/leave_sampler.h"
+#include "belief/reply_query.h"
 #include "data/forgone_play_log.h"
 #include "data/slog_sampling.h"
 #include "game/tile_counts.h"
@@ -41,6 +42,10 @@ class SlogLeaveBeliefs {
 
   // The belief at `at`, or null where the leave is not modelled. Thread-safe.
   std::shared_ptr<const LeaveSampler> belief(const binlog::GamePositionIndex& at) const;
+
+  // The mover's earlier moves at `at`, as the opponent's view of a move there
+  // reads them (ReplyPosition::earlier). Thread-safe.
+  std::vector<ChooserMove> chooser_moves(const binlog::GamePositionIndex& at) const;
 
  private:
   const std::vector<char>& slog_;

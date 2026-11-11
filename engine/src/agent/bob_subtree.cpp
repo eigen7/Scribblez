@@ -20,35 +20,6 @@ namespace {
 constexpr uint64_t kSubtreeDomain = 0x5B0B5B0B5B0B5B0BULL;
 constexpr uint64_t kAfterReplyDomain = 0xA11CEA11CEA11CEULL;
 
-// Bob's belief inputs after `candidate`, one query per rack, and the model's
-// parameters for them; both empty without a model. Each rack's sampler is
-// built only where it is used, so a turn never holds a candidate's hundred
-// table passes at once.
-struct BobBeliefs {
-  std::vector<belief::LeaveQuery> queries;
-  std::vector<belief::LeaveParams> params;
-
-  std::shared_ptr<const belief::LeaveSampler> sampler(size_t rack,
-                                                      const LeaveValueArrays& table) const;
-};
-
-std::shared_ptr<const belief::LeaveSampler> BobBeliefs::sampler(
-  size_t rack, const LeaveValueArrays& table) const {
-  if (queries.empty()) return nullptr;
-  return belief::belief_of(queries[rack], params[rack], table);
-}
-
-BobBeliefs bob_beliefs(const AliceTurn& turn, const Move& candidate, const BeliefModel& model,
-                       const Dictionary& dict) {
-  if (!model.predict) return {};
-  const belief::ReplyView view(turn.position, candidate, dict);
-  BobBeliefs out{.queries = std::vector<belief::LeaveQuery>(turn.bob_racks.size()), .params = {}};
-  util::parallel_for(turn.bob_racks.size(),
-                     [&](size_t i) { out.queries[i] = view.query(turn.bob_racks[i]); });
-  out.params = belief::predict_beliefs(out.queries, model.predict);
-  return out;
-}
-
 // One of Alice's candidates' subtrees: the jobs of the racks where Bob has a
 // choice to sim, keyed by rack index, and the replies of the others in place.
 struct CandidateSubtrees {
@@ -59,7 +30,7 @@ struct CandidateSubtrees {
 CandidateSubtrees candidate_subtrees(const AliceTurn& turn, size_t c, const BeliefModel& model,
                                      const SubtreeParams& params, int sims, const Dictionary& dict,
                                      uint64_t seed, std::vector<BobReply>& replies) {
-  const auto beliefs = bob_beliefs(turn, turn.candidates[c], model, dict);
+  const auto beliefs = bob_beliefs(turn.position, turn.candidates[c], turn.bob_racks, model, dict);
   const size_t racks = turn.bob_racks.size();
   CandidateSubtrees out{.jobs = {}, .moves = std::vector<std::vector<Move>>(racks)};
   std::vector<std::optional<PoolJob>> jobs(racks);
@@ -130,13 +101,20 @@ int most_sims(const std::vector<std::vector<BobReply>>& replies, const std::vect
 
 }  // namespace
 
-std::vector<Rack> bob_racks(const RolloutGroup& group, const RolloutStart& start, int count) {
-  RolloutBatch batch{.groups = {group}, .starts = {start}, .tasks = {}};
-  batch.starts[0].group = 0;
-  std::vector<Rack> out;
-  out.reserve(size_t(count));
-  for (int i = 0; i < count; ++i)
-    out.push_back(rollout_racks(batch, {.position = 0, .rollout = uint32_t(i)}).opp);
+std::shared_ptr<const belief::LeaveSampler> BobBeliefs::sampler(
+  size_t rack, const LeaveValueArrays& table) const {
+  if (queries.empty()) return nullptr;
+  return belief::belief_of(queries[rack], params[rack], table);
+}
+
+BobBeliefs bob_beliefs(const belief::ReplyPosition& position, const Move& candidate,
+                       const std::vector<Rack>& racks, const BeliefModel& model,
+                       const Dictionary& dict) {
+  if (!model.predict) return {};
+  const belief::ReplyView view(position, candidate, dict);
+  BobBeliefs out{.queries = std::vector<belief::LeaveQuery>(racks.size()), .params = {}};
+  util::parallel_for(racks.size(), [&](size_t i) { out.queries[i] = view.query(racks[i]); });
+  out.params = belief::predict_beliefs(out.queries, model.predict);
   return out;
 }
 
