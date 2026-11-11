@@ -61,7 +61,7 @@ def test_header_names_the_sources(pooled):
     hdr, positions = read_pools(pooled.with_suffix(".pool"))
     assert hdr["flags"] == 0  # uniform opponent leaves
     assert hdr["rollouts"] == ROLLOUTS
-    assert hdr["leaf_model_tag"] == b"synthetic" and hdr["leaf_model_hash"] == b""
+    assert hdr["leaf_model"]["tag"] == b"synthetic" and hdr["leaf_model"]["hash"] == b""
     assert len(positions) == 2  # one per game
 
 

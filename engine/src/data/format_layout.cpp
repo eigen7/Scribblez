@@ -70,7 +70,7 @@ consteval const char* scalar_code(std::meta::info t) {
 // keyed by the type's own identifier (build_structs serves them under it).
 consteval bool is_served_struct(std::meta::info t) {
   return util::type_is<Move>(t) || util::type_is<RolloutStats>(t) ||
-         util::type_is<WinTableFeature>(t);
+         util::type_is<WinTableFeature>(t) || util::type_is<PoolModelRecord>(t);
 }
 
 // Fills in the dtype of one field: a nested struct reference, a char array
@@ -145,6 +145,7 @@ json::object build_structs() {
   s["PoolPositionHeader"] = struct_json<PoolPositionHeader>();
   s["PoolOppRack"] = struct_json<PoolOppRack>();
   s["PoolCandidate"] = struct_json<PoolCandidate>();
+  s["PoolModelRecord"] = struct_json<PoolModelRecord>();
   s["WinTableFeature"] = struct_json<WinTableFeature>();
   s["WinTableSample"] = struct_json<WinTableSample>();
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();

@@ -142,7 +142,7 @@ def test_a_chunk_labels_into_pools_that_read_back_as_model_inputs(surveyed_chunk
     (slog,) = surveyed_chunk.glob("*.slog")
     hdr, read = pools.read_pools(slog.with_suffix(pools.SUFFIX))
     assert hdr["flags"] == 0 and hdr["rollouts"] == 8
-    assert hdr["leaf_model_tag"] == policy_set.LEAF_SYNTHETIC.encode()
+    assert hdr["leaf_model"]["tag"] == policy_set.LEAF_SYNTHETIC.encode()
     assert len(read) == 1  # one position per game
     for pool in read:
         assert len(pool.moves) > 1
