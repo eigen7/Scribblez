@@ -25,8 +25,8 @@ GameEnd game_end(const GameLog& g) {
   for (int p = 0; p < 2; ++p) end.adjustment[p] = g.final_scores[p] - after_last[p];
   // Going out is the only positive adjustment, and the opponent's is then
   // zero; a stalemate charges both players. A game whose leftover tiles were
-  // all blanks adjusts nobody and reads as unfinished, which is rare enough
-  // to leave unlabelled.
+  // all blanks would adjust nobody and read as unfinished; Game::play asserts
+  // that away.
   for (int p = 0; p < 2; ++p) {
     if (end.adjustment[p] > 0) {
       end.kind = GameEndKind::kWentOut;

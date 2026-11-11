@@ -30,6 +30,9 @@ struct TasksByStart {
 TasksByStart bin_by_start(std::span<const uint32_t> start_of, size_t starts);
 TasksByStart tasks_by_start(const RolloutBatch& batch);
 
+// Adds `more` to `maps`, field by field: a start's maps over several runs.
+void add_sim_maps(rollout_abi::SimMaps& maps, const rollout_abi::SimMaps& more);
+
 // Each start's maps from every task's fates (fates[k] for batch.tasks[k]).
 std::vector<rollout_abi::SimMaps> sum_sim_maps(const std::vector<rollout_abi::RolloutFates>& fates,
                                                const TasksByStart& by_start);

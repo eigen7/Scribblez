@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -564,6 +565,26 @@ TEST(DeepBot, AlicesValueWeightsHerPayoffsAfterBobsContenders) {
       expect += (0.75 * weighted.payoffs[c][i][0] + 0.25 * weighted.payoffs[c][i][1]) / kRacks;
     }
     EXPECT_NEAR(weighted.values[c], expect, 1e-12);
+  }
+  // With residuals: one summary per (candidate, rack, contender), its sims
+  // the contender's, over the squares empty after the reply.
+  const ReplyPayoffs with_residuals =
+    payoffs_after_replies(turn, which, replies, values, nwl23(), /*seed=*/2, /*residuals=*/true);
+  for (size_t c : which) {
+    ASSERT_EQ(with_residuals.residuals[c].size(), size_t(kRacks));
+    for (size_t i = 0; i < kRacks; ++i) {
+      ASSERT_EQ(with_residuals.residuals[c][i].size(), 2u);
+      for (size_t k = 0; k < 2; ++k) {
+        const MapResidual& r = with_residuals.residuals[c][i][k];
+        EXPECT_EQ(r.sims, replies[c][i][k].sims);
+        EXPECT_GT(r.squares, 150);
+        EXPECT_LT(r.squares, kBoardCells);
+        EXPECT_GE(r.points_noise, 0.0);
+        EXPECT_GE(r.ownership_noise, 0.0);
+        EXPECT_TRUE(std::isfinite(r.points_r2 + r.ownership_r2 + r.end_r2 + r.going_out_r2));
+      }
+      EXPECT_DOUBLE_EQ(with_residuals.payoffs[c][i][0], weighted.payoffs[c][i][0]);
+    }
   }
   // One contender, weight 1: the mean of its payoffs, the same three sims.
   for (auto& by_rack : replies)

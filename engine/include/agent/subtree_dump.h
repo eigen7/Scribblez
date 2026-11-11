@@ -16,7 +16,11 @@
 //   - how often a second run of the subtrees, on fresh samples and draws, picks
 //     the same reply: β's stability in R_B and the seed;
 //   - Alice's value of each candidate under each reply model (null for the
-//     subtree's where the hasty first pass pruned it), and each model's pick.
+//     subtree's where the hasty first pass pruned it), and each model's pick;
+//   - per (rack, contender), the residual summary of Alice's sims after the
+//     contender against the leaf network's prior there
+//     (sim/map_residuals.h): what step 8's noise readout reads
+//     (py/scripts/deep_bot/residual_noise.py).
 
 #include "agent/bob_subtree.h"
 #include "game/move.h"

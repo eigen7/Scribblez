@@ -411,13 +411,14 @@ filled it, whether in a bingo and the move's signed points; a square still
 empty stays empty for certain when the game ended inside the rollout, and is
 otherwise open; and who went out and the net end-of-game rack adjustment,
 when the game ended. A second kernel sums each start's rollouts into its
-maps (`rollout_abi::SimMaps`: per-square class counts and points sums, the
-end-of-game sums, the rollout count), one block per start, adding the start's
+maps (`rollout_abi::SimMaps`: per-square class counts and points sums with
+their squares, the end-of-game sums, the rollout count), one block per
+start, adding the start's
 tasks one at a time in ascending task order; the CPU reference
 (`sim/sim_maps.h`) adds them in the same order, so the two sums are
 bit-identical: `gpu_kernel_tests` asserts so, and `gpu_rollout_demo` found
 every start's maps identical at 65,536 rollouts of a late position with 10,620
-finished games among them. Only the per-start sums come back to the host (6.3
+finished games among them. Only the per-start sums come back to the host (12
 KB per start), never the per-rollout fates, and only for a batch that asks for
 them (`RolloutBatch::sum_maps`): DeepBot's raced launches run a few rollouts
 per start, so summing and downloading maps nobody reads would cost up to
@@ -426,10 +427,14 @@ per start, so summing and downloading maps nobody reads would cost up to
 What a rollout that stopped at a leaf left open, the leaf network completes
 (`GpuRolloutValues`): after each chunk of leaves, a kernel reads the
 network's continuation heads in place in its output buffers and adds, for
-each open square, the class probabilities, the points' mean and their mean
-square (variance plus squared mean), and likewise for the end of the game,
-to the start's sums, so a completed map counts every rollout once on every
-square empty at the start. A chunk can hold a thousand leaves of one start;
+each open square, the class probabilities and their squares, the points'
+mean and its square, and the network's variance of the points apart
+(`points_leaf_var`), and likewise for the end of the game, to the start's
+sums, so a completed map counts every rollout once on every square empty at
+the start. Kept apart, the sums of squares give the spread of the rollouts'
+expected values, the sampling noise of a map's mean, which is what a
+residual's reliability is (`sim/map_residuals.h`); the network's variance
+beside it says what a rollout played to the end would add. A chunk can hold a thousand leaves of one start;
 summed by one block, those were a chain of dependent loads costing 1.2 ms a
 chunk, 18% of the leaf stage at 16 starts of 4,096 rollouts. The kernel sums
 each start's leaves in slices of 16, one block each, and adds the slices in

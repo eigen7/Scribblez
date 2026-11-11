@@ -22,6 +22,7 @@ namespace scribblez {
 
 class Dictionary;
 class HastyEquity;
+class LeaveValues;
 
 class GpuRolloutValues : public RolloutValues {
  public:
@@ -36,6 +37,9 @@ class GpuRolloutValues : public RolloutValues {
   GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq, const Params& params);
 
   BatchValues run(const RolloutBatch& batch) override;
+  // The leaves encoded on the host (encoding/leaf_eval_input_encoder.h) and
+  // staged from there, the network's rows at a time.
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override;
 
   // Seconds in the rollout kernel (with the batch's conversion and
   // transfers) and in the leaf (encoding and the network), and the leaves
@@ -56,10 +60,13 @@ class GpuRolloutValues : public RolloutValues {
  private:
   // The leaf network's continuation heads, in its device output buffers.
   rollout_abi::LeafHeadRows device_heads() const;
+  // The network's prediction in row `row` of its host output buffers.
+  LeafPrediction host_prediction(int row);
   // Fills the outcomes of tasks[0, count) from the leaf network.
   void evaluate_leaves(const uint32_t* tasks, int count, std::vector<RolloutOutcome>* outcomes);
 
   const Dictionary& dict_;
+  const LeaveValues& leave_values_;  // the encoder's, the network's own
   GpuHastyRollouts rollouts_;
   nn::NeuralNet<nn::LeafEvalSpec> net_;
   Timings timings_;

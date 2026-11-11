@@ -28,6 +28,7 @@
 #include "game/rack.h"
 #include "lexicon/leave_value_arrays.h"
 #include "sim/hasty_rollout_task.h"
+#include "sim/map_residuals.h"
 #include "sim/rollout_values.h"
 
 #include <cstddef>
@@ -78,12 +79,19 @@ struct ReplyPayoffs {
   // Alice's value of c: the mean over racks of her payoffs weighted by the
   // contenders' weights; kPruned for the rest.
   std::vector<double> values;
+  // residuals[c][i][k], parallel to payoffs when asked for: the sims after
+  // the contender against the leaf network's prior on the position after it,
+  // from Bob's side (sim/map_residuals.h).
+  std::vector<std::vector<std::vector<MapResidual>>> residuals;
   long long sims = 0;  // the rollouts run
 };
 
+// With `residuals`, the sims sum their maps and each (c, i, k) gets its
+// residual summary: one leaf network call per contender more.
 ReplyPayoffs payoffs_after_replies(const AliceTurn& turn, const std::vector<size_t>& which,
                                    const std::vector<std::vector<BobReply>>& replies,
-                                   RolloutValues& values, const Dictionary& dict, uint64_t seed);
+                                   RolloutValues& values, const Dictionary& dict, uint64_t seed,
+                                   bool residuals = false);
 
 // The racks Alice's rollouts seat for Bob: rollout i's for i < count, from the
 // group her candidates share (any of `starts`, all in `group`).
