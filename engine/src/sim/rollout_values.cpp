@@ -28,11 +28,28 @@ Wld wld_from_logits(const float* z) {
   return {float(e0 / sum), float(e1 / sum), float(e2 / sum)};
 }
 
+// The synthetic leaf's continuation heads: every class, mean and variance
+// varying by square, so a misplaced plane or square shows.
+LeafPrediction synthetic_heads() {
+  LeafPrediction p;
+  for (int sq = 0; sq < rollout_abi::kSquares; ++sq) {
+    for (int c = 0; c < rollout_abi::kFateClasses; ++c)
+      p.ownership[size_t(c * rollout_abi::kSquares + sq)] = 0.5f * float((sq * 7 + c * 3) % 11) - 2;
+    p.square_points[size_t(sq)] = 0.05f * float(sq % 13 - 6);
+    p.square_points[size_t(rollout_abi::kSquares + sq)] = 0.01f * float(1 + sq % 5);
+  }
+  p.going_out = {0.4f, -0.3f, -1.5f};
+  p.end_points = {0.05f, 0.02f};
+  return p;
+}
+
 CpuLeafFn synthetic_leaf() {
-  return [](const CpuLeaf& leaf) {
+  return [heads = synthetic_heads()](const CpuLeaf& leaf) {
     const double diff = leaf.scores[0] - leaf.scores[1];
     const float p = float(1.0 / (1.0 + std::exp(-diff / kSyntheticSpreadScale)));
-    return Wld{p, 0.0f, 1.0f - p};
+    LeafPrediction out = heads;
+    out.wld = {p, 0.0f, 1.0f - p};
+    return out;
   };
 }
 
@@ -42,16 +59,30 @@ CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf)
 BatchValues CpuRolloutValues::run(const RolloutBatch& batch) {
   BatchValues out;
   out.outcomes.resize(batch.tasks.size());
-  std::vector<rollout_abi::RolloutFates> fates(batch.sum_maps ? batch.tasks.size() : 0);
+  // What the maps need, kept only for a batch that sums them.
+  const size_t kept = batch.sum_maps ? batch.tasks.size() : 0;
+  std::vector<rollout_abi::RolloutFates> fates(kept);
+  std::vector<LeafPrediction> predictions(kept);
+  std::vector<rollout_abi::LeafHeadRows> heads(kept, rollout_abi::LeafHeadRows{});
   for_each_hasty_rollout_cpu(batch, dict_,
                              [&](size_t k, const rollout_abi::RolloutResult& result,
                                  const CpuLeaf& leaf, const rollout_abi::RolloutFates& f) {
                                out.outcomes[k].result = result;
-                               out.outcomes[k].wld =
-                                 result.game_over ? terminal_wld(result.diff) : leaf_(leaf);
-                               if (batch.sum_maps) fates[k] = f;
+                               if (kept) fates[k] = f;
+                               if (result.game_over) {
+                                 out.outcomes[k].wld = terminal_wld(result.diff);
+                                 return;
+                               }
+                               const LeafPrediction p = leaf_(leaf);
+                               out.outcomes[k].wld = p.wld;
+                               if (!kept) return;
+                               predictions[k] = p;
+                               heads[k] = predictions[k].heads();
                              });
-  if (batch.sum_maps) out.maps = sum_sim_maps(fates, tasks_by_start(batch));
+  if (!kept) return out;
+  const TasksByStart by_start = tasks_by_start(batch);
+  out.maps = sum_sim_maps(fates, by_start);
+  complete_sim_maps(out.maps, fates, by_start, heads);
   return out;
 }
 

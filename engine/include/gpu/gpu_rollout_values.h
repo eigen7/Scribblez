@@ -2,8 +2,10 @@
 
 // Rollout batches valued on the GPU (sim/rollout_values.h): the hasty-rollout
 // kernel plays every task, a second kernel writes each end state's leaf eval
-// row straight into the leaf network's TensorRT input buffers, and only the
-// network's win/draw/loss logits come back to the host.
+// row straight into the leaf network's TensorRT input buffers, and the
+// network's win/draw/loss logits come back to the host. For a batch that sums
+// its maps, a third kernel completes them from the network's continuation
+// heads in its output buffers, and only the maps come back.
 
 #include "gpu/hasty_rollouts_gpu.h"
 #include "nn/model_specs.h"
@@ -51,6 +53,8 @@ class GpuRolloutValues : public RolloutValues {
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
 
  private:
+  // The leaf network's continuation heads, in its device output buffers.
+  rollout_abi::LeafHeadRows device_heads() const;
   // Fills the outcomes of tasks[0, count) from the leaf network.
   void evaluate_leaves(const uint32_t* tasks, int count, std::vector<RolloutOutcome>* outcomes);
 

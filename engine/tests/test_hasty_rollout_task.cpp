@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -477,10 +478,6 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
   run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
   const std::vector<rollout_abi::SimMaps> maps = sum_sim_maps(fates, by_start);
   ASSERT_EQ(maps.size(), 2u);
-  const BatchValues values = CpuRolloutValues(dict, synthetic_leaf()).run(batch);
-  ASSERT_EQ(values.maps.size(), 2u);
-  for (size_t s = 0; s < 2; ++s)
-    EXPECT_EQ(sim_maps_difference(values.maps[s], maps[s]), "") << "start " << s;
   for (size_t s = 0; s < 2; ++s) {
     const rollout_abi::SimMaps& m = maps[s];
     const float n = float(by_start.offsets[s + 1] - by_start.offsets[s]);
@@ -500,6 +497,49 @@ TEST(SimMaps, SumEachStartsRolloutsInTaskOrder) {
       EXPECT_EQ(m.points_sq_sum[sq], points_sq) << "start " << s << " square " << sq;
     }
   }
+}
+
+// Mid-game, where every rollout stops at a leaf: the CPU backend's maps are
+// the exact sums completed by each leaf's heads, every rollout counted once,
+// and the end of the game is the leaf's prediction alone.
+TEST(SimMaps, TheCpuBackendCompletesWhatTheLeavesLeftOpen) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
+  const Dictionary& dict = nwl23();
+  const Decision d = decision_after(dict, /*seed=*/1, /*plies=*/10);
+  RolloutBatch batch = batch_of(d, {ranked_moves(d, dict).front()}, /*rollouts=*/16);
+  batch.sum_maps = true;
+  std::vector<CpuLeaf> leaves(batch.tasks.size());
+  std::vector<rollout_abi::RolloutFates> fates;
+  const auto results = run_hasty_rollouts_cpu(batch, dict, &leaves, &fates);
+  const CpuLeafFn leaf = synthetic_leaf();
+  std::vector<LeafPrediction> predictions(batch.tasks.size());
+  std::vector<rollout_abi::LeafHeadRows> heads(batch.tasks.size());
+  for (size_t k = 0; k < batch.tasks.size(); ++k) {
+    ASSERT_EQ(results[k].game_over, 0) << "rollout " << k;
+    predictions[k] = leaf(leaves[k]);
+    heads[k] = predictions[k].heads();
+  }
+  const TasksByStart by_start = tasks_by_start(batch);
+  std::vector<rollout_abi::SimMaps> expected = sum_sim_maps(fates, by_start);
+  complete_sim_maps(expected, fates, by_start, heads);
+
+  const BatchValues values = CpuRolloutValues(dict, leaf).run(batch);
+  ASSERT_EQ(values.maps.size(), 1u);
+  const rollout_abi::SimMaps& m = values.maps[0];
+  EXPECT_EQ(sim_maps_difference(m, expected[0]), "");
+  EXPECT_LT(completion_gap(m), 1e-3f);
+  const auto& going_out = predictions[0].going_out;
+  float total = 0;
+  for (const float z : going_out) total += std::exp(z);
+  for (int c = 0; c < rollout_abi::kWentOutClasses; ++c) {
+    EXPECT_NEAR(m.went_out_sum[c], m.sims * std::exp(going_out[size_t(c)]) / total, 1e-3f)
+      << "class " << c;
+  }
+  const float mean = predictions[0].end_points[0] * rollout_abi::kLeafPointsScale;
+  const float var =
+    predictions[0].end_points[1] * rollout_abi::kLeafPointsScale * rollout_abi::kLeafPointsScale;
+  EXPECT_NEAR(m.end_points_sum, m.sims * mean, 1e-3f);
+  EXPECT_NEAR(m.end_points_sq_sum, m.sims * (var + mean * mean), 1e-2f);
 }
 
 namespace {

@@ -223,18 +223,55 @@ rollout_gpu::BatchAbi batch_abi(const RolloutBatch& batch, const Dictionary& dic
 
 }  // namespace
 
-GpuHastyRollouts::Output GpuHastyRollouts::run(const RolloutBatch& batch, const Dictionary& dict) {
+std::vector<rollout_abi::RolloutResult> GpuHastyRollouts::run(const RolloutBatch& batch,
+                                                              const Dictionary& dict) {
   const rollout_gpu::BatchAbi abi = batch_abi(batch, dict);
-  Output out;
-  out.results.resize(batch.tasks.size());
-  if (batch.sum_maps) out.maps.resize(batch.starts.size());
+  std::vector<rollout_abi::RolloutResult> results(batch.tasks.size());
   double seconds[3];
   phase_cycles_.assign(rollout_gpu::kPhases, 0);
   counts_.assign(rollout_gpu::kCounts, 0);
-  rollout_gpu::run_rollouts(impl_->tables, abi, out.results.data(),
-                            batch.sum_maps ? out.maps.data() : nullptr, seconds,
+  rollout_gpu::run_rollouts(impl_->tables, abi, results.data(), batch.sum_maps, seconds,
                             phase_cycles_.data(), counts_.data());
   timings_ = Timings{seconds[0], seconds[1], seconds[2]};
+  task_starts_.clear();
+  map_starts_ = batch.sum_maps ? batch.starts.size() : 0;
+  if (batch.sum_maps) {
+    for (const rollout_abi::RolloutTask& t : batch.tasks) task_starts_.push_back(t.position);
+  }
+  return results;
+}
+
+namespace {
+
+// Tasks [0, count) binned by their start in the last run (sim/sim_maps.h).
+TasksByStart chunk_by_start(const uint32_t* tasks, int count,
+                            const std::vector<uint32_t>& task_starts, size_t starts) {
+  std::vector<uint32_t> start_of(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i) start_of[size_t(i)] = task_starts[tasks[i]];
+  return bin_by_start(start_of, starts);
+}
+
+}  // namespace
+
+void GpuHastyRollouts::complete_maps(const uint32_t* tasks, int count,
+                                     const rollout_abi::LeafHeadRows& heads) {
+  if (map_starts_ == 0 || count <= 0) return;
+  const TasksByStart rows = chunk_by_start(tasks, count, task_starts_, map_starts_);
+  rollout_gpu::complete_maps(impl_->tables, tasks, count, rows.tasks.data(), rows.offsets.data(),
+                             map_starts_, heads);
+}
+
+void GpuHastyRollouts::complete_maps_from_host(const uint32_t* tasks, int count,
+                                               const rollout_abi::LeafHeadRows& heads) {
+  if (map_starts_ == 0 || count <= 0) return;
+  const TasksByStart rows = chunk_by_start(tasks, count, task_starts_, map_starts_);
+  rollout_gpu::complete_maps_from_host(impl_->tables, tasks, count, rows.tasks.data(),
+                                       rows.offsets.data(), map_starts_, heads);
+}
+
+std::vector<rollout_abi::SimMaps> GpuHastyRollouts::maps() const {
+  std::vector<rollout_abi::SimMaps> out(map_starts_);
+  rollout_gpu::download_maps(impl_->tables, out.data(), out.size());
   return out;
 }
 
