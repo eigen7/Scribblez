@@ -3,11 +3,11 @@ owns the format), the search network's store input's training data
 (docs/plans/deep_bot.md, "Training data: grouped pools").
 
 A group names its parent by (game, turn) in the companion .slog, with the
-mover to move there; it holds the mover's moves, the racks sampled for the
-opponent, the opponent's pool at each (move, rack) in the .pool record's form
-(pools.py's Pool, its rollout values cut to the maps' count), and the maps of
-each rack's leading replies, each summed over the reply's first `sims`
-rollouts.
+mover to move there; it holds the mover's candidates with their equity ranks,
+the racks sampled for the opponent, the opponent's pool at each (move, rack)
+in the .pool record's form (pools.py's Pool, its rollout values cut to the
+maps' count), and the maps of each rack's leading replies, each summed over
+the reply's first `sims` rollouts.
 """
 
 from dataclasses import dataclass
@@ -51,13 +51,16 @@ class GroupMap:
 
 @dataclass
 class Group:
-    """One group: its parent's address in the .slog, the mover's moves (Move
-    records, best equity first), the opponent's racks as tile counts (R, 27)
-    uint8, the pools (move-major, moves x racks) and the maps."""
+    """One group: its parent's address in the .slog, the mover's candidates
+    (Move records, best equity first) with their ranks in the parent's
+    static-equity ranking (int32, -1 for a pass the ranking lacks), the
+    opponent's racks as tile counts (R, 27) uint8, the pools (move-major,
+    moves x racks) and the maps."""
 
     game: int
     turn: int
     moves: np.ndarray
+    equity_ranks: np.ndarray
     racks: np.ndarray
     pools: list[list[Pool]]  # pools[move][rack]
     maps: list[GroupMap]
@@ -104,11 +107,12 @@ class _Reader:
     def group(self) -> Group:
         gh = self.take(ffi.struct_dtype("GroupHeader"), 1)[0]
         moves = self.take(ffi.struct_dtype("Move"), int(gh["num_moves"])).copy()
+        ranks = self.take(np.dtype(np.int32), len(moves)).copy()
         racks = self.take(ffi.struct_dtype("GroupRack"), int(gh["num_racks"]))["counts"].copy()
         pools = [[self.pool(gh) for _ in range(len(racks))] for _ in range(len(moves))]
         maps = [self.map() for _ in range(int(gh["num_maps"]))]
         self.groups += 1
-        return Group(int(gh["game_index"]), int(gh["turn_index"]), moves, racks, pools, maps)
+        return Group(int(gh["game_index"]), int(gh["turn_index"]), moves, ranks, racks, pools, maps)
 
     def pool(self, gh: np.void) -> Pool:
         ph = self.take(ffi.struct_dtype("PoolPositionHeader"), 1)[0]

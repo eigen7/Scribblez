@@ -44,8 +44,13 @@ const Dictionary& nwl23() {
 }
 
 const BeliefModel kNoModel;  // Bob draws Alice's whole rack from the unseen pool
-constexpr GroupParams kParams{
-  .moves = 2, .racks = 3, .map_sims = 4, .map_steps = 2, .rollouts = 6, .blank_prune_points = 40};
+constexpr int kMoves = 2;
+constexpr GroupParams kParams{.quotas = {.top = kMoves, .mid = 0, .tail = 0, .exchange = 0},
+                              .racks = 3,
+                              .map_sims = 4,
+                              .map_steps = 2,
+                              .rollouts = 6,
+                              .blank_prune_points = 40};
 
 // A midgame parent, Alice to move, from a few plies of HastyBot self-play.
 GroupParent parent_after(uint64_t seed, int plies) {
@@ -67,7 +72,8 @@ GroupParent parent_after(uint64_t seed, int plies) {
   const MoveRequest req{
     out.position.board,    nwl23(), out.position.rack, Rack{}, game.score(mover),
     game.score(1 - mover), out.bag};
-  out.moves = equity_top_k(req, kParams.moves);
+  out.moves = equity_top_k(req, kMoves);
+  for (size_t i = 0; i < out.moves.size(); ++i) out.equity_ranks.push_back(int32_t(i));
   return out;
 }
 
@@ -109,7 +115,8 @@ TEST(GroupedPools, PoolsAreBobsFullPoolsAtEachMoveAndRack) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Built b = build_group(/*seed=*/3);
   const GroupRecord& g = b.group->record();
-  ASSERT_EQ(g.moves.size(), size_t(kParams.moves));
+  ASSERT_EQ(g.moves.size(), size_t(kMoves));
+  ASSERT_EQ(g.equity_ranks, (std::vector<int32_t>{0, 1}));
   ASSERT_EQ(g.racks.size(), size_t(kParams.racks));
   ASSERT_EQ(g.pools.size(), g.moves.size() * g.racks.size());
   for (const Rack& r : g.racks) EXPECT_EQ(r.size(), RACK_SIZE);
@@ -194,7 +201,10 @@ TEST(GroupedPools, TheSidecarRoundTripsWithValuesCutToTheMapsCount) {
   const GroupReader::Group& r = reader.group(0);
   EXPECT_EQ(r.header->turn_index, 6u);
   ASSERT_EQ(r.header->num_moves, g.moves.size());
-  for (size_t a = 0; a < g.moves.size(); ++a) EXPECT_EQ(r.moves[a], g.moves[a]);
+  for (size_t a = 0; a < g.moves.size(); ++a) {
+    EXPECT_EQ(r.moves[a], g.moves[a]);
+    EXPECT_EQ(r.equity_ranks[a], g.equity_ranks[a]);
+  }
   ASSERT_EQ(r.header->num_racks, g.racks.size());
   for (size_t i = 0; i < g.racks.size(); ++i) {
     for (int t = 0; t < TILE_KINDS; ++t)

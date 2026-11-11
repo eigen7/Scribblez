@@ -30,7 +30,12 @@ std::vector<Move> ranked_moves(const SimPosition& pos, const Dictionary& dict) {
 }  // namespace
 
 void GroupParams::validate() const {
-  if (moves < 1) throw util::CleanException("--group-moves must be >= 1");
+  if (quotas.top < 1) throw util::CleanException("--group-top-moves must be >= 1");
+  if (quotas.mid < 0 || quotas.tail < 0 || quotas.exchange < 0)
+    throw util::CleanException(
+      "--group-mid-moves, --group-tail-moves and --group-exchanges must be >= 0");
+  if (quotas.mid_rank_limit <= quotas.top)
+    throw util::CleanException("--group-mid-rank-limit must be > --group-top-moves");
   if (racks < 1) throw util::CleanException("--group-racks must be >= 1");
   if (map_sims < 1 || map_sims > rollouts)
     throw util::CleanException("--group-map-sims must be in [1, --rollouts]");
@@ -45,7 +50,9 @@ GroupBuild::GroupBuild(GroupParent parent, const BeliefModel& bob_model, const G
   const PoolJob root = position_job(parent_.position, parent_.moves, seed_ ^ kGroupRootDomain,
                                     parent_.belief.get(), dict_, params_.racks);
   record_.at = parent_.at;
+  RELEASE_ASSERT(parent_.equity_ranks.size() == parent_.moves.size());
   record_.moves = parent_.moves;
+  record_.equity_ranks = parent_.equity_ranks;
   record_.racks = other_racks(root.group, root.starts[0], params_.racks);
   applied_ = root.starts;
 }
