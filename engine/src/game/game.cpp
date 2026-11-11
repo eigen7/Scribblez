@@ -185,12 +185,20 @@ void Game::play_loop(int start_player) {
       // of some rulebooks.
       int opp = 1 - cur;
       int opp_remain = racks_[opp].point_value();
+      // game_end() reads how a game ended from the score adjustments, so a
+      // leftover rack of blanks alone, worth nothing, would hide the end. Two
+      // blanks left in one rack when the other empties is rare enough to
+      // assume away rather than record (debug-only: a release game would
+      // rather label its end as unfinished than stop).
+      DEBUG_ASSERT(opp_remain > 0, "the leftover rack is worth nothing: all blanks");
       scores_[cur] += 2 * opp_remain;
       log_.end_reason = "out";
       break;
     }
     if (consecutive_zero_turns >= kMaxConsecutiveZero) {
       // Stalemate: each player subtracts their remaining tile values.
+      DEBUG_ASSERT(racks_[0].point_value() + racks_[1].point_value() > 0,
+                   "both leftover racks are worth nothing: all blanks");
       for (int p = 0; p < 2; ++p) scores_[p] -= racks_[p].point_value();
       log_.end_reason = "stalemate";
       break;
