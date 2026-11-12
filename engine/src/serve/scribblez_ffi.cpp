@@ -31,6 +31,7 @@
 #include "training/max_move_per_lane_input_encoder.h"
 #include "training/max_move_per_lane_task.h"
 #include "training/move_set_encoder.h"
+#include "training/played_continuation.h"
 #include "training/policy_set_inputs.h"
 #include "training/position_eval_analysis.h"
 #include "training/training_targets.h"
@@ -691,6 +692,24 @@ void write_opp_rack(const void* opp_racks, int64_t j, float* out) {
   std::copy(in.begin(), in.end(), out + j * ps::kOppRackFloats);
 }
 
+// Position j's continuation targets after the move its game played at `turn`,
+// among `moves`, its candidates in its frame, from `board`, the pre-move
+// board in that frame.
+void write_played_continuation(const scribblez::GameLog& g, uint32_t turn, bool transpose,
+                               const std::vector<scribblez::Move>& moves,
+                               const scribblez::Board& board, int64_t j,
+                               const ScribblezPolicySetOutputs& out) {
+  namespace ps = scribblez::policy_set;
+  const ps::PlayedContinuation c = ps::played_continuation(g, int(turn), board);
+  out.played[j] = ps::played_index(g, int(turn), transpose, moves);
+  for (int sq = 0; sq < scribblez::kBoardCells; ++sq) {
+    out.ownership[j * scribblez::kBoardCells + sq] = int8_t(c.fates.fate[sq]);
+    out.square_points[j * scribblez::kBoardCells + sq] = c.fates.points[sq];
+  }
+  out.going_out[j] = int8_t(c.going_out);
+  out.end_points[j] = int16_t(c.end_points);
+}
+
 }  // namespace
 
 int ScribblezSession::policy_set_positions(const char* path, const int64_t* game_idx,
@@ -698,7 +717,7 @@ int ScribblezSession::policy_set_positions(const char* path, const int64_t* game
                                            int64_t n_positions, const void* moves,
                                            const void* opp_racks, const uint8_t* transposes,
                                            const ScribblezPolicySetOutputs& out) const {
-  if (!game_idx || !turn_idx || !move_counts || !moves || !opp_racks || !out.rows ||
+  if (!game_idx || !turn_idx || !move_counts || !moves || !opp_racks || !out.rows || !out.played ||
       n_positions < 0 || spec.opp_leave_input)
     return -1;
   std::vector<char> buf;
@@ -709,11 +728,16 @@ int ScribblezSession::policy_set_positions(const char* path, const int64_t* game
   int64_t done = 0;
   for (int64_t j = 0; j < n_positions; ++j) {
     const bool transpose = transposes && transposes[j];
-    scribblez::policy_set::replay_candidate_inputs(
-      decoder, *spec.dict, buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-      transpose, copy_moves_in_frame(moves, done, move_counts[j], transpose), out.rows, j, &inputs);
+    const std::vector<scribblez::Move> candidates =
+      copy_moves_in_frame(moves, done, move_counts[j], transpose);
+    scribblez::policy_set::replay_candidate_inputs(decoder, *spec.dict, buf.data(), path,
+                                                   uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
+                                                   transpose, candidates, out.rows, j, &inputs);
     write_candidate_inputs(inputs, done, out);
     write_opp_rack(opp_racks, j, out.opp_rack);
+    write_played_continuation(decoder.game(buf.data(), uint32_t(game_idx[j])),
+                              uint32_t(turn_idx[j]), transpose, candidates, decoder.board(), j,
+                              out);
     done += move_counts[j];
   }
   return 0;

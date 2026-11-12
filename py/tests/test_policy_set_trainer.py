@@ -30,6 +30,7 @@ from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
 from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.policy_set import (  # noqa: E402
+    continuation,
     dataset,
     forms,
     greedy,
@@ -245,6 +246,7 @@ def test_a_partly_transposed_batch_transposes_only_its_flagged_positions(chunk):
     assert flags.any() and not flags.all()
     mixed = batcher.build(items, flags)
     per_position = {"input_spatial", "input_scalar", "opp_rack", "stakes"}
+    per_position |= set(dataset.CONTINUATION_KEYS)
     pos_id = plain["move_pos_id"].numpy()
     for key, got in mixed.items():
         rows = flags if key in per_position else flags[pos_id]
@@ -317,6 +319,90 @@ def test_the_value_head_fits_the_pools_win_probability(chunk):
     assert policy.policy_diagnostics(m, batch)["value_mae"].item() < 0.1
 
 
+def _occupied(spatial: torch.Tensor) -> np.ndarray:
+    """(225,) which squares of a board row (planes, 15, 15) hold a tile:
+    the letter planes (encoding/board_planes.h)."""
+    return (spatial[:26].sum(dim=0) > 0).flatten().numpy()
+
+
+def test_the_batch_labels_the_continuation_after_the_played_move(chunk):
+    """The game's played move is a candidate of each pool; its squares and the
+    board's are filled, every other square has a fate, the points sit where a
+    later move placed a tile, and the game's end is labelled."""
+    items = dataset.read_items([chunk])
+    batch = dataset.PoolBatcher().build(items)
+    played = batch["played"]
+    assert (played >= 0).all()
+    assert batch["move_pos_id"][played].tolist() == list(range(len(items)))
+    for j in range(len(items)):
+        squares = batch["move_squares"][played[j]][batch["move_tile_mask"][played[j]]]
+        filled = _occupied(batch["input_spatial"][j])
+        filled[squares.numpy()] = True
+        ownership = batch["ownership"][j].numpy()
+        assert set(np.flatnonzero(ownership == continuation.FILLED)) == set(np.flatnonzero(filled))
+        assert ownership.min() >= continuation.FILLED and ownership.max() <= 4
+        placed = (ownership >= 0) & (ownership <= 3)
+        points = batch["square_points"][j].numpy()
+        assert (points[~placed] == 0).all() and (points[placed] != 0).all()
+        assert batch["going_out"][j].item() in (0, 1, 2)
+
+
+def test_a_transposed_batch_transposes_its_continuation_targets(chunk):
+    items = dataset.read_items([chunk])[:1]
+    batcher = dataset.PoolBatcher()
+    plain = batcher.build(items)
+    flipped = batcher.build(items, np.array([True]))
+    for key in ("ownership", "square_points"):
+        expected = plain[key][0].reshape(15, 15).T.reshape(-1)
+        assert torch.equal(flipped[key][0], expected), key
+    for key in ("going_out", "end_points"):
+        assert torch.equal(flipped[key], plain[key]), key
+    assert torch.equal(flipped["played"], plain["played"])
+
+
+def test_the_continuation_losses_are_zero_with_nothing_to_fit():
+    """No played candidate, or a game cut short, leaves the masked losses at
+    0 rather than NaN."""
+    cells = 15 * 15
+    batch = {
+        "played": torch.tensor([-1, 0]),
+        "ownership": torch.full((2, cells), continuation.FILLED),
+        "square_points": torch.zeros(2, cells),
+        "going_out": torch.tensor([continuation.UNLABELLED] * 2),
+        "end_points": torch.zeros(2),
+    }
+    heads = continuation.ContinuationHeads(8)
+    h, board = torch.randn(1, 8), torch.randn(2, cells, 8)
+    losses = continuation.continuation_losses(heads(h, board, batch), batch)
+    assert all(v.item() == 0 for v in losses.values()), losses
+    batch["ownership"][1, 0] = 4
+    batch["going_out"][1] = 1
+    losses = continuation.continuation_losses(heads(h, board, batch), batch)
+    assert losses["ownership"].item() > 0 and losses["going_out"].item() > 0
+
+
+def test_the_policy_form_overfits_the_played_continuation(chunk):
+    items = dataset.read_items([chunk])[:1]
+    batch = dataset.PoolBatcher().build(items)
+    torch.manual_seed(0)
+    m = trainer.build_models(only("policy"))["policy"]
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+    first = last = None
+    for _ in range(80):
+        out = policy.policy_forward(m, batch)
+        total = sum(continuation.continuation_losses(out.continuation, batch).values())
+        opt.zero_grad()
+        total.backward()
+        opt.step()
+        first, last = first or total.item(), total.item()
+    assert last < 0.5 * first
+    out = policy.policy_forward(m, batch)
+    ownership = batch["ownership"][0]
+    empty = ownership != continuation.FILLED
+    predicted = out.continuation.ownership[0].argmax(dim=0)
+    assert (predicted[empty] == ownership[empty]).float().mean() > 0.9
+
+
 def test_the_value_losses_vanish_at_the_labels_moments():
     """Outputs at the pools' own win probabilities and rollout spreads have
     zero moment loss; off them, both losses are positive."""
@@ -326,11 +412,13 @@ def test_the_value_losses_vanish_at_the_labels_moments():
         **dataset.rollout_grid([pool]),
     }
     mean = torch.tensor([0.4, 0.6])
-    exact = policy.PolicyOutputs(None, None, torch.stack([mean, torch.tensor([0.04, 0.0])], 1))
+    exact = policy.PolicyOutputs(
+        None, None, torch.stack([mean, torch.tensor([0.04, 0.0])], 1), None
+    )
     losses = policy.value_losses(exact, batch)
     assert losses["value_mean"].item() == pytest.approx(0.0, abs=1e-6)
     assert losses["value_var"].item() == pytest.approx(0.0, abs=1e-6)
-    off = policy.PolicyOutputs(None, None, torch.stack([mean + 0.1, torch.ones(2)], 1))
+    off = policy.PolicyOutputs(None, None, torch.stack([mean + 0.1, torch.ones(2)], 1), None)
     losses = policy.value_losses(off, batch)
     assert losses["value_mean"].item() == pytest.approx(1.0, rel=1e-5)
     assert losses["value_var"].item() > 0
@@ -411,6 +499,14 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "loss_policy_ce",
         "loss_policy_value_mean",
         "loss_policy_value_var",
+        "loss_policy_ownership",
+        "loss_policy_square_points_mean",
+        "loss_policy_square_points_var",
+        "loss_policy_going_out",
+        "loss_policy_end_points_mean",
+        "loss_policy_end_points_var",
+        "policy_eval_loss_ownership",
+        "policy_eval_played_share",
         "policy_eval_loss_ce",
         "policy_eval_value_mae",
         "policy_eval_value_var_ratio",

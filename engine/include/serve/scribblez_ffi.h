@@ -212,6 +212,13 @@ int scribblez_move_set_positions(ScribblezSession* s, const char* path, const in
 //   cross_cells                   int32[n_moves * cross_slots]
 //   cross_letters                 uint8[n_moves * cross_slots * 26]
 //   equity                        float[n_moves]
+// and the game record's continuation targets per position
+// (training/played_continuation.h): the played move's index among the
+// position's candidates (-1 if none), then its square fates and end-of-game
+// targets:
+//   played                        int32[n_positions]
+//   ownership, going_out          int8[n_positions * 225], int8[n_positions]
+//   square_points, end_points     int16[n_positions * 225], int16[n_positions]
 struct ScribblezPolicySetOutputs {
   float* rows;
   float* opp_rack;
@@ -223,12 +230,18 @@ struct ScribblezPolicySetOutputs {
   int32_t* cross_cells;
   uint8_t* cross_letters;
   float* equity;
+  int32_t* played;
+  int8_t* ownership;
+  int16_t* square_points;
+  int8_t* going_out;
+  int16_t* end_points;
 };
 
 // The policy-set model's inputs at pool positions of one .slog: each
-// position's pre-move training row and its opponent-rack input, and its
+// position's pre-move training row and its opponent-rack input, its
 // candidates' inputs (training/policy_set_inputs.h, what PolicyBot computes at
-// play). Positions, moves and transposes are addressed as in
+// play), and the game record's continuation targets after the move it played
+// there, in the position's frame. Positions, moves and transposes are addressed as in
 // scribblez_move_set_positions, every candidate encoded in its position's
 // frame; opp_racks is PoolOppRack[n_positions], each position's pool record.
 // The session must be in the hidden-leaves arm. Returns 0 on success, -1 on an

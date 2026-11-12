@@ -1282,10 +1282,16 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
       fit by moments to the pool's win probability and its rollouts'
       deviations (`policy_set/policy.py`), exported as the graph's second
       output; its held-out error and variance ratio are recorded;
-    - the continuation heads from game records: at each pool position, the
-      move the game played is a candidate, and the game's rest labels its
-      ownership, points, going-out and end-of-game heads, decoded per
-      candidate from its vector and the board tokens;
+    - the continuation heads from game records (done): at each pool
+      position, the move the game played is a candidate, and the game's rest
+      labels its ownership, points, going-out and end-of-game heads
+      (`policy_set/continuation.py`, the targets from
+      training/played_continuation.h through the pool replay), decoded per
+      candidate from its vector added to the board tokens; the leaf
+      network's classes, scale and moment losses, so the two networks' maps
+      read alike. The heads are trained, not yet exported: the agent reads
+      maps from the leaf network until the store needs the search network's
+      (step 11);
     - the measurement at the agent's positions, from DeepBot's subtree dump.
 11. **The store input,** trained by masked prediction on the grouped pools.
     *Measure:* its value and policy predictions against the empty-store
