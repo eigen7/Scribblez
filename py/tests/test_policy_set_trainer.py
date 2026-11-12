@@ -291,9 +291,49 @@ def test_the_policy_form_overfits_a_pool_and_ranks_its_top_n(chunk):
         losses.append(loss.item())
     assert losses[-1] < 0.9 * losses[0]
     (picks,) = forms.FORMS["policy"].sets(m, batch, 8)
-    logits, _ = policy.policy_forward(m, batch)
+    logits = policy.policy_forward(m, batch).logits
     assert len(picks) == min(8, len(items[0].pool.moves)) and len(set(picks)) == len(picks)
     assert torch.equal(logits[0, picks], logits[0, picks].sort(descending=True).values)
+
+
+def test_the_value_head_fits_the_pools_win_probability(chunk):
+    """The mean fits a pool in a few steps; the variance's target is checked
+    below, on synthetic pools, since the synthetic leaf's rollouts barely
+    spread (about 4e-5 in win probability squared)."""
+    items = dataset.read_items([chunk])[:1]
+    batch = dataset.PoolBatcher().build(items)
+    torch.manual_seed(0)
+    m = trainer.build_models(only("policy"))["policy"]
+    opt = torch.optim.Adam(m.parameters(), lr=3e-3)
+    first = last = None
+    for _ in range(60):
+        losses = policy.value_losses(policy.policy_forward(m, batch), batch)
+        total = losses["value_mean"] + losses["value_var"]
+        opt.zero_grad()
+        total.backward()
+        opt.step()
+        first, last = first or total.item(), total.item()
+    assert last < 0.5 * first
+    assert policy.policy_diagnostics(m, batch)["value_mae"].item() < 0.1
+
+
+def test_the_value_losses_vanish_at_the_labels_moments():
+    """Outputs at the pools' own win probabilities and rollout spreads have
+    zero moment loss; off them, both losses are positive."""
+    pool = _pool([0.5, 0.5], [0.4, 0.6], [0, 1], values=[[0.2, 0.6], [0.6, 0.6]])
+    batch = {
+        "win_prob": torch.tensor(pool.win_prob),
+        **dataset.rollout_grid([pool]),
+    }
+    mean = torch.tensor([0.4, 0.6])
+    exact = policy.PolicyOutputs(None, None, torch.stack([mean, torch.tensor([0.04, 0.0])], 1))
+    losses = policy.value_losses(exact, batch)
+    assert losses["value_mean"].item() == pytest.approx(0.0, abs=1e-6)
+    assert losses["value_var"].item() == pytest.approx(0.0, abs=1e-6)
+    off = policy.PolicyOutputs(None, None, torch.stack([mean + 0.1, torch.ones(2)], 1))
+    losses = policy.value_losses(off, batch)
+    assert losses["value_mean"].item() == pytest.approx(1.0, rel=1e-5)
+    assert losses["value_var"].item() > 0
 
 
 def test_the_stakes_weighted_policy_loss_scales_each_positions_cross_entropy(chunk):
@@ -302,7 +342,7 @@ def test_the_stakes_weighted_policy_loss_scales_each_positions_cross_entropy(chu
     assert batch["stakes"].shape == (len(items),) and (batch["stakes"] >= 0).all()
     torch.manual_seed(0)
     m = trainer.build_models(only("policy"))["policy"]
-    ce = policy.cross_entropies(m, batch)
+    ce = policy.cross_entropies(policy.policy_forward(m, batch), batch)
     assert policy.policy_loss(m, batch).item() == pytest.approx(ce.mean().item(), rel=1e-5)
     assert policy.policy_loss(m, batch, weighted=True).item() == pytest.approx(
         (batch["stakes"] * ce).mean().item(), rel=1e-5
@@ -369,7 +409,11 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
         "slot_eval_spread",
         "greedy_eval_spread",
         "loss_policy_ce",
+        "loss_policy_value_mean",
+        "loss_policy_value_var",
         "policy_eval_loss_ce",
+        "policy_eval_value_mae",
+        "policy_eval_value_var_ratio",
         "policy_eval_recall_8",
         "policy_eval_entropy",
         "policy_eval_ce",
@@ -426,9 +470,10 @@ def test_the_export_scores_a_pool_as_the_policy_form_does(chunk, tmp_path):
     for item in dataset.read_items([chunk]):
         batch = dataset.PoolBatcher().build([item])
         with torch.no_grad():
-            want, _ = m(batch)
-        (got,) = session.run([onnx_export.OUTPUT], _engine_feed(batch))
-        np.testing.assert_allclose(got[:, 0], want[0].numpy(), rtol=1e-4, atol=1e-4)
+            want = m(batch)
+        logit, value = session.run(list(onnx_export.OUTPUTS), _engine_feed(batch))
+        np.testing.assert_allclose(logit[:, 0], want.logits[0].numpy(), rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(value, want.value.numpy(), rtol=1e-4, atol=1e-4)
 
 
 def test_a_checkpoint_exports_its_policy_form(chunk, tmp_path):

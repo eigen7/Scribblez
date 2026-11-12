@@ -215,6 +215,9 @@ class PolicySetParams(PoolGroupParams, PoolLabelParams):
         "policy form: weight each pool's cross-entropy by its stakes, the leader's win "
         "probability over the pass's",
     )
+    lambda_value: float = param(
+        1.0, "policy form: the value head's moment losses' weight beside the cross-entropy"
+    )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
     normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)

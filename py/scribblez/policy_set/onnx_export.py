@@ -6,7 +6,10 @@ The graph is specialized to one position (P=1), as the move set export is
 (move_set_eval/onnx_export.py describes the specialization and the
 TensorRT-refit rebuilds, which apply here too): the board row and the
 opponent-rack input, plus M candidates' move features and equity inputs, with
-M the only dynamic axis ("moves"). It emits each candidate's logit (M, 1).
+M the only dynamic axis ("moves"). It emits each candidate's logit (M, 1)
+and value (M, 2): the win probability's mean and the variance of a rollout's
+value about it, which the engine declares as an aux output
+(nn::PolicyValueOutput) until a consumer reads it.
 
 The metadata carries what PolicyBot must reproduce of the model's training:
 the format and encoding versions, the pool's blank prune (policy_set_inputs.h
@@ -45,11 +48,11 @@ from scribblez.paths import DEFAULT_MOUNT_ROOT, TagPaths
 from scribblez.policy_set import FORM_POLICY
 from scribblez.policy_set.dataset import OPP_RACK_FLOATS
 from scribblez.policy_set.model import PolicySetEncoder, trunk_scalar
-from scribblez.policy_set.policy import PolicyModel
+from scribblez.policy_set.policy import PolicyModel, value_moments
 
 # Must match the engine's nn::kGraphPolicySet.
 GRAPH = "policy_set"
-OUTPUT = "logit"
+OUTPUTS = ("logit", "value")
 WORKLOAD = "policy_set"
 # The metadata entries PolicyBot reads (engine agent/policy_bot.h).
 BLANK_PRUNE_KEY = "blank_prune_points"
@@ -61,7 +64,7 @@ SHAPE_KEYS = ("trunk_channels", "num_blocks", "num_heads", "normalize_scalar")
 
 class PolicyExportModel(nn.Module):
     """PolicyModel.forward at P=1, sharing the trained model's submodules.
-    Returns the candidates' logits (M, 1)."""
+    Returns the candidates' logits (M, 1) and values (M, 2)."""
 
     def __init__(self, model: PolicyModel):
         super().__init__()
@@ -82,6 +85,7 @@ class PolicyExportModel(nn.Module):
         self.fuse_out = enc.fuse[2]
         self.vector_norm = enc.vector_norm
         self.logit = model.logit
+        self.value = model.value
 
     def forward(
         self,
@@ -96,7 +100,7 @@ class PolicyExportModel(nn.Module):
         move_cross_cells: torch.Tensor,  # (M, K) i32
         move_cross_letters: torch.Tensor,  # (M, K * 26) u8
         move_equity: torch.Tensor,  # (M, 1) f32
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x, s = self.trunk(input_spatial, trunk_scalar(input_scalar, opp_rack))
         board, g = board_and_summary(self.board_pos_emb, x, s)
         e = encode_moves_at_position(
@@ -107,7 +111,8 @@ class PolicyExportModel(nn.Module):
             self.q_proj, self.k_proj, self.v_proj, self.attn_out, self.num_heads, e, board[0]
         )
         h = self.fuse_out(F.relu(self.fuse_attended(attended) + self.fuse_g(g)))
-        return self.logit(self.vector_norm(h))
+        h = self.vector_norm(h)
+        return self.logit(h), value_moments(self.value(h))
 
 
 def input_names() -> tuple[str, ...]:
@@ -162,8 +167,8 @@ def export_onnx(
         dummies,
         path,
         input_names=names,
-        output_names=(OUTPUT,),
-        dynamic_axes={name: {0: "moves"} for name in (*names[3:], OUTPUT)},
+        output_names=OUTPUTS,
+        dynamic_axes={name: {0: "moves"} for name in (*names[3:], *OUTPUTS)},
         metadata={
             **common_metadata(opp_leave_input=False),
             "graph": GRAPH,

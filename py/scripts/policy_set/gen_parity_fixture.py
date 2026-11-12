@@ -83,8 +83,7 @@ def reference_logits(
         batch[name] = batch[name].long()
     for name in ("move_blanks", "move_tile_mask"):
         batch[name] = batch[name].bool()
-    logits, _ = model(batch)
-    return logits[0].numpy().astype(np.float32)
+    return model(batch).logits[0].numpy().astype(np.float32)
 
 
 def main() -> int:

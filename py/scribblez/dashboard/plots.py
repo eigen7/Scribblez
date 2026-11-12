@@ -396,6 +396,19 @@ POLICY_SET_QUALITY = (
             "Policy form: stakes-weighted cross-entropy against q (held-out)",
             ["policy_eval_stakes_ce"],
         ),
+        (
+            "Policy form: value head's moment losses (training, held-out)",
+            [
+                "loss_policy_value_mean",
+                "policy_eval_loss_value_mean",
+                "loss_policy_value_var",
+                "policy_eval_loss_value_var",
+            ],
+        ),
+        (
+            "Policy form: value head's error (win probability) and variance ratio (held-out)",
+            ["policy_eval_value_mae", "policy_eval_value_var_ratio"],
+        ),
         # Per form: each form's gradient is clipped on its own.
         (
             "Gradient norm before clipping, by form",
