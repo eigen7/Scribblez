@@ -71,7 +71,7 @@ def _policy_build(encoder: PolicySetEncoder, params) -> nn.Module:
 
 
 def _policy_loss(model, batch: Batch, params, rng) -> dict[str, torch.Tensor]:
-    return {"ce": policy.policy_loss(model, batch, params.policy_stakes_weighting)}
+    return policy.form_losses(model, batch, params.policy_stakes_weighting, params.lambda_value)
 
 
 FORMS = {

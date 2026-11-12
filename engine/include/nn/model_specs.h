@@ -614,6 +614,17 @@ struct PolicyLogitOutput {
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
+// value (M, 2): each candidate's [mean, variance] of the evaluator's win
+// probability as the sims measure it (policy_set/policy.py), the search
+// network's value head. No consumer reads it yet, so it is aux.
+struct PolicyValueOutput {
+  static constexpr const char* kName = "value";
+  using Elem = float;
+  static constexpr int kRowElems = 2;
+  static constexpr bool kDynamic = true;
+  static constexpr RowDecode kDecode = RowDecode::kIdentity;
+};
+
 class PolicySetSpec {
  public:
   static constexpr const char* kGraph = kGraphPolicySet;
@@ -639,7 +650,7 @@ class PolicySetSpec {
     TensorList<MoveLettersInput, MoveBlanksInput, MoveSquaresInput, MoveTileMaskInput,
                MoveScalarsInput, MoveCrossCellsInput, MoveCrossLettersInput>;
   using Outputs = TensorList<PolicyLogitOutput>;
-  using AuxOutputs = TensorList<>;
+  using AuxOutputs = TensorList<PolicyValueOutput>;
 
   // One position's board row (as GameStateEncoder::encode_input() writes it),
   // its opponent-rack input (kOppRackFloats), and its candidates.
