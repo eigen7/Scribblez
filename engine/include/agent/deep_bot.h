@@ -29,10 +29,14 @@
 
 #include "agent/agent.h"
 #include "agent/bob_subtree.h"
+#include "agent/policy_agreement.h"
+#include "agent/policy_bot.h"
+#include "agent/policy_scorer.h"
 #include "agent/subtree_search.h"
 #include "belief/leave_history_recorder.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
+#include "encoding/game_state_encoder.h"
 #include "lexicon/leave_value_arrays.h"
 #include "sim/pool_labels.h"
 #include "sim/rollout_values.h"
@@ -42,10 +46,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace scribblez {
+
+class Dictionary;
 
 class DeepBot : public Agent {
  public:
@@ -82,6 +89,12 @@ class DeepBot : public Agent {
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
     // the hasty sims and a second run of the subtrees.
     std::string subtree_dump{};
+    // The policy-set model (ONNX) the dump measures against Bob's replies
+    // (agent/policy_agreement.h), served as PolicyBot serves it, on the same
+    // leave inference model; needs the dump. Read by the factory, which needs
+    // `dict` with it.
+    std::string policy_model{};
+    const Dictionary* dict = nullptr;
     uint64_t seed = 0;
   };
 
@@ -92,6 +105,8 @@ class DeepBot : public Agent {
     std::shared_ptr<RolloutValues> values;
     belief::LeaveParamsFn predict;
     std::shared_ptr<const LeaveValueArrays> table;
+    // The dump's policy-set model, with --policy-model.
+    std::optional<PolicyBot::Backend> policy;
   };
 
   // Builds the backend Params names (deep_bot_factory.cpp, which reaches
@@ -143,13 +158,23 @@ class DeepBot : public Agent {
                                          const std::vector<size_t>& searched);
   void dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
                  const std::vector<size_t>& searched, const BobReplies& replies,
-                 const ReplyPayoffs& payoffs, const std::vector<double>& values) const;
+                 const ReplyPayoffs& payoffs, const std::vector<double>& values);
+  // The policy's agreement with Bob's replies after each searched candidate
+  // (agent/policy_agreement.h); empty without a policy model.
+  std::vector<PolicyAgreement> policy_agreements(const MoveRequest& req, const AliceTurn& turn,
+                                                 const std::vector<size_t>& searched,
+                                                 const BobReplies& replies);
   // What Alice's and her model of Bob's beliefs come from.
   BeliefModel belief_model() const { return {backend_.predict, backend_.table.get()}; }
 
   Params params_;
   Backend backend_;
   belief::LeaveHistoryRecorder recorder_;
+  // The dump's policy scorer, and the encoder mirroring the live game (both
+  // seats' moves) that gives Bob's position after a candidate; with
+  // --policy-model only.
+  std::unique_ptr<PolicyScorer> scorer_;
+  std::optional<GameStateEncoder> encoder_;
   int ply_ = 0;    // moves observed this game
   int games_ = 0;  // games begun, this one included
 };

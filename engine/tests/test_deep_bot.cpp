@@ -3,7 +3,8 @@
 // seed; asks the leave inference model for Alice's belief from her own view
 // and, in Bob's subtrees, for Bob's with her private past hidden; Bob replies
 // from his own equity top N, as contenders weighted by their chance of being
-// his best; and --subtree-dump writes a line per turn. Skips without the NWL23
+// his best; --subtree-dump writes a line per turn, and with --policy-model
+// measures a policy-set model against Bob's replies. Skips without the NWL23
 // lexicon and HastyBot's leave values.
 
 #include "agent/alice_subtree.h"
@@ -20,6 +21,7 @@
 #include "nwl23_equity.h"
 #include "sim/pool_jobs.h"
 #include "sim/rollout_values.h"
+#include "stub_policy_set_service.h"
 #include "temp_dir.h"
 #include "util/exception.h"
 #include "util/math.h"
@@ -73,8 +75,10 @@ constexpr size_t kHiddenFlag = Encoder::kSpatialFloats + Encoder::kCurrentScalar
 
 DeepBot::Backend cpu_backend(belief::LeaveParamsFn predict = {},
                              std::shared_ptr<const LeaveValueArrays> table = {}) {
-  return {std::make_unique<CpuRolloutValues>(nwl23(), synthetic_leaf()), std::move(predict),
-          std::move(table)};
+  return {.values = std::make_unique<CpuRolloutValues>(nwl23(), synthetic_leaf()),
+          .predict = std::move(predict),
+          .table = std::move(table),
+          .policy = std::nullopt};
 }
 
 // A game of `deepbot` against HastyBot from a fixed deal; returns its moves.
@@ -140,6 +144,44 @@ TEST(DeepBot, AsksTheModelForBobsBeliefWithAlicesPastHidden) {
 // his sims; the dump reports it per turn as one JSON line, naming its game.
 // With --subtree-candidates 0 every candidate that leaves tiles in the bag is
 // searched.
+// With a policy model, each searched candidate's dump entry carries how often
+// the policy's top move at Bob's position is his subtree's reply. A policy
+// that favours the equity-best move agrees exactly where the subtree chose
+// HastyBot's move (hasty_share), over the pool and over the simmed candidates
+// alike, since the equity-best move is always simmed.
+TEST(DeepBot, TheDumpMeasuresAPolicyAgainstBobsReplies) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const auto dir = scribblez::testing::make_temp_dir("scribblez_test_policy_agreement");
+  DeepBot::Params p = small_params(7);
+  p.subtree_candidates = 0;
+  p.subtree_dump = (dir / "dump.jsonl").string();
+  p.policy_model = "stub";
+  p.dict = &nwl23();
+  auto stub = std::make_shared<scribblez::testing::StubPolicySetService>();
+  stub->favourite = 0;
+  DeepBot::Backend backend = cpu_backend();
+  backend.policy = PolicyBot::Backend{
+    .policy = stub, .blank_prune_points = 1000, .predict = {}, .table = {}, .cross_checks = {}};
+  DeepBot bot(p, std::move(backend));
+  play(bot);
+  std::ifstream in(p.subtree_dump);
+  int searched = 0;
+  for (std::string line; std::getline(in, line);) {
+    const boost::json::object turn = boost::json::parse(line).as_object();
+    for (const boost::json::value& v : turn.at("candidates").as_array()) {
+      const boost::json::object& c = v.as_object();
+      if (!c.at("searched").as_bool()) continue;
+      ++searched;
+      const double hasty = c.at("replies").as_object().at("hasty_share").as_double();
+      const boost::json::object& policy = c.at("policy").as_object();
+      EXPECT_EQ(policy.at("pool_share").as_double(), hasty) << line;
+      EXPECT_EQ(policy.at("simmed_share").as_double(), hasty) << line;
+    }
+  }
+  EXPECT_GT(searched, 5);
+  EXPECT_GT(stub->calls.size(), size_t(searched));  // one call per (candidate, rack)
+}
+
 TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_dump");
@@ -258,6 +300,9 @@ TEST(DeepBot, RefusesAnUnknownReplyModelAndADumpWithoutSubtrees) {
   EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
   p = small_params(1, "alice-subtree");
   p.second.candidates = 0;
+  EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
+  p = small_params(1);
+  p.policy_model = "policy.onnx";  // without a dump, nothing would read it
   EXPECT_THROW(DeepBot(p, cpu_backend()), util::CleanException);
 }
 

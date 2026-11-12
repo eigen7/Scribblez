@@ -1292,7 +1292,14 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
       read alike. The heads are trained, not yet exported: the agent reads
       maps from the leaf network until the store needs the search network's
       (step 11);
-    - the measurement at the agent's positions, from DeepBot's subtree dump.
+    - the measurement at the agent's positions (built): DeepBot's
+      `--policy-model` serves a policy-set export beside the subtrees, and
+      each dumped candidate records how often the policy's top move at Bob's
+      position, over his whole pool and over the candidates his subtree
+      simmed, is the reply the subtree chose (agent/policy_agreement.h), next
+      to HastyBot's share; `py/scripts/deep_bot/policy_agreement.py`
+      tabulates a dump by bag. It awaits a policy-set export trained with the
+      value and continuation heads, which the running tags predate.
 11. **The store input,** trained by masked prediction on the grouped pools.
     *Measure:* its value and policy predictions against the empty-store
     pass, split by evidence from the same candidate and from other

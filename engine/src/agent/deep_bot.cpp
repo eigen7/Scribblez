@@ -88,6 +88,9 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
     ("subtree-dump", po::value<std::string>(&p.subtree_dump),
      "subtree: append a JSON line per turn comparing Bob's subtree replies with HastyBot's "
      "(runs the hasty sims and the subtrees a second time)")  //
+    ("policy-model", po::value<std::string>(&p.policy_model),
+     "subtree-dump: the policy-set model (ONNX) to measure against Bob's replies, served as "
+     "policybot serves it, on this agent's --leave-inference")  //
     ("seed", po::value<uint64_t>(&p.seed), "sim PRNG seed (default: SeedProducer)");
   return desc;
 }
@@ -130,6 +133,8 @@ void validate(const DeepBot::Params& p) {
       "deepbot: --bob-racks, --sims-per-rack, --alice-racks and --second-racks must be >= 1");
   if (!p.subtree_dump.empty() && p.reply != "subtree")
     throw util::CleanException("deepbot: --subtree-dump needs --reply subtree");
+  if (!p.policy_model.empty() && p.subtree_dump.empty())
+    throw util::CleanException("deepbot: --policy-model needs --subtree-dump");
   if (p.subtree_candidates < 0)
     throw util::CleanException("deepbot: --subtree-candidates must be >= 0");
   if (p.subtree.candidates < 1 || p.subtree.late_candidates < 1)
@@ -144,16 +149,23 @@ void validate(const DeepBot::Params& p) {
 DeepBot::DeepBot(const Params& params, Backend backend)
     : Agent(params.thread_id, params.name), params_(params), backend_(std::move(backend)) {
   validate(params_);
+  if (!backend_.policy) return;
+  if (params_.dict == nullptr) throw util::Exception("deepbot: a policy model needs a dictionary");
+  scorer_ = std::make_unique<PolicyScorer>(backend_.policy->policy, backend_.policy->cross_checks,
+                                           *params_.dict, "deepbot");
+  encoder_.emplace(scorer_->spec());
 }
 
-void DeepBot::begin_game(const BeginGameRequest& /*req*/) {
+void DeepBot::begin_game(const BeginGameRequest& req) {
   recorder_.begin_game();
+  if (encoder_) encoder_.emplace(scorer_->spec(), req.initial_scores);
   ply_ = 0;
   ++games_;
 }
 
 void DeepBot::observe_move(const Move& move) {
   recorder_.observe(move);
+  if (encoder_) encoder_->apply_move(move);
   ++ply_;
 }
 
@@ -265,12 +277,30 @@ std::vector<double> DeepBot::second_turn_values(const MoveRequest& req, const Al
                               params_.second, params_.sims_per_rack, req.dict, turn_seed());
 }
 
+std::vector<PolicyAgreement> DeepBot::policy_agreements(const MoveRequest& req,
+                                                        const AliceTurn& turn,
+                                                        const std::vector<size_t>& searched,
+                                                        const BobReplies& replies) {
+  if (!scorer_) return {};
+  std::vector<PolicyAgreement> out(turn.candidates.size());
+  for (const size_t c : searched) {
+    // The encoder has observed every prior move, so its active player is this
+    // agent's seat; the candidate makes it Bob's.
+    GameStateEncoder after = *encoder_;
+    after.apply_move(turn.candidates[c]);
+    out[c] = policy_agreement(turn, c, after, replies.replies[c], belief_model(), params_.subtree,
+                              backend_.policy->blank_prune_points, *scorer_, req.dict);
+  }
+  return out;
+}
+
 void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
                         const std::vector<size_t>& searched, const BobReplies& replies,
-                        const ReplyPayoffs& payoffs, const std::vector<double>& values) const {
+                        const ReplyPayoffs& payoffs, const std::vector<double>& values) {
   const BobReplies rerun =
     bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
                 params_.sims_per_rack, req.dict, turn_seed() ^ kRerunSeed);
+  const std::vector<PolicyAgreement> policy = policy_agreements(req, turn, searched, replies);
   SubtreeTurn t{
     .agent = name(),
     .thread = params_.thread_id,
@@ -284,6 +314,7 @@ void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const Has
     .replies = &replies.replies,
     .rerun = &rerun.replies,
     .payoffs = &payoffs,
+    .policy = scorer_ ? &policy : nullptr,
     .sims = {.first_pass = hasty.sims, .subtrees = replies.sims, .after_replies = payoffs.sims}};
   for (size_t c : searched) t.searched[c] = true;
   for (const PoolLabel& l : hasty.labels) t.hasty_values.push_back(l.win_prob);
@@ -311,6 +342,7 @@ DeepBot::Params DeepBot::parse_params(const std::vector<std::string>& tokens, in
   validate(p);
   // The equity tables must not load concurrently with queries (hasty_equity.h).
   HastyEquity::ensure_initialized(Lexicon::instance().name());
+  p.dict = &Lexicon::instance().dict();
   return p;
 }
 

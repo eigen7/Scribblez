@@ -1,8 +1,10 @@
 // DeepBot's command-line construction and backend: the only part that reaches
-// CUDA and TensorRT (the GPU rollouts, the leaf network and the leave inference
-// model), so deep_bot.cpp's unit tests can inject the CPU reference instead.
+// CUDA and TensorRT (the GPU rollouts, the leaf network, the leave inference
+// model and the dump's policy-set model), so deep_bot.cpp's unit tests can
+// inject the CPU reference instead.
 
 #include "agent/deep_bot.h"
+#include "agent/policy_bot.h"
 #include "belief/served_leave_model.h"
 #include "gpu/rollout_backend.h"
 #include "lexicon/dictionary.h"
@@ -26,6 +28,15 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   rollouts.validate();
   DeepBot::Backend b;
   b.values = rollouts.shared(load_dictionary_or_throw());
+  if (!p.policy_model.empty()) {
+    PolicyBot::Params policy{
+      .thread_id = p.thread_id,
+      .name = p.name,
+      .dict = p.dict,
+      .service = {.model = p.policy_model, .batch_size = nn::PolicySetSpec::kDefaultMaxRows},
+      .leave_inference = p.leave_inference};
+    b.policy = PolicyBot::make_backend(policy);
+  }
   if (p.leave_inference.empty()) return b;
   belief::AgentLeaveModel leave =
     belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
