@@ -8,7 +8,9 @@ hidden-leaves arm and encodes them with the engine code PolicyBot plays with
 (engine training/policy_set_inputs.h): per position the board row and the
 opponent-rack input (from the pool's record of the belief), per candidate the
 move features and the equity input. A batch also carries the pool's labels,
-and its rollout values as a grid (rollout_grid).
+its rollout values as a grid (rollout_grid), and the game record's
+continuation targets after the move it played there (engine
+training/played_continuation.h), keyed to the played candidate.
 """
 
 from dataclasses import dataclass
@@ -69,7 +71,7 @@ class PoolBatcher:
             [(file_id[it.slog], it.pool.game, it.pool.turn) for it in items],
             [it.pool.moves for it in items],
             {"opp_racks": np.array([it.pool.opp_rack for it in items]), "transposes": transposes},
-            {"rows", "opp_rack"},
+            {"rows", "opp_rack", *CONTINUATION_KEYS},
         )
         rows = inputs["rows"]
         spatial = rows[:, : self.spatial_floats].reshape(len(items), *self.spatial_shape)
@@ -101,7 +103,29 @@ class PoolBatcher:
             "move_equity": torch.from_numpy(inputs["equity"]),
             **labels,
             **rollout_grid([it.pool for it in items]),
+            **continuation_targets(inputs, pos_id),
         }
+
+
+# ffi.policy_set_positions' per-position continuation outputs.
+CONTINUATION_KEYS = ("played", "ownership", "square_points", "going_out", "end_points")
+
+
+def continuation_targets(inputs: dict[str, np.ndarray], pos_id: np.ndarray):
+    """The batch's continuation targets from the replay's: "played" (P,)
+    int64, each position's played candidate as an index into the batch's
+    flattened candidates, -1 where it is not one; "ownership" (P, 225) int64
+    and "square_points" (P, 225) float32, each square's fate class and signed
+    points; "going_out" (P,) int64 and "end_points" (P,) float32."""
+    played = inputs["played"].astype(np.int64)
+    starts = np.flatnonzero(np.diff(pos_id, prepend=-1))
+    return {
+        "played": torch.from_numpy(np.where(played >= 0, starts + played, -1)),
+        "ownership": torch.from_numpy(inputs["ownership"].astype(np.int64)),
+        "square_points": torch.from_numpy(inputs["square_points"].astype(np.float32)),
+        "going_out": torch.from_numpy(inputs["going_out"].astype(np.int64)),
+        "end_points": torch.from_numpy(inputs["end_points"].astype(np.float32)),
+    }
 
 
 def rollout_grid(pool_list: list[pools.Pool]) -> dict[str, torch.Tensor]:

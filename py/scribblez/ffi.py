@@ -63,6 +63,11 @@ class _PolicySetOutputs(ctypes.Structure):
         ("cross_cells", ctypes.POINTER(ctypes.c_int32)),
         ("cross_letters", ctypes.POINTER(ctypes.c_uint8)),
         ("equity", ctypes.POINTER(ctypes.c_float)),
+        ("played", ctypes.POINTER(ctypes.c_int32)),
+        ("ownership", ctypes.POINTER(ctypes.c_int8)),
+        ("square_points", ctypes.POINTER(ctypes.c_int16)),
+        ("going_out", ctypes.POINTER(ctypes.c_int8)),
+        ("end_points", ctypes.POINTER(ctypes.c_int16)),
     ]
 
 
@@ -961,7 +966,13 @@ def policy_set_positions(
     task_row_floats()) and "opp_rack" (P, opp_rack_floats) float32, and per
     candidate, in its position's frame, encode_moves' arrays (letters,
     blanks, squares, tile_mask, scalars), "cells" and "letters_cross" as
-    move_set_positions' "cells" and "letters", and "equity" (M,) float32.
+    move_set_positions' "cells" and "letters", and "equity" (M,) float32; and
+    per position the game record's continuation targets after the move it
+    played there (engine training/played_continuation.h), in the position's
+    frame: "played" (P,) int32, the move's index among the position's
+    candidates or -1; "ownership" (P, 225) int8 and "square_points" (P, 225)
+    int16, each square's fate class (-1 filled) and signed points; "going_out"
+    (P,) int8, the class or -1 for a game cut short; "end_points" (P,) int16.
     """
     from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
@@ -994,6 +1005,11 @@ def policy_set_positions(
         "tile_mask": np.zeros((n, max_placed), dtype=np.uint8),
         "scalars": np.zeros((n, num_scalars), dtype=np.float32),
         "equity": np.zeros(n, dtype=np.float32),
+        "played": np.zeros(len(games), dtype=np.int32),
+        "ownership": np.zeros((len(games), BOARD_CELLS), dtype=np.int8),
+        "square_points": np.zeros((len(games), BOARD_CELLS), dtype=np.int16),
+        "going_out": np.zeros(len(games), dtype=np.int8),
+        "end_points": np.zeros(len(games), dtype=np.int16),
     }
     c_float, c_int32, c_uint8 = ctypes.c_float, ctypes.c_int32, ctypes.c_uint8
     targets = _PolicySetOutputs(
@@ -1007,6 +1023,11 @@ def policy_set_positions(
         cross_cells=_pointer(cells, c_int32),
         cross_letters=_pointer(cross_letters, c_uint8),
         equity=_pointer(out["equity"], c_float),
+        played=_pointer(out["played"], c_int32),
+        ownership=_pointer(out["ownership"], ctypes.c_int8),
+        square_points=_pointer(out["square_points"], ctypes.c_int16),
+        going_out=_pointer(out["going_out"], ctypes.c_int8),
+        end_points=_pointer(out["end_points"], ctypes.c_int16),
     )
     rc = _lib().scribblez_policy_set_positions(
         _session(),

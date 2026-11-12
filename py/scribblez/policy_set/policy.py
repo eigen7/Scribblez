@@ -17,6 +17,9 @@ moments (deep_bot_leaf_eval.model.moment_losses): the mean against the pool's
 win probability, the variance against the rollouts' squared deviations from
 the predicted mean. In VALUE_SCALE units of win probability, so the losses sit
 near 1 rather than 1e-4.
+
+The continuation heads (continuation.py) ride on the same vectors, trained at
+the candidate each position's game played.
 """
 
 from __future__ import annotations
@@ -27,6 +30,11 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from scribblez.policy_set.continuation import (
+    ContinuationHeads,
+    ContinuationOutputs,
+    continuation_losses,
+)
 from scribblez.policy_set.model import PolicySetEncoder, mean_spread, to_grid
 
 # The loss's unit: a tenth of a win probability.
@@ -37,10 +45,14 @@ class PolicyOutputs(NamedTuple):
     logits: torch.Tensor  # (P, maxK) FP32, -inf at padding
     pad: torch.Tensor  # (P, maxK) True where there is no candidate
     value: torch.Tensor  # (M, 2) FP32: [mean, variance] in win-probability units
+    # The continuation heads at the played candidates; None for a batch
+    # without the targets (the export's).
+    continuation: ContinuationOutputs | None
 
 
 class PolicyModel(nn.Module):
-    """Form 3: the encoder, a linear logit and a linear value per candidate."""
+    """Form 3: the encoder, a linear logit and a linear value per candidate,
+    and the continuation heads."""
 
     def __init__(self, encoder: PolicySetEncoder):
         super().__init__()
@@ -48,14 +60,17 @@ class PolicyModel(nn.Module):
         channels = encoder.board_pos_emb.shape[1]
         self.logit = nn.Linear(channels, 1)
         self.value = nn.Linear(channels, 2)
+        self.continuation = ContinuationHeads(channels)
 
     def forward(self, batch: dict[str, torch.Tensor]) -> PolicyOutputs:
-        h, _ = self.encoder(batch)
+        enc = self.encoder.encode(batch)
+        h = self.encoder.candidate_vectors(enc.e, enc.board, enc.g, batch["move_pos_id"])
         num_positions = batch["input_spatial"].shape[0]
         logits, pad = to_grid(
             self.logit(h).squeeze(1).float(), batch["move_pos_id"], num_positions, -torch.inf
         )
-        return PolicyOutputs(logits, pad, value_moments(self.value(h).float()))
+        continuation = self.continuation(h, enc.board, batch) if "played" in batch else None
+        return PolicyOutputs(logits, pad, value_moments(self.value(h).float()), continuation)
 
 
 def value_moments(raw: torch.Tensor) -> torch.Tensor:
@@ -119,13 +134,21 @@ def weighted_cross_entropy(ce: torch.Tensor, batch: dict[str, torch.Tensor], wei
 
 
 def form_losses(
-    model: PolicyModel, batch: dict[str, torch.Tensor], weighted: bool, lambda_value: float
+    model: PolicyModel,
+    batch: dict[str, torch.Tensor],
+    weighted: bool,
+    lambda_value: float,
+    lambda_continuation: float,
 ) -> dict[str, torch.Tensor]:
-    """One forward: the policy loss ("ce") and the value head's losses,
-    weighted by `lambda_value`."""
+    """One forward: the policy loss ("ce"), the value head's losses weighted
+    by `lambda_value`, and the continuation heads' by `lambda_continuation`."""
     out = policy_forward(model, batch)
     losses = {"ce": weighted_cross_entropy(cross_entropies(out, batch), batch, weighted)}
     losses |= {key: lambda_value * v for key, v in value_losses(out, batch).items()}
+    losses |= {
+        key: lambda_continuation * v
+        for key, v in continuation_losses(out.continuation, batch).items()
+    }
     return losses
 
 
@@ -150,7 +173,8 @@ def policy_diagnostics(
     value head's: its mean absolute error against the pools' win
     probabilities, and its calibration, the predicted variance over the
     rollouts' realized squared deviation about the pools' win probability,
-    1 when calibrated."""
+    1 when calibrated; and the share of positions whose played move is a
+    candidate, the continuation heads' coverage."""
     out = policy_forward(model, batch)
     logp = F.log_softmax(out.logits, dim=1)
     entropy = -torch.where(out.pad, 0.0, logp.exp() * logp).sum(dim=1).mean()
@@ -164,4 +188,5 @@ def policy_diagnostics(
         "stakes_ce": (s * ce).sum() / s.sum().clamp(min=1e-9),
         "value_mae": (mean - win).abs().mean(),
         "value_var_ratio": var.mean() / rollout_deviations(win, batch).mean().clamp(min=1e-9),
+        "played_share": (batch["played"] >= 0).float().mean(),
     }

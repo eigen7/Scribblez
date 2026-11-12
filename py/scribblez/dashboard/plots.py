@@ -409,6 +409,38 @@ POLICY_SET_QUALITY = (
             "Policy form: value head's error (win probability) and variance ratio (held-out)",
             ["policy_eval_value_mae", "policy_eval_value_var_ratio"],
         ),
+        # The continuation heads, at the candidate each position's game played.
+        (
+            "Policy form: ownership and going-out cross-entropies (training, held-out)",
+            [
+                "loss_policy_ownership",
+                "policy_eval_loss_ownership",
+                "loss_policy_going_out",
+                "policy_eval_loss_going_out",
+            ],
+        ),
+        (
+            "Policy form: square points' moment losses (training, held-out)",
+            [
+                "loss_policy_square_points_mean",
+                "policy_eval_loss_square_points_mean",
+                "loss_policy_square_points_var",
+                "policy_eval_loss_square_points_var",
+            ],
+        ),
+        (
+            "Policy form: end-of-game points' moment losses (training, held-out)",
+            [
+                "loss_policy_end_points_mean",
+                "policy_eval_loss_end_points_mean",
+                "loss_policy_end_points_var",
+                "policy_eval_loss_end_points_var",
+            ],
+        ),
+        (
+            "Policy form: share of positions whose played move is a candidate (held-out)",
+            ["policy_eval_played_share"],
+        ),
         # Per form: each form's gradient is clipped on its own.
         (
             "Gradient norm before clipping, by form",

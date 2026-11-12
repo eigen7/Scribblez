@@ -97,6 +97,11 @@ class BlockDecoder {
   // until this decoder is next used.
   const Board& replay_board(const char* buf, uint32_t game_idx, uint32_t turn_idx);
 
+  // The view of game `game_idx` of `buf`, for consumers that read the game's
+  // record beside a replayed position (e.g. the move it played there). Valid
+  // until this decoder is next used.
+  GameLog game(const char* buf, uint32_t game_idx) { return game_view(buf, game_idx, nullptr); }
+
  private:
   GameLog game_view(const char* buf, uint32_t game_idx, uint32_t* sampled_turn);
 

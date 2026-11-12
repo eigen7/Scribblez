@@ -58,6 +58,18 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # The baseline's record key prefix; each form's records carry its own.
 BASELINE = "equity_"
+# The policy form's loss terms (policy.form_losses).
+POLICY_TERMS = (
+    "ce",
+    "value_mean",
+    "value_var",
+    "ownership",
+    "square_points_mean",
+    "square_points_var",
+    "going_out",
+    "end_points_mean",
+    "end_points_var",
+)
 # The checkpoint-config entries a resume must match.
 VERSION_KEYS = ("policy_set_format_version", "move_encoding_version", "input_encoding_version")
 # Batches the schedule-free arm recomputes BatchNorm statistics over before
@@ -160,7 +172,7 @@ def loss_weights(params) -> dict[str, float]:
     if FORM_GREEDY in forms.selected(params):
         keys.append("loss_greedy_gain")
     if FORM_POLICY in forms.selected(params):
-        keys.append("loss_policy_ce")
+        keys += [f"loss_policy_{term}" for term in POLICY_TERMS]
     return dict.fromkeys(keys, 1.0)
 
 

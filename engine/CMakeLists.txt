@@ -41,6 +41,7 @@ add_library(scribblez_core STATIC
   src/training/leaf_eval_task.cpp
   src/training/square_fate_targets.cpp
   src/training/game_end_targets.cpp
+  src/training/played_continuation.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp
@@ -496,6 +497,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_footprint.cpp
     tests/test_game_end.cpp
     tests/test_gcg_reader.cpp
+    tests/test_played_continuation.cpp
     tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp
     tests/test_leave_value_arrays.cpp

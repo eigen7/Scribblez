@@ -220,7 +220,7 @@ def moment_losses(
     return loss_mean, loss_var
 
 
-def _mean_and_variance(out: torch.Tensor) -> torch.Tensor:
+def mean_and_variance(out: torch.Tensor) -> torch.Tensor:
     """(B, 2, ...) raw head output -> [mean, softplus variance] along dim 1."""
     return torch.stack([out[:, 0], F.softplus(out[:, 1])], dim=1)
 
@@ -259,7 +259,7 @@ class SquarePointsHead(Head):
         self.conv = nn.Conv2d(channels, 2, 1)
 
     def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
-        return _mean_and_variance(self.conv(x))
+        return mean_and_variance(self.conv(x))
 
     def loss(self, outputs, targets, cfg):
         empty = (targets["ownership"] != FILLED).to(outputs["square_points"].dtype)
@@ -320,7 +320,7 @@ class EndPointsHead(Head):
         self.fc = _end_head(value_in, 2)
 
     def forward(self, x: torch.Tensor, value_in: torch.Tensor) -> torch.Tensor:
-        return _mean_and_variance(self.fc(value_in))
+        return mean_and_variance(self.fc(value_in))
 
     def loss(self, outputs, targets, cfg):
         labelled = _labelled(targets).to(outputs["end_points"].dtype)

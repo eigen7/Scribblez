@@ -218,6 +218,11 @@ class PolicySetParams(PoolGroupParams, PoolLabelParams):
     lambda_value: float = param(
         1.0, "policy form: the value head's moment losses' weight beside the cross-entropy"
     )
+    lambda_continuation: float = param(
+        1.0,
+        "policy form: the continuation heads' losses' weight beside the cross-entropy "
+        "(ownership, square points, going out and end-of-game points at the played move)",
+    )
     trunk_channels: int = param(128, "board trunk and candidate vector width")
     num_blocks: int = param(8, "board trunk residual blocks")
     normalize_scalar: bool = param(True, NORMALIZE_SCALAR_HELP)
