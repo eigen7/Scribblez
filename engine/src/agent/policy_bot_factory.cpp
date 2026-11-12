@@ -55,7 +55,9 @@ nn::ModelIdentity leave_identity(const PolicyBot::Params& p) {
   return nn::read_model_identity(p.leave_inference, "leave_inference_format_version");
 }
 
-PolicyBot::Backend make_backend(const PolicyBot::Params& p) {
+}  // namespace
+
+PolicyBot::Backend PolicyBot::make_backend(const Params& p) {
   if (p.service.model.empty()) throw util::CleanException("policybot: --model is required");
   const PolicyBot::TrainedOn trained =
     trained_on(nn::parse_onnx_metadata(util::read_file_bytes(p.service.model)));
@@ -74,8 +76,6 @@ PolicyBot::Backend make_backend(const PolicyBot::Params& p) {
   b.cross_checks = GpuCrossCheckDeltas::shared(*p.dict);
   return b;
 }
-
-}  // namespace
 
 PolicyBot::PolicyBot(const Params& params) : PolicyBot(params, make_backend(params)) {}
 

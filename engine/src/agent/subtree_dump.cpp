@@ -160,6 +160,10 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
       o["replies"] =
         reply_summary((*t.replies)[c], (*t.rerun)[c], t.payoffs->payoffs[c], turn.applied[c].board);
       if (!t.payoffs->residuals.empty()) o["residuals"] = residuals_json(t.payoffs->residuals[c]);
+      if (t.policy) {
+        o["policy"] = {{"pool_share", (*t.policy)[c].pool_share},
+                       {"simmed_share", (*t.policy)[c].simmed_share}};
+      }
     }
     candidates.push_back(std::move(o));
   }

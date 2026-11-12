@@ -20,9 +20,13 @@
 //   - per (rack, contender), the residual summary of Alice's sims after the
 //     contender against the leaf network's prior there
 //     (sim/map_residuals.h): what step 8's noise readout reads
-//     (py/scripts/deep_bot/residual_noise.py).
+//     (py/scripts/deep_bot/residual_noise.py);
+//   - with --policy-model, how often the policy head's top move at Bob's
+//     position is β (agent/policy_agreement.h): what step 10's readout reads
+//     (py/scripts/deep_bot/policy_agreement.py).
 
 #include "agent/bob_subtree.h"
+#include "agent/policy_agreement.h"
 #include "game/move.h"
 
 #include <string>
@@ -53,6 +57,8 @@ struct SubtreeTurn {
   const std::vector<std::vector<BobReply>>* replies = nullptr;
   const std::vector<std::vector<BobReply>>* rerun = nullptr;  // the second seed's
   const ReplyPayoffs* payoffs = nullptr;
+  // By candidate, for the searched; null without a policy model.
+  const std::vector<PolicyAgreement>* policy = nullptr;
   TurnSims sims;
 };
 
