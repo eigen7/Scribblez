@@ -23,6 +23,12 @@ generation, whose exported model seats each rollout's opponent leave, for
 which the tool reads each .slog's .forgone sidecar, written first. With
 `uniform` the opponent's whole rack is drawn uniformly. The pinned files reach
 remote generators as role inputs (`inputs`).
+
+With `group_positions_per_game` > 0 the tool also labels that many turns of
+each game as grouped pools (docs/plans/deep_bot.md, "Training data: grouped
+pools"; PoolGroupParams), the search network's store input, into a .group
+beside the .pool; the chunk then travels as the three files, and a chunk
+missing one is quarantined by the scheduler.
 """
 
 import functools
@@ -40,7 +46,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
-from scribblez.policy_set import FORM_NAMES, POOL_SUFFIX
+from scribblez.policy_set import FORM_NAMES, GROUP_SUFFIX, POOL_SUFFIX
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP
 from scribblez.workloads.base import (
     RoleSpec,
@@ -114,7 +120,78 @@ class PoolLabelParams:
 
 
 @dataclass(frozen=True)
-class PolicySetParams(PoolLabelParams):
+class PoolGroupParams:
+    """Grouped pools beside the chunk's pools (sim/grouped_pools.h): at each
+    parent, the mover's candidates (the move played, the static-equity head,
+    and draws from the ranking below it) and the opponent's racks, the
+    opponent's pool at every (candidate, rack), and the sims' maps of each
+    rack's leading replies at a few rollout counts."""
+
+    group_positions_per_game: int = param(
+        0, "turns of each game labeled as grouped pools into a .group sidecar (0 = none)"
+    )
+    group_top_moves: int = param(
+        3, "groups: the mover's static-equity top moves, beside the move the game played"
+    )
+    group_mid_moves: int = param(
+        2, "groups: moves drawn from the ranks between the top and group_mid_rank_limit"
+    )
+    group_tail_moves: int = param(
+        1, "groups: moves drawn from the ranks at group_mid_rank_limit and below"
+    )
+    group_exchanges: int = param(
+        1, "groups: exchanges or passes drawn among the mover's candidates"
+    )
+    group_mid_rank_limit: int = param(
+        32, "groups: the exclusive rank bound between the mid and tail draws"
+    )
+    group_racks: int = param(8, "groups: racks sampled for the opponent, the same under every move")
+    group_map_sims: int = param(
+        12, "groups: rollouts per rack in the search whose replies are mapped; at most rollouts"
+    )
+    group_map_steps: int = param(
+        3,
+        "groups: maps per leading reply; map j (1..steps) covers its first "
+        "group_map_sims * j / steps rollouts; at most group_map_sims",
+    )
+
+    @property
+    def groups(self) -> bool:
+        return self.group_positions_per_game > 0
+
+    def group_errors(self, rollouts: int) -> list[str]:
+        """What GroupParams::validate (sim/grouped_pools.cpp) would reject, by
+        param name, so a bad tag fails when configured rather than at its
+        first labeled chunk. Empty with groups off."""
+        if not self.groups:
+            return []
+        checks = [
+            (self.group_top_moves >= 1, "group_top_moves must be >= 1"),
+            (
+                min(self.group_mid_moves, self.group_tail_moves, self.group_exchanges) >= 0,
+                "group_mid_moves, group_tail_moves and group_exchanges must be >= 0",
+            ),
+            (
+                self.group_mid_rank_limit > self.group_top_moves,
+                "group_mid_rank_limit must be > group_top_moves",
+            ),
+            (self.group_racks >= 1, "group_racks must be >= 1"),
+            (1 <= self.group_map_sims <= rollouts, "group_map_sims must be in [1, rollouts]"),
+            (
+                1 <= self.group_map_steps <= self.group_map_sims,
+                "group_map_steps must be in [1, group_map_sims]",
+            ),
+        ]
+        return [msg for ok, msg in checks if not ok]
+
+
+def chunk_sidecars(params: PoolGroupParams) -> tuple[str, ...]:
+    """The sidecars a chunk of `params` carries beside its .slog."""
+    return (POOL_SUFFIX, GROUP_SUFFIX) if params.groups else (POOL_SUFFIX,)
+
+
+@dataclass(frozen=True)
+class PolicySetParams(PoolGroupParams, PoolLabelParams):
     # Generations and held-out pools.
     games_per_generation: int = param(1000, "games per generation (positions_per_game pools each)")
     open_ahead: int = param(
@@ -173,6 +250,8 @@ class PolicySetParams(PoolLabelParams):
             raise params_mod.ParamsError(
                 "no form to train: set one of " + ", ".join(f"train_{n}" for n in FORM_NAMES)
             )
+        if errors := self.group_errors(self.rollouts):
+            raise params_mod.ParamsError(*errors)
 
 
 def _leave_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:
@@ -266,9 +345,11 @@ def pool_command(
     model: Path | None,
     seed: int,
     threads: int,
+    groups: PoolGroupParams | None = None,
 ) -> list[str]:
-    """policy_set_pool_tool over `slog_dir`, writing a .pool beside each .slog;
-    with `leaf` LEAF_SYNTHETIC, on the CPU reference (tests)."""
+    """policy_set_pool_tool over `slog_dir`, writing a .pool beside each .slog,
+    and with `groups` labeling groups a .group; with `leaf` LEAF_SYNTHETIC, on
+    the CPU reference (tests)."""
     cmd = [
         str(POOL_TOOL), "--slog-dir", str(slog_dir), "--leaf-model", str(leaf),
         "--positions-per-game", str(params.positions_per_game),
@@ -280,21 +361,39 @@ def pool_command(
         cmd += ["--backend", "cpu"]
     if model is not None:
         cmd += ["--leave-inference", str(model)]
+    if groups is not None and groups.groups:
+        cmd += [
+            "--group-positions-per-game", str(groups.group_positions_per_game),
+            "--group-top-moves", str(groups.group_top_moves),
+            "--group-mid-moves", str(groups.group_mid_moves),
+            "--group-tail-moves", str(groups.group_tail_moves),
+            "--group-exchanges", str(groups.group_exchanges),
+            "--group-mid-rank-limit", str(groups.group_mid_rank_limit),
+            "--group-racks", str(groups.group_racks),
+            "--group-map-sims", str(groups.group_map_sims),
+            "--group-map-steps", str(groups.group_map_steps),
+        ]  # fmt: skip
     return cmd
 
 
 def write_pools(
-    params: PoolLabelParams, leaf: Path | str, model: Path | None, chunk_dir: Path, threads: int
+    params: PoolLabelParams,
+    leaf: Path | str,
+    model: Path | None,
+    chunk_dir: Path,
+    threads: int,
+    groups: PoolGroupParams | None = None,
 ):
     """Label the chunk in `chunk_dir`: its .forgone sidecar first when the
-    model seats the leaves, then its .pool. The seed is the chunk stem's hash,
-    so chunks sample their turns and rollouts independently. Raises
-    subprocess.CalledProcessError if a tool fails."""
+    model seats the leaves, then its .pool, and its .group when `groups` label
+    groups. The seed is the chunk stem's hash, so chunks sample their turns
+    and rollouts independently. Raises subprocess.CalledProcessError if a tool
+    fails."""
     if model is not None:
         forgone.write_sidecars(chunk_dir, threads)
     (slog,) = chunk_dir.glob("*.slog")
     seed = zlib.crc32(slog.stem.encode())
-    subprocess.run(pool_command(params, chunk_dir, leaf, model, seed, threads), check=True)
+    subprocess.run(pool_command(params, chunk_dir, leaf, model, seed, threads, groups), check=True)
 
 
 def resolve_sources(ctx: WorkerContext) -> tuple[Path, Path | None]:
@@ -322,7 +421,9 @@ def run_generate(ctx: WorkerContext) -> int:
         hasty_spec(p),
         face_up_leaves=False,
         random_opening_mean=0.0,
-        sidecar=ChunkSidecar(POOL_SUFFIX, functools.partial(write_pools, p, leaf, model)),
+        sidecar=ChunkSidecar(
+            chunk_sidecars(p), functools.partial(write_pools, p, leaf, model, groups=p)
+        ),
         games_per_chunk=p.games_per_chunk,
     )
 

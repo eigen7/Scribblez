@@ -105,7 +105,7 @@ class LeaveInferenceParams:
 
 
 # The sidecar every chunk carries: the forgone plays its rows read.
-FORGONE_SIDECAR = ChunkSidecar(forgone.SUFFIX, forgone.write_sidecars)
+FORGONE_SIDECAR = ChunkSidecar((forgone.SUFFIX,), forgone.write_sidecars)
 
 
 def run_generate(ctx: WorkerContext) -> int:

@@ -16,10 +16,11 @@ from pathlib import Path
 import numpy as np
 
 from scribblez import ffi
+from scribblez.policy_set import GROUP_SUFFIX
 from scribblez.policy_set.pools import Pool, parse_pool
 
 GROUP = ffi.format_layout()["constants"]["group"]
-SUFFIX = ".group"
+SUFFIX = GROUP_SUFFIX
 
 
 def sim_maps_dtype() -> np.dtype:

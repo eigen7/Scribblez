@@ -121,7 +121,7 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
         leave_inference,
         "generate",
         lambda ctx, player, face_up_leaves, random_opening_mean, sidecar: calls.append(
-            (face_up_leaves, random_opening_mean, sidecar.suffix)
+            (face_up_leaves, random_opening_mean, sidecar.suffixes)
         ),
     )
 
@@ -129,7 +129,7 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
         params = leave_inference.LeaveInferenceParams()
 
     leave_inference.run_generate(Ctx())
-    assert calls == [(False, 0.0, forgone.SUFFIX)]
+    assert calls == [(False, 0.0, (forgone.SUFFIX,))]
 
 
 @pytest.mark.parametrize("head", HEADS)

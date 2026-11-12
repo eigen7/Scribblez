@@ -48,19 +48,19 @@ def start_for(
     ctx,
     paths: TagPaths,
     params,
-    chunk_sidecar: str = "",
+    chunk_sidecars: tuple[str, ...] = (),
     holdout_every: int = 0,
     holdout_chunks: int = 0,
 ) -> "DataHome":
     """Start the data home beside trainer `ctx`. It is remote when the
     controller says so (SCZ_REMOTE_HOME): on an ssh machine, whose
-    generations the controller pulls. `chunk_sidecar` is the suffix of the
-    sidecar each chunk .slog carries, and `holdout_every` and
+    generations the controller pulls. `chunk_sidecars` are the suffixes of
+    the sidecars each chunk .slog carries, and `holdout_every` and
     `holdout_chunks` shape the held-out set (scheduler.SchedulerConfig)."""
     cfg = scheduler.SchedulerConfig(
         games_per_generation=params.games_per_generation,
         open_ahead=params.open_ahead,
-        chunk_sidecar=chunk_sidecar,
+        chunk_sidecars=chunk_sidecars,
         holdout_every=holdout_every,
         holdout_chunks=holdout_chunks,
     )

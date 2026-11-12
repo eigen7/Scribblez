@@ -1265,8 +1265,11 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    pools cost what the head's do: Bob's replies and the race's rollouts are
    about the same at every stratum. A chunk of 50 games with a group per
    game is then 550 MB and 9 minutes; groups per game is the lever, and
-   fp16 maps would halve the bytes. The dashboard workload is the next
-   slice.
+   fp16 maps would halve the bytes. The dashboard workload is the
+   `policy_set` tag with `group_positions_per_game` set, its `group_*`
+   params the tool's flags; the chunk then carries the `.group` as a second
+   sidecar beside the `.pool`, and the scheduler moves and quarantines the
+   three files as one.
 10. **The search network with an empty store:** the continuation heads,
     pretrained on game records, and the policy and value heads, trained on
     self-play pools from the mover's side. *Measure:* how often the

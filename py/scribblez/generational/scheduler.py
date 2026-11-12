@@ -26,12 +26,12 @@ delivered it again after its delete failed, is deleted. The ledger line is
 written before the rename, so a crash between the two loses that chunk rather
 than duplicating it.
 
-A workload whose rows read a per-.slog sidecar (SchedulerConfig.chunk_sidecar)
-moves each chunk as a set: the sidecar first, the .slog last, and duplicates
-and quarantines take the sidecar along. Generators deliver the sidecar before
-its .slog, so a staged .slog without one is damage, quarantined like an
-unreadable header. A crash mid-move strands at most a sidecar, which nothing
-reads without its .slog.
+A workload whose rows read per-.slog sidecars (SchedulerConfig.chunk_sidecars)
+moves each chunk as a set: the sidecars first, the .slog last, and duplicates
+and quarantines take the sidecars along. Generators deliver the sidecars
+before their .slog, so a staged .slog missing one is damage, quarantined like
+an unreadable header. A crash mid-move strands at most a sidecar, which
+nothing reads without its .slog.
 
 A workload that evaluates on held-out chunks (SchedulerConfig.holdout_every)
 has the scheduler route about one staged chunk in `holdout_every`, chosen by
@@ -93,8 +93,8 @@ def _header_games(chunk: Path) -> int:
 class SchedulerConfig:
     games_per_generation: int
     open_ahead: int
-    # The suffix of the sidecar each chunk .slog carries, or "" for none.
-    chunk_sidecar: str = ""
+    # The suffixes of the sidecars each chunk .slog carries.
+    chunk_sidecars: tuple[str, ...] = ()
     # Held-out chunks (see the module docstring): about one in
     # `holdout_every` (0: none), into a set of `holdout_chunks`.
     holdout_every: int = 0
@@ -162,7 +162,7 @@ def tick(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn
 
 
 def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGamesFn):
-    staged = _route_held_out(paths, cfg, _staged_chunks(paths, cfg.chunk_sidecar), chunk_games)
+    staged = _route_held_out(paths, cfg, _staged_chunks(paths, cfg.chunk_sidecars), chunk_games)
 
     cursor = lifecycle.read_train_state(paths).get("generation_index", 0)
     while True:
@@ -177,7 +177,7 @@ def _drain(paths: TagPaths, cfg: SchedulerConfig, hooks, chunk_games: ChunkGames
         hooks.gate(GENERATE_ROLE, None)
         gen_dir = paths.generation_dir(open_index)
         staged = _fill(
-            paths, gen_dir, cfg.games_per_generation, staged, chunk_games, cfg.chunk_sidecar
+            paths, gen_dir, cfg.games_per_generation, staged, chunk_games, cfg.chunk_sidecars
         )
         if not lifecycle.is_complete(gen_dir):
             return  # needs more chunks; staging is drained
@@ -204,33 +204,38 @@ def _append_ledger(paths: TagPaths, name: str):
         f.write(name + "\n")
 
 
-def _chunk_files(chunk: Path, sidecar: str) -> list[Path]:
-    """A chunk's files in move order: its sidecar, if any, then its .slog."""
-    return [chunk.with_suffix(sidecar), chunk] if sidecar else [chunk]
+def _chunk_files(chunk: Path, sidecars: tuple[str, ...]) -> list[Path]:
+    """A chunk's files in move order: its sidecars, then its .slog."""
+    return [chunk.with_suffix(s) for s in sidecars] + [chunk]
 
 
-def _quarantine(chunk: Path, sidecar: str, why: str):
+def _quarantine(chunk: Path, sidecars: tuple[str, ...], why: str):
     """Set a damaged chunk aside, rather than poison a generation or retry it
-    every tick: the .slog as <stem>.bad, its sidecar with .bad appended."""
+    every tick: the .slog as <stem>.bad, its sidecars with .bad appended."""
     print(f"scheduler: quarantining {why} chunk {chunk.name}")
-    if sidecar and chunk.with_suffix(sidecar).exists():
-        side = chunk.with_suffix(sidecar)
-        os.replace(side, side.with_name(side.name + ".bad"))
+    for side in _chunk_files(chunk, sidecars)[:-1]:
+        if side.exists():
+            os.replace(side, side.with_name(side.name + ".bad"))
     os.replace(chunk, chunk.with_suffix(".bad"))
 
 
-def _staged_chunks(paths: TagPaths, sidecar: str) -> list[Path]:
+def _missing_sidecar(chunk: Path, sidecars: tuple[str, ...]) -> str:
+    """The suffix of the first sidecar `chunk` lacks, or ""."""
+    return next((s for s in sidecars if not chunk.with_suffix(s).exists()), "")
+
+
+def _staged_chunks(paths: TagPaths, sidecars: tuple[str, ...]) -> list[Path]:
     """Staged chunks awaiting assignment, sorted by name. A chunk already in
     the ledger is a duplicate (see the module docstring) and is deleted; one
-    missing its sidecar is quarantined."""
+    missing a sidecar is quarantined."""
     ledger = _read_ledger(paths)
     staged = []
     for f in sorted(paths.staging_dir.glob("*.slog")):
         if f.name in ledger:
-            for part in _chunk_files(f, sidecar):
+            for part in _chunk_files(f, sidecars):
                 part.unlink(missing_ok=True)
-        elif sidecar and not f.with_suffix(sidecar).exists():
-            _quarantine(f, sidecar, f"{sidecar}-less")
+        elif missing := _missing_sidecar(f, sidecars):
+            _quarantine(f, sidecars, f"{missing}-less")
         else:
             staged.append(f)
     return staged
@@ -246,7 +251,7 @@ def _fill(
     target: int,
     staged: list[Path],
     chunk_games: ChunkGamesFn,
-    sidecar: str,
+    sidecars: tuple[str, ...],
 ) -> list[Path]:
     """Assign staged chunks into `dest_dir` until its target game count is
     reached, then mark it complete. Returns the chunks still unassigned."""
@@ -258,10 +263,10 @@ def _fill(
         except OSError:
             # Chunks arrive whole, so an unreadable header means damage, not a
             # file still in flight.
-            _quarantine(chunk, sidecar, "unreadable")
+            _quarantine(chunk, sidecars, "unreadable")
             continue
         _append_ledger(paths, chunk.name)
-        for part in _chunk_files(chunk, sidecar):
+        for part in _chunk_files(chunk, sidecars):
             os.replace(part, dest_dir / part.name)
         committed += games
     if committed >= target:
@@ -288,14 +293,14 @@ def _route_held_out(
     for chunk in held:
         _append_ledger(paths, chunk.name)
         if lifecycle.is_complete(dest):
-            for part in _chunk_files(chunk, cfg.chunk_sidecar):
+            for part in _chunk_files(chunk, cfg.chunk_sidecars):
                 part.unlink()
             continue
         if lifecycle.read_manifest(dest) is None:
             lifecycle.write_manifest(
                 dest, {"target_chunks": cfg.holdout_chunks, "status": lifecycle.GENERATING}
             )
-        for part in _chunk_files(chunk, cfg.chunk_sidecar):
+        for part in _chunk_files(chunk, cfg.chunk_sidecars):
             os.replace(part, dest / part.name)
         chunks = sorted(dest.glob("*.slog"))
         if len(chunks) >= cfg.holdout_chunks:
