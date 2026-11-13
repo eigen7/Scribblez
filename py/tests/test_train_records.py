@@ -29,7 +29,6 @@ def paths(tmp_path) -> TagPaths:
 def _metrics(gen: int) -> dict:
     return {
         "epoch": gen,
-        "positions": 1000 * (gen + 1),
         "loss": 0.5 / (gen + 1),
         "wld_acc": np.float32(0.5),  # a tensor reduction, as trainers produce
         "lr": 1e-3,
@@ -94,7 +93,8 @@ def test_records_ingest_exactly_as_direct_writes_would(paths, tmp_path):
     for g, evs in ((0, events[0]), (1, events[1])):
         # Written directly, a numpy scalar is not a metric (write_metrics
         # takes int/float); through a record it is a plain number. Same value.
-        db.write_metrics(direct, g, {**_metrics(g), "wld_acc": 0.5})
+        # The rows clock is the record's, written as the `positions` series.
+        db.write_metrics(direct, g, {**_metrics(g), "wld_acc": 0.5, "positions": 1000 * (g + 1)})
         for e in evs:
             db.write_control_event(direct, e["positions"], e["name"], e["value"], t=e["t"])
         db.write_lane_preds(direct, g, 1000 * (g + 1), _preds(g)["lane_pred"])
@@ -105,6 +105,7 @@ def test_records_ingest_exactly_as_direct_writes_would(paths, tmp_path):
         assert got[table] == want[table], table
     # The float32 reduction survives as a metric (json carries it as a number).
     assert list(db.read_metric_series(conn, "wld_acc")[1]) == [0.5, 0.5]
+    assert db.read_rows_clock(conn) == {0: 1000, 1: 2000}
 
 
 def test_ingest_is_incremental_and_follows_a_rewritten_run_record(paths):

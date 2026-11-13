@@ -342,9 +342,9 @@ LEAF_EVAL_QUALITY = [
 ]
 # The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
 # from policy_set/metrics.py): on the held-out pools, each form's sets against
-# the static-equity top N (the "equity_" prefix) at each set size N, each
-# form's training loss, and what the pools are like, the window's beside the
-# held-out set's.
+# the static-equity top N (the "equity_" prefix) at each set size N, and what
+# the pools are like, the window's beside the held-out set's. The forms' loss
+# terms are POLICY_SET_LOSS, on the Loss tab.
 # policy_set/metrics.py's SET_SIZES, copied: importing it would load the engine
 # library (policy_set/pools.py reads format_layout at import).
 POLICY_SET_SIZES = (1, 2, 4, 8, 16)
@@ -372,70 +372,13 @@ POLICY_SET_QUALITY = (
         )
     ]
     + [
-        ("Slot form: coverage loss by N (training)", [f"loss_slot_{n}" for n in POLICY_SET_SIZES]),
-        (
-            "Slot form: coverage loss by N (held-out)",
-            [f"slot_eval_loss_{n}" for n in POLICY_SET_SIZES],
-        ),
-        (
-            "Greedy form: gain loss (training, held-out)",
-            ["loss_greedy_gain", "greedy_eval_loss_gain"],
-        ),
-        # The labels' entropy is the floor no policy's cross-entropy goes below.
-        (
-            "Policy form: cross-entropy against q (held-out) and the labels' entropy",
-            ["policy_eval_ce", "eval_label_entropy"],
-        ),
-        # Stakes-weighted when policy_stakes_weighting is set.
-        ("Policy form: loss (training, held-out)", ["loss_policy_ce", "policy_eval_loss_ce"]),
         (
             "Policy form: the policy's entropy and the labels' (held-out, nats)",
             ["policy_eval_entropy", "eval_label_entropy"],
         ),
         (
-            "Policy form: stakes-weighted cross-entropy against q (held-out)",
-            ["policy_eval_stakes_ce"],
-        ),
-        (
-            "Policy form: value head's moment losses (training, held-out)",
-            [
-                "loss_policy_value_mean",
-                "policy_eval_loss_value_mean",
-                "loss_policy_value_var",
-                "policy_eval_loss_value_var",
-            ],
-        ),
-        (
             "Policy form: value head's error (win probability) and variance ratio (held-out)",
             ["policy_eval_value_mae", "policy_eval_value_var_ratio"],
-        ),
-        # The continuation heads, at the candidate each position's game played.
-        (
-            "Policy form: ownership and going-out cross-entropies (training, held-out)",
-            [
-                "loss_policy_ownership",
-                "policy_eval_loss_ownership",
-                "loss_policy_going_out",
-                "policy_eval_loss_going_out",
-            ],
-        ),
-        (
-            "Policy form: square points' moment losses (training, held-out)",
-            [
-                "loss_policy_square_points_mean",
-                "policy_eval_loss_square_points_mean",
-                "loss_policy_square_points_var",
-                "policy_eval_loss_square_points_var",
-            ],
-        ),
-        (
-            "Policy form: end-of-game points' moment losses (training, held-out)",
-            [
-                "loss_policy_end_points_mean",
-                "policy_eval_loss_end_points_mean",
-                "loss_policy_end_points_var",
-                "policy_eval_loss_end_points_var",
-            ],
         ),
         (
             "Policy form: share of positions whose played move is a candidate (held-out)",
@@ -474,6 +417,68 @@ POLICY_SET_QUALITY = (
         ),
     ]
 )
+# The Loss tab's per-term panel for policy_set: each form's loss terms,
+# training beside held-out, which the stacked training loss above it cannot
+# show.
+POLICY_SET_LOSS = [
+    ("Slot form: coverage loss by N (training)", [f"loss_slot_{n}" for n in POLICY_SET_SIZES]),
+    (
+        "Slot form: coverage loss by N (held-out)",
+        [f"slot_eval_loss_{n}" for n in POLICY_SET_SIZES],
+    ),
+    (
+        "Greedy form: gain loss (training, held-out)",
+        ["loss_greedy_gain", "greedy_eval_loss_gain"],
+    ),
+    # The labels' entropy is the floor no policy's cross-entropy goes below.
+    (
+        "Policy form: cross-entropy against q (held-out) and the labels' entropy",
+        ["policy_eval_ce", "eval_label_entropy"],
+    ),
+    # Stakes-weighted when policy_stakes_weighting is set.
+    ("Policy form: loss (training, held-out)", ["loss_policy_ce", "policy_eval_loss_ce"]),
+    (
+        "Policy form: stakes-weighted cross-entropy against q (held-out)",
+        ["policy_eval_stakes_ce"],
+    ),
+    (
+        "Policy form: value head's moment losses (training, held-out)",
+        [
+            "loss_policy_value_mean",
+            "policy_eval_loss_value_mean",
+            "loss_policy_value_var",
+            "policy_eval_loss_value_var",
+        ],
+    ),
+    # The continuation heads, at the candidate each position's game played.
+    (
+        "Policy form: ownership and going-out cross-entropies (training, held-out)",
+        [
+            "loss_policy_ownership",
+            "policy_eval_loss_ownership",
+            "loss_policy_going_out",
+            "policy_eval_loss_going_out",
+        ],
+    ),
+    (
+        "Policy form: square points' moment losses (training, held-out)",
+        [
+            "loss_policy_square_points_mean",
+            "policy_eval_loss_square_points_mean",
+            "loss_policy_square_points_var",
+            "policy_eval_loss_square_points_var",
+        ],
+    ),
+    (
+        "Policy form: end-of-game points' moment losses (training, held-out)",
+        [
+            "loss_policy_end_points_mean",
+            "policy_eval_loss_end_points_mean",
+            "loss_policy_end_points_var",
+            "policy_eval_loss_end_points_var",
+        ],
+    ),
+]
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
 

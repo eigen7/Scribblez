@@ -132,6 +132,12 @@ def _policy_set_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
+def _policy_set_loss(conn, params, mount_root):
+    """policy_set's Loss-tab panel below the stacked loss: each form's loss
+    terms, training beside held-out."""
+    return plots.series_grid(conn, plots.POLICY_SET_LOSS) if _row_count(conn, "metrics") else None
+
+
 def _leaf_eval_metrics(conn, params, mount_root):
     """deep_bot_leaf_eval's Training tab: the generic curves plus the model's
     held-out read beside the win tables'."""
@@ -159,6 +165,7 @@ FIGURES = {
     "transfer_reader_metrics": _transfer_reader_metrics,
     "leave_inference_metrics": _leave_inference_metrics,
     "policy_set_metrics": _policy_set_metrics,
+    "policy_set_loss": _policy_set_loss,
     "leaf_eval_metrics": _leaf_eval_metrics,
     "match_eval": _match_eval,
     "match_arms": _match_arms,

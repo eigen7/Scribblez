@@ -232,7 +232,6 @@ def _checkpoint_and_eval(
     )
     record = {
         "epoch": ci,
-        "positions": state.rows_trained,
         "loss": avg["total"],
         "loss_wld": avg["wld"],
         "loss_score_diff": avg["score_diff"],
