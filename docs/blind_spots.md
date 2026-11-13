@@ -133,6 +133,27 @@ no model and starts at once. A tag from before the sidecars gets them from
 the pools' own is gone (`--leave-tag`), which the panel then names. It uses the
 sim-survey viewer's ports, so it replaces a running `sim_survey_viewer.py`.
 
+**What an agent plays at them.** `py/scripts/deep_bot/blind_spot_picks.py`
+asks an agent for its move at every kept position of a tag and reads the
+picks against the reports:
+
+```
+python3 -m scripts.deep_bot.blind_spot_picks --tag <tag> --out picks.jsonl \
+  --player "--type=deepbot-endgame --leaf-model <leaf_eval .onnx> \
+            --leave-inference <leave_inference .onnx> --reply hasty"
+```
+
+`position_pick_tool` replays each game to the position, so the agent holds
+the history it would hold in play. A pick is the report's best outside move,
+another of its outside moves, a cut move, or a move the report never simmed;
+the table gives each kind's share by bag size, and over the picks the report
+simmed their confirmed win probability over the best cut move's, beside what
+the best outside move offered. The confirming sim's opponent is HastyBot, so
+an agent that models a searching opponent should turn some outside moves
+down; the positions whose best outside move is a pass are left out unless
+`--passes`, since an opponent who can pass back refutes most of them.
+`--picks picks.jsonl` tabulates a run again without asking.
+
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
 chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those
 gained at least 2 points on confirmation, and 28 at least 5: one blind spot
