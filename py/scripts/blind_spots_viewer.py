@@ -6,16 +6,15 @@ The sim-survey viewer, fed from the tag's .blindspots.json reports and .gcg
 exports (scribblez/blind_spots_viewer.py): one position at a time, the plays
 from outside HastyBot's top moves that out-simmed them listed above those top
 moves, the selected move previewed on the board beside its confirming and
-screening win rates, and what the mover believes about the opponent's rack
-under the leave inference model the pools were labeled with: a per-tile chart
-against no information, and sample racks. The left and right arrow keys step
+screening win rates, and what the mover believes about the opponent's rack,
+from the reports' .beliefs.json sidecars: a per-tile chart against no
+information, and sample racks. The left and right arrow keys step
 through the positions in name order. It serves on the sim-survey viewer's
 ports, so it replaces a running sim_survey_viewer.py.
 
 Usage:
     ./py/scripts/blind_spots_viewer.py --tag v1
     ./py/scripts/blind_spots_viewer.py --tag v1 --min-bag 8
-    ./py/scripts/blind_spots_viewer.py --tag v1 --no-beliefs
     ./py/scripts/blind_spots_viewer.py --found-dir <dir of reports> --gcg-dir <dir of .gcg>
 """
 
@@ -23,8 +22,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from scribblez.blind_spots_viewer import BeliefPanel, leave_model_path, report_header, viewer_data
-from scribblez.leave_inference.beliefs import LeaveBeliefs
+from scribblez.blind_spots_viewer import viewer_data
 from scribblez.paths import add_mount_root_argument
 from scribblez.survey_viewer_server import DEFAULT_API_PORT, DEFAULT_DEV_PORT, serve
 from scribblez.workloads import hidden_blind_spots
@@ -38,11 +36,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gcg-dir", type=Path, help="the kept positions' games, with --found-dir")
     p.add_argument(
         "--min-bag", type=int, default=0, help="show positions with at least this many in the bag"
-    )
-    p.add_argument(
-        "--no-beliefs",
-        action="store_true",
-        help="skip the opponent-rack panel, e.g. when the pools' leave inference model is gone",
     )
     p.add_argument("--api-port", type=int, default=DEFAULT_API_PORT, help="survey API server port")
     p.add_argument("--dev-port", type=int, default=DEFAULT_DEV_PORT, help="Vite dev server port")
@@ -60,17 +53,8 @@ def main() -> int:
     if not data["positions"]:
         print(f"no kept position in {args.found_dir} with bag >= {args.min_bag}", file=sys.stderr)
         return 1
-    routes = {}
-    model = (
-        None
-        if args.no_beliefs
-        else leave_model_path(report_header(args.found_dir), args.mount_root)
-    )
-    if model is not None:  # the opponent-rack panel, under the pools' own beliefs
-        panel = BeliefPanel(data, args.found_dir, LeaveBeliefs(model))
-        routes["/api/leave_samples"] = panel.samples
     banner = f"{len(data['positions'])} blind spots."
-    return serve(data, args.api_port, args.dev_port, banner, routes)
+    return serve(data, args.api_port, args.dev_port, banner)
 
 
 if __name__ == "__main__":

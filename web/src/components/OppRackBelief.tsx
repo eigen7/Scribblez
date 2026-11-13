@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { RackBeliefChart } from '../lib/surveyTypes';
 
 // The blind-spots viewer's opponent-rack panel: what the mover believes the
 // opponent holds, from the leave inference model (py/scribblez/blind_spots_viewer.py,
 // BeliefPanel). A grouped bar per tile -- the chance the rack holds one under
 // the model, beside the same under no information -- and sample racks, the
-// kept leave apart from the refill, redrawn on demand.
+// kept leave apart from the refill, all precomputed.
 
 // Series colors, validated (dataviz validate_palette.js, dark mode) against
 // the panel's own surface, --belief-surface in index.css.
@@ -19,11 +19,6 @@ const TOP = 6;
 const BAR = 6;
 const GAP = 2; // between a tile's two bars
 const RADIUS = 2;
-
-interface Rack {
-  leave: string;
-  refill: string;
-}
 
 const pct = (p: number) => `${(100 * p).toFixed(1)}%`;
 
@@ -70,7 +65,7 @@ function Chart({ chart, onHover }: { chart: RackBeliefChart; onHover: (i: number
   );
 }
 
-function SampleRack({ rack }: { rack: Rack }) {
+function SampleRack({ rack }: { rack: RackBeliefChart['racks'][number] }) {
   return (
     <div className="belief-sample">
       {[...rack.leave].map((ch, i) => (
@@ -83,24 +78,8 @@ function SampleRack({ rack }: { rack: Rack }) {
   );
 }
 
-// Sample racks from /api/leave_samples, a fresh seed per draw.
-function useSamples(position: number) {
-  const [racks, setRacks] = useState<Rack[] | null>(null);
-  const [error, setError] = useState('');
-  const draw = useCallback(() => {
-    const seed = Math.floor(Math.random() * 2 ** 31);
-    fetch(`/api/leave_samples?position=${position}&seed=${seed}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d: { racks: Rack[] }) => setRacks(d.racks))
-      .catch((e) => setError(String(e)));
-  }, [position]);
-  useEffect(draw, [draw]);
-  return { racks, error, draw };
-}
-
-export default function OppRackBelief({ chart, position }: { chart: RackBeliefChart; position: number }) {
+export default function OppRackBelief({ chart }: { chart: RackBeliefChart }) {
   const [hover, setHover] = useState<number | null>(null);
-  const { racks, error, draw } = useSamples(position);
   const shown = hover === null ? null : chart.presence[hover];
   return (
     <div className="belief-panel">
@@ -109,6 +88,11 @@ export default function OppRackBelief({ chart, position }: { chart: RackBeliefCh
         {chart.modelled
           ? `kept ${chart.leave_length} at their last move, drew ${chart.refill} · P(holds at least one)`
           : `no leave inference here, so inferred is uniform: a uniform rack of ${chart.refill} · P(holds at least one)`}
+      </div>
+      <div className="belief-sub">
+        {chart.stand_in_for
+          ? `leave inference ${chart.model}, standing in for ${chart.stand_in_for} that labeled the pools`
+          : `leave inference ${chart.model}`}
       </div>
       <div className="belief-legend">
         <span>
@@ -127,12 +111,8 @@ export default function OppRackBelief({ chart, position }: { chart: RackBeliefCh
           Sample racks: <span className="belief-tile kept">kept</span>{' '}
           <span className="belief-tile drawn">drawn</span>
         </span>
-        <button type="button" onClick={draw}>
-          New sample
-        </button>
       </div>
-      {error && <div className="belief-sub">Could not sample: {error}</div>}
-      <div className="belief-samples">{racks?.map((r) => <SampleRack key={r.leave + r.refill} rack={r} />)}</div>
+      <div className="belief-samples">{chart.racks.map((r) => <SampleRack key={r.leave + r.refill} rack={r} />)}</div>
     </div>
   );
 }

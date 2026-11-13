@@ -9,19 +9,14 @@ a move carries its confirming and screening win% and the pool's q instead of a
 CPU survey's rollout summaries. Every outside move is compared with the best
 top move on the same rollouts.
 
-BeliefPanel adds what the mover believes about the opponent's rack, from the
-leave inference model the reports name (leave_inference/beliefs.py): per tile,
-the chance the rack holds one under the model and under no information, and
-sample racks on request.
+A position's entry also carries what the mover believes about the opponent's
+rack, as "belief", when its report has a .beliefs.json sidecar
+(blind_spots_beliefs.py writes them; the viewer never runs the model).
 """
 
 import json
 from pathlib import Path
 
-import numpy as np
-
-from scribblez.leave_inference.beliefs import LeaveBeliefs, RackBelief, unseen_pool
-from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import (
     TILE_SCORES,
     board_before,
@@ -33,6 +28,7 @@ from scribblez.sim_survey_viewer import (
 )
 
 REPORT_SUFFIX = ".blindspots.json"
+BELIEFS_SUFFIX = ".beliefs.json"
 
 
 def played_move(gcg_text: str) -> str:
@@ -104,22 +100,54 @@ def position_entry(stem: str, position: dict, header: dict, gcg_dir: Path) -> di
     }
 
 
+def report_entries(report_path: Path, gcg_dir: Path, min_bag: int = 0) -> tuple[dict, list]:
+    """The header of the report at `report_path` and the entries of its kept
+    positions with at least `min_bag` tiles in the bag, in report order."""
+    report = json.loads(report_path.read_text())
+    header = {k: v for k, v in report.items() if k != "positions"}
+    stem = report_path.name.removesuffix(REPORT_SUFFIX)
+    entries = [
+        position_entry(stem, p, header, gcg_dir)
+        for p in report["positions"]
+        if p["kept"] and p["bag_size"] >= min_bag
+    ]
+    return header, entries
+
+
+def model_name(model: dict) -> str:
+    return f"{model['tag']} gen {model['generation']}"
+
+
+def attach_beliefs(entries: list[dict], header: dict, beliefs_path: Path):
+    """Add each entry's belief from the sidecar at `beliefs_path`, naming the
+    model it came from and, for a stand-in, the one the pools were labeled
+    under."""
+    sidecar = json.loads(beliefs_path.read_text())
+    by_position = {(b["game"], b["turn"]): b for b in sidecar["positions"]}
+    model, labeled = sidecar["leave_model"], header.get("leave_model", {})
+    note = {"model": model_name(model)}
+    if (model["tag"], model["generation"]) != (labeled.get("tag"), labeled.get("generation")):
+        note["stand_in_for"] = model_name(labeled) if labeled.get("tag") else "uniform beliefs"
+    for e in entries:
+        b = by_position[(e["game"], e["turn"] - 1)]
+        e["belief"] = {k: v for k, v in b.items() if k not in ("game", "turn")} | note
+
+
 def viewer_data(found_dir: Path, gcg_dir: Path, min_bag: int = 0) -> dict:
     """Everything the viewer loads: the kept positions of `found_dir`'s reports
     with at least `min_bag` tiles in the bag, in name order (by file stem, then
-    game and turn), their games read from `gcg_dir`."""
-    found = []  # ((stem, game, turn), entry)
+    game and turn), their games read from `gcg_dir`, with their beliefs where
+    the reports have sidecars."""
+    positions = []
     header = {}
     for path in sorted(found_dir.glob(f"*{REPORT_SUFFIX}")):
-        report = json.loads(path.read_text())
-        header = {k: v for k, v in report.items() if k != "positions"}
-        stem = path.name.removesuffix(REPORT_SUFFIX)
-        for position in report["positions"]:
-            if position["kept"] and position["bag_size"] >= min_bag:
-                entry = position_entry(stem, position, header, gcg_dir)
-                found.append(((stem, position["game"], position["turn"]), entry))
+        header, entries = report_entries(path, gcg_dir, min_bag)
+        beliefs = path.with_name(path.name.removesuffix(REPORT_SUFFIX) + BELIEFS_SUFFIX)
+        if beliefs.exists():
+            attach_beliefs(entries, header, beliefs)
+        positions += entries
     # Turns compare as numbers, so turn9 precedes turn10 unlike in a string sort.
-    positions = [entry for _, entry in sorted(found, key=lambda kv: kv[0])]
+    positions.sort(key=lambda e: (e["stem"], e["game"], e["turn"]))
     return {
         "survey": header,
         "bonuses": bonuses(),
@@ -128,71 +156,9 @@ def viewer_data(found_dir: Path, gcg_dir: Path, min_bag: int = 0) -> dict:
     }
 
 
-TILE_NAMES = [chr(ord("A") + i) for i in range(26)] + ["?"]
-
-
 def report_header(found_dir: Path) -> dict:
     """The first report's header; every report of a tag has the same."""
     path = next(iter(sorted(found_dir.glob(f"*{REPORT_SUFFIX}"))), None)
     if path is None:
         return {}
     return {k: v for k, v in json.loads(path.read_text()).items() if k != "positions"}
-
-
-def leave_model_path(header: dict, mount_root: Path) -> Path | None:
-    """The leave inference export the reports' pools were labeled under, or
-    None for uniform beliefs."""
-    model = header.get("leave_model", {})
-    if not model.get("tag"):
-        return None
-    return TagPaths(model["tag"], "leave_inference", mount_root).onnx_path(model["generation"])
-
-
-class BeliefPanel:
-    """The viewer's opponent-rack panel for `data`'s positions, from `model`:
-    each position's letter chart, added to its entry as "belief", and sample
-    racks on request (samples)."""
-
-    def __init__(self, data: dict, found_dir: Path, model: LeaveBeliefs):
-        self.model = model
-        self.beliefs = self._beliefs(data["positions"], found_dir)
-        for entry, belief in zip(data["positions"], self.beliefs, strict=True):
-            entry["belief"] = self._chart(belief)
-
-    def _beliefs(self, entries: list[dict], found_dir: Path) -> list[RackBelief]:
-        by_stem: dict[str, list[int]] = {}
-        for i, e in enumerate(entries):
-            by_stem.setdefault(e["stem"], []).append(i)
-        out: list[RackBelief | None] = [None] * len(entries)
-        for stem, indices in by_stem.items():
-            es = [entries[i] for i in indices]
-            beliefs = self.model.beliefs(
-                found_dir / f"{stem}.slog",
-                [(e["game"], e["turn"] - 1) for e in es],
-                [unseen_pool(e["board"], e["rack"]) for e in es],
-                [e["opp_rack_count"] for e in es],
-            )
-            for i, b in zip(indices, beliefs, strict=True):
-                out[i] = b
-        return out
-
-    def _chart(self, b: RackBelief) -> dict:
-        inferred = self.model.rack_presence(b)
-        uniform = self.model.rack_presence(b, uniform=True)
-        return {
-            "modelled": b.modelled,
-            "leave_length": b.leave_length,
-            "refill": b.refill,
-            "presence": [
-                {"tile": name, "inferred": float(i), "uniform": float(u)}
-                for name, i, u in zip(TILE_NAMES, inferred, uniform, strict=True)
-            ],
-        }
-
-    def samples(self, query: dict[str, list[str]]) -> dict:
-        """GET /api/leave_samples?position=<index>&seed=<int>[&n=<count>]: up
-        to n (10) distinct racks from the position's belief."""
-        index = int(query["position"][0])
-        rng = np.random.default_rng(int(query["seed"][0]))
-        n = int(query.get("n", ["10"])[0])
-        return {"racks": self.model.sample_racks(self.beliefs[index], n, rng)}

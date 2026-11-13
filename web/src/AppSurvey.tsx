@@ -512,9 +512,7 @@ function UnseenPane({ data, position }: { data: SurveyData; position: SurveyPosi
 // One position's view. Mounted afresh per position (keyed by the caller), so the
 // selection always opens on that position's own comparison. ↑/↓ move the
 // selection within the section last clicked.
-function PositionView({
-  data, position, index,
-}: { data: SurveyData; position: SurveyPosition; index: number }) {
+function PositionView({ data, position }: { data: SurveyData; position: SurveyPosition }) {
   const [selection, setSelection] = useState<Selection>(() => openingSelection(position));
   const [active, setActive] = useState<Section>('outside');
 
@@ -566,7 +564,7 @@ function PositionView({
             />
           ))}
         </div>
-        {position.belief && <OppRackBelief chart={position.belief} position={index} />}
+        {position.belief && <OppRackBelief chart={position.belief} />}
       </div>
     </div>
   );
@@ -644,7 +642,7 @@ export default function AppSurvey() {
         onBag={(bag) => setNav((n) => ({ ...n, bag }))}
         onStep={step}
       />
-      {position && <PositionView key={position.name} data={data} position={position} index={index} />}
+      {position && <PositionView key={position.name} data={data} position={position} />}
     </div>
   );
 }
