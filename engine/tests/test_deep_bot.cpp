@@ -61,6 +61,7 @@ DeepBot::Params small_params(uint64_t seed, const std::string& reply = "subtree"
                     .leaf_model = "synthetic",
                     .candidates = 2,
                     .late_candidates = 3,
+                    .screen_rollouts = 0,
                     .reply = reply,
                     .rollouts = 8,
                     .bob_racks = 3,
@@ -81,6 +82,36 @@ DeepBot::Backend cpu_backend(belief::LeaveParamsFn predict = {},
           .table = std::move(table),
           .policy = std::nullopt};
 }
+
+// The CPU reference, except that every rollout from the position `favoured`
+// (a board right after a candidate) is a win: sims that prefer one move
+// whatever static equity makes of it.
+class FavouringValues : public RolloutValues {
+ public:
+  explicit FavouringValues(const Board& favoured)
+      : inner_(nwl23(), synthetic_leaf()), favoured_(favoured) {}
+
+  BatchValues run(const RolloutBatch& batch) override {
+    BatchValues out = inner_.run(batch);
+    for (size_t k = 0; k < batch.tasks.size(); ++k)
+      if (same_tiles(batch.starts[batch.tasks[k].position].board)) out.outcomes[k].wld = {1, 0, 0};
+    return out;
+  }
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
+    return inner_.predict(leaves);
+  }
+
+ private:
+  bool same_tiles(const Board& b) const {
+    for (int r = 0; r < BOARD_SIZE; ++r)
+      for (int c = 0; c < BOARD_SIZE; ++c)
+        if (!(b.at(r, c) == favoured_.at(r, c))) return false;
+    return true;
+  }
+
+  CpuRolloutValues inner_;
+  Board favoured_;
+};
 
 // A game of `deepbot` against HastyBot from a fixed deal; returns its moves.
 std::vector<Move> play(DeepBot& deepbot) {
@@ -120,6 +151,49 @@ TEST(DeepBot, AsksTheModelForAlicesBeliefAtEachModelledTurn) {
   DeepBot bot(small_params(4, "hasty"), cpu_backend(predict, table));
   play(bot);
   EXPECT_GE(calls, 5);  // every turn but the first, a bingo's or a pass's, and the endgame
+}
+
+TEST(DeepBot, TheLikeliestBestKeepTheirOrder) {
+  const std::vector<Move> moves = {Move::pass(), Move::exchange(Rack::from_string("A").counts()),
+                                   Move::exchange(Rack::from_string("B").counts()),
+                                   Move::exchange(Rack::from_string("C").counts())};
+  const std::vector<PoolLabel> labels = {{.q = 0.1}, {.q = 0.0}, {.q = 0.6}, {.q = 0.3}};
+  EXPECT_EQ(likeliest_best(moves, labels, 2), (std::vector<Move>{moves[2], moves[3]}));
+  // Equally likely moves go by their order, the better static equity first.
+  const std::vector<PoolLabel> tied = {{.q = 0.0}, {.q = 0.5}, {.q = 0.5}, {.q = 0.0}};
+  EXPECT_EQ(likeliest_best(moves, tied, 3), (std::vector<Move>{moves[0], moves[1], moves[2]}));
+  EXPECT_EQ(likeliest_best(moves, labels, 9), moves);
+}
+
+// The screen sims every legal move, so a move the sims favour becomes a
+// candidate, and the pick, from wherever static equity ranks it; without the
+// screen, the candidates are the static-equity top and it is never simmed.
+TEST(DeepBot, TheScreenAdmitsAMoveStaticEquityRanksLow) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEGLNOV");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
+  const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
+  const auto last_play = std::find_if(ranked.rbegin(), ranked.rend(),
+                                      [](const Move& m) { return m.type() == MoveType::PLAY; });
+  ASSERT_NE(last_play, ranked.rend());
+  ASSERT_GT(ranked.rend() - last_play, 20);  // far below the two candidates
+  Board after;
+  after.apply(*last_play);
+
+  for (const int screen : {4, 0}) {
+    DeepBot::Params p = small_params(6, "hasty");
+    p.screen_rollouts = screen;
+    DeepBot bot(p, {.values = std::make_shared<FavouringValues>(after),
+                    .predict = {},
+                    .table = {},
+                    .policy = std::nullopt});
+    bot.begin_game({});
+    const Move pick = bot.make_move(req).move;
+    EXPECT_EQ(pick == *last_play, screen > 0) << "screen " << screen;
+    EXPECT_NE(pick.type(), MoveType::PASS);
+  }
 }
 
 // Replayed to one of its turns of a recorded game, DeepBot holds what it held

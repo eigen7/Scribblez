@@ -20,10 +20,10 @@ Write **Alice** for the player to move and **Bob** for the opponent.
 
 ## The turn
 
-1. **Candidates.** The [proposer](#candidates) proposes Alice's first
-   candidates from all her legal moves. More are
-   [admitted](#steering) as the search finds evidence that they may be
-   better than the leader.
+1. **Candidates.** A [screen](#the-screen-at-the-root) of every legal move
+   chooses Alice's first candidates: each gets a few hasty sims, and the
+   likeliest best go on. More are [admitted](#steering) as the search finds
+   evidence that they may be better than the leader.
 2. **Bob's racks.** Alice samples `R_A` racks for Bob (about 100) from her
    [belief](#beliefs). They are fixed for the turn and shared by every
    candidate.
@@ -269,10 +269,11 @@ shuffles the same pool the same way in every start of a group.
 ## Candidates
 
 **The proposer.** Given a position from the chooser's information set and a
-size `N`, the proposer returns `N` of the chooser's legal moves. Alice's
-first candidates and Bob's first moves at each rack both come from it. The
-set is where the search starts, not where it ends: [steering](#steering)
-admits the moves the turn's evidence lifts.
+size `N`, the proposer returns `N` of the chooser's legal moves. Bob's first
+moves at each rack come from it, and Alice's candidates did until the
+[screen](#the-screen-at-the-root) replaced it at the root. The set is where
+Bob's search starts, not where it ends: [steering](#steering) admits the
+moves the turn's evidence lifts.
 
 **v0 proposes the static-equity top `N`.** The learned forms of the
 [policy-set model](#the-policy-set-model) so far match that baseline and do
@@ -302,6 +303,59 @@ the top 40 lose 0.4 points on average. So `N` grows with the stage, about 8
 early and 24 to 40 late, which makes late turns several times dearer in Bob's
 subtree. The late game is also where a learned proposer has room to beat
 equity.
+
+### The screen at the root
+
+Alice has one position a turn, so she can afford what a pool's
+[labels](#labels) cost. Every legal move but the pass gets hasty sims,
+raced, 100 rollouts for the moves still in the race (the pool's blank prune
+applies), and the `N` likeliest best are her candidates. The turn's sims
+then value them on fresh samples, so a move the screen's luck lifted has to
+hold up.
+
+- **Static equity buries the moves the sims exist to find.** At 680 of the
+  1,005 positions of the `hidden_blind_spots` tag `v1`
+  ([blind_spots.md](../blind_spots.md#hidden-leaves-blind-spots-on-the-gpu)),
+  the best move is not among the static-equity top 32: a setup that keeps
+  the tile for a hook, a fish, a one-tile play that leaves the bag open.
+- **It costs a tenth of a subtree turn.** A screen runs about 17,000
+  rollouts (the mean over the `policy_set` tag `v1`'s held-out pools, about
+  700 moves a position), against the 100,000 and more of a turn's subtrees.
+- **The pass stays out.** Where a pass sims best, the sims' opponent, who
+  never passes back, is nearly always why.
+- **Bob's positions cannot each be screened:** there are about 2,000 a turn.
+  His first moves stay the proposer's, which is where a learned proposer
+  matters.
+
+Measured 2026-11-13 on the 980 of those positions whose best move is not a
+pass (`py/scripts/deep_bot/blind_spot_picks.py`), DeepBot's pick read
+against each position's confirming sim, whose best move outside the
+static-equity top 10 is the position's "outside move". Leaf network `v1`
+generation 1049, leave inference model `v1` generation 292:
+
+| Candidates | Reply model | Picks the outside move | Another of the report's outside moves | A top-10 move | A move the report never simmed | Pick's win % over the best top-10 move's, of the outside move's |
+|---|---|---|---|---|---|---|
+| Static-equity top 32 | `hasty` | 0.306 | 0.184 | 0.303 | 0.207 | +6.9 of 13.1 |
+| Static-equity top 32 | `subtree` | 0.219 | 0.160 | 0.409 | 0.211 | +4.8 of 13.0 |
+| The screen's best 32 | `hasty` | 0.883 | 0.070 | 0.000 | 0.047 | +13.9 of 14.0 |
+| The screen's best 32 | `subtree` | 0.560 | 0.227 | 0.066 | 0.147 | +11.9 of 13.9 |
+
+The last column is over the picks the report simmed. A `hasty` turn at these
+positions takes 0.21 s with the screen against 0.07 s without (a sample of
+150, the dev laptop's GPU otherwise idle).
+
+The reports' verdicts are hasty sims', so the table does not rank the
+reply models: no agent can score above `hasty` on a reference `hasty`
+produced. What it shows is whether the candidates hold the move. The
+`hasty` rows measure that alone: with the screen, the agent finds what a
+pool's labels find. The `subtree` rows count how often that agent departs
+from the hasty verdict, which it does where modeling Bob as a searcher
+changes the verdict, where the subtree's own noise does, and where the two
+reply models meet in one comparison: with 2 to 7 tiles in the bag, the `subtree`
+agent's pick empties the bag at 50% of these positions and the `hasty`
+agent's at 28%, and a candidate that empties the bag keeps its hasty value
+beside the others' subtree values ([When Alice's move empties the
+bag](#when-alices-move-empties-the-bag)).
 
 **The reply model.** How Alice models Bob's move is a knob:
 
@@ -1325,12 +1379,14 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
 
 ## Limits
 
-- **First discovery.** [Steering](#steering) spreads a move kind once some
-  rack's sims have found it, but one of them must be simmed first. That
-  rests on the proposer, the search network's prediction and the admission
-  floor. A move kind none of them ranks is found only by the floor, and
-  late in the game, where the equity proposer's recall is weakest
-  ([Candidates](#candidates)), that matters most.
+- **First discovery, at Bob's level.** Alice's [screen](#the-screen-at-the-root) sims
+  every move she has, but Bob's positions are too many to screen.
+  [Steering](#steering) spreads a move kind once some rack's sims have
+  found it, but one of them must be simmed first. That rests on the
+  proposer, the search network's prediction and the admission floor. A move
+  kind none of them ranks is found only by the floor, and late in the game,
+  where the equity proposer's recall is weakest ([Candidates](#candidates)),
+  that matters most.
 - **The store input can be wrong.** In steering, a wrong correction
   wastes sims. At a rack the [budget](#budget) skips, it picks a wrong reply
   for Bob, and the audits bound how often that goes unnoticed. At a rack
