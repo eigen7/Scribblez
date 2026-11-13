@@ -24,7 +24,6 @@
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
 #include "util/exception.h"
-#include "util/io.h"
 #include "util/misc.h"
 #include "util/seed_producer.h"
 #include "util/work_pool.h"
@@ -39,7 +38,6 @@
 #include <iostream>
 #include <map>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -53,13 +51,6 @@ struct Options {
   std::string player;
   std::string out;
   int threads = util::default_thread_count();
-};
-
-// One line of --positions.
-struct Asked {
-  std::string slog;
-  uint32_t game = 0;
-  int turn = 0;
 };
 
 void add_options(boost::program_options::options_description& desc, Options& opt) {
@@ -80,42 +71,7 @@ void validate(const Options& opt) {
   if (opt.threads < 1) throw util::CleanException("--threads must be >= 1");
 }
 
-std::vector<Asked> read_positions(const std::string& path) {
-  std::ifstream in(path);
-  if (!in) throw util::CleanException("cannot open {}", path);
-  std::vector<Asked> out;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (line.empty()) continue;
-    std::istringstream fields(line);
-    Asked a;
-    if (!(fields >> a.slog >> a.game >> a.turn) || a.turn < 0)
-      throw util::CleanException("{}: expected \"<.slog path> <game> <turn>\", got \"{}\"", path,
-                                 line);
-    out.push_back(std::move(a));
-  }
-  return out;
-}
-
-// The .slog files the positions name, each loaded once and its header checked.
-std::map<std::string, std::vector<char>> load_slogs(const std::vector<Asked>& asked) {
-  std::map<std::string, std::vector<char>> out;
-  for (const Asked& a : asked) {
-    if (out.contains(a.slog)) continue;
-    std::vector<char> buf = util::read_file_bytes(a.slog);
-    const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(buf.data());
-    if (buf.size() < sizeof(binlog::FileHeader) || hdr->magic != binlog::kMagic ||
-        hdr->version != binlog::kVersion)
-      throw util::CleanException("{}: not a version-{} .slog", a.slog, binlog::kVersion);
-    if ((hdr->flags & binlog::kFlagFaceUpLeaves) != 0)
-      throw util::CleanException("{} was played with face-up leaves; the replay hides them",
-                                 a.slog);
-    out.emplace(a.slog, std::move(buf));
-  }
-  return out;
-}
-
-json::object pick_json(const Asked& a, const RecordedPick& p, double seconds) {
+json::object pick_json(const RecordedTurnRef& a, const RecordedPick& p, double seconds) {
   return {{"slog", a.slog},    {"game", a.game},
           {"turn", a.turn},    {"rack", p.rack.to_string()},
           {"bag", p.bag},      {"pick", move_notation(p.board, p.pick)},
@@ -123,11 +79,8 @@ json::object pick_json(const Asked& a, const RecordedPick& p, double seconds) {
 }
 
 // `agent`'s pick at `a`, a position of the loaded .slog `buf`, as its line.
-json::object ask(Agent& agent, const Asked& a, const std::vector<char>& buf,
+json::object ask(Agent& agent, const RecordedTurnRef& a, const std::vector<char>& buf,
                  const Dictionary& dict) {
-  const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(buf.data());
-  if (a.game >= hdr->num_games)
-    throw util::CleanException("{}: game {} of {}", a.slog, a.game, hdr->num_games);
   std::vector<TurnRecord> scratch;
   const GameLog g = binlog::make_game_view(buf.data(), a.game, scratch, nullptr);
   const auto began = std::chrono::steady_clock::now();
@@ -137,8 +90,8 @@ json::object ask(Agent& agent, const Asked& a, const std::vector<char>& buf,
 }
 
 void run(const Options& opt) {
-  const std::vector<Asked> asked = read_positions(opt.positions);
-  const std::map<std::string, std::vector<char>> slogs = load_slogs(asked);
+  const std::vector<RecordedTurnRef> asked = read_recorded_turn_refs(opt.positions);
+  const std::map<std::string, std::vector<char>> slogs = load_recorded_slogs(asked);
   const Dictionary& dict = load_dictionary_or_throw();
   HastyEquity::ensure_initialized(Lexicon::instance().name());
   const std::unique_ptr<Agent> agent = PlayerFactory::make_player(opt.player, /*thread_id=*/0);

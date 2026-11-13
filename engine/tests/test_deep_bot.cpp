@@ -230,6 +230,30 @@ TEST(DeepBot, ReplayedToARecordedTurnItAsksAndPicksAsItDidInPlay) {
   EXPECT_NE(std::find(in_play.begin(), in_play.end(), asked[0]), in_play.end());
 }
 
+TEST(RecordedTurn, ThePositionBeforeATurnIsTheGamesRecordOfIt) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  HastyBot a({.thread_id = 0, .name = "A"});
+  HastyBot b({.thread_id = 0, .name = "B"});
+  Game game(a, b, nwl23(), /*seed=*/2);
+  game.play();
+  const GameLogStorage log = game.extract_log();
+  for (const int turn : {0, 7, int(log.turns.size()) - 1}) {
+    const TurnRecord& rec = log.turns[size_t(turn)];
+    const RecordedPosition at = recorded_position(log.view(), turn);
+    EXPECT_EQ(at.mover, rec.player);
+    EXPECT_EQ(at.racks[size_t(at.mover)], rec.rack_before);
+    EXPECT_EQ(at.bag, rec.bag_size_before);
+    EXPECT_EQ(at.board.num_tiles() + at.racks[0].size() + at.racks[1].size() + at.bag, 100);
+    if (turn > 0) {
+      EXPECT_EQ(at.scores, log.turns[size_t(turn) - 1].cumulative_scores);
+    }
+  }
+  // HastyBot never passes while it has a play, so no turn before the last is
+  // scoreless.
+  EXPECT_EQ(recorded_position(log.view(), 7).scoreless_turns, 0);
+  EXPECT_THROW(recorded_position(log.view(), int(log.turns.size())), util::CleanException);
+}
+
 // In Bob's subtrees the model is asked once per of Alice's candidates, for
 // every rack she sampled for Bob at once, and each row hides Alice's private
 // past: it is Alice's model of Bob's view.
