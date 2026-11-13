@@ -58,8 +58,8 @@ bag, and four in five have seven or fewer.
 
 ## Positions read by David
 
-The reading of each position in this section is David Shin's. The "Checked"
-paragraph after it records what the lexicon and the move generator confirm.
+The reading of each position in this section is David Shin's, confirmed
+against the lexicon and the move generator.
 
 ### CLINKER: an S hook on the triple-word square
 
@@ -93,12 +93,10 @@ Rack **EIJLRST**, score 243–287, 28 in the bag. Unseen: AAAAADDEEEEFGHIIILMMNN
 | F6 JILTE(R) | #1 | 31 | RS | 35.4 |
 | 8H (CLINK)ERS | #3 | 42 | IJLT | 34.4 |
 
-CLINKER sets up a big S spot on the triple-word square at O8. There is one
-other S among the unseen tiles, so there is a risk the opponent hits it first,
-but it is much more likely that we hit it with the S in our rack.
-
-**Checked.** CLINKER takes only an S. With the leave alone, O4 JILTS scores
-102: JILTS for 60 and CLINKERS for 42, both tripled. Spending the S now on
+CLINKER takes only an S, and that S lands on the triple-word square at O8. We
+keep ours: with the leave alone, O4 JILTS scores 102 next turn, JILTS for 60
+and CLINKERS for 42, both tripled. One other S is unseen, so the opponent can
+hit the square first, but we are much the likelier to. Spending the S now on
 CLINKERS, for 42, wins 34.4%.
 
 ### O(I): fish one tile to bingo out
@@ -132,15 +130,13 @@ Rack **CEINOR?**, score 298–398, 1 in the bag. Unseen: AAEFGOPT.
 | 14J (M)O | #44 | 6 | CEINR? | 10.5 |
 | O9 CRONIEs | #1 | 101 | – | 4.6 |
 
-We are losing by so much that after a bingo we still fall short. Our best
-shot is to dump one tile now, in the hope of out-bingoing the opponent and
-picking up the points on their rack too.
-
-**Checked.** CRONIEs for 101 puts us one point ahead holding the last tile
-against the opponent's seven: 4.6%. After the dump we hold CEINR? and the
-bag's last tile. If that tile is an A, G, O, P or T (six of the eight unseen),
-column O from O9 takes a bingo for 101 to 113 that goes out and adds twice
-the opponent's rack.
+Down 100 with one tile in the bag, a bingo is not enough: CRONIEs for 101
+puts us one point ahead holding the last tile against the opponent's seven,
+and wins 4.6%. The better shot is to dump one tile, draw the last tile
+ourselves, and bingo out next turn, which also collects twice the opponent's
+rack. After the dump we hold CEINR? and the drawn tile. If that tile is an A,
+G, O, P or T (six of the eight unseen), column O from O9 takes a bingo for
+101 to 113 that goes out.
 
 ### A(I)M: the same fish
 
@@ -174,12 +170,10 @@ Rack **AGMOPT?**, score 357–469, 3 in the bag. Unseen: DEEILNNSTY.
 | A1 GAP | #3 | 32 | MOT? | 20.7 |
 | L4 POsTGAM(E) | #1 | 78 | – | 0.0 |
 
-A similar story: down 112, the bingo is not enough, and a small play that
-keeps the bingo tiles is the best shot.
-
-**Checked.** POsTGAME for 78 empties the bag and leaves us 34 behind: 0.0%.
-The five outside moves in the report are all plays of one or two tiles
-that keep the blank, and all win 28 to 30%.
+The same fish, down 112 with three tiles in the bag. POsTGAME for 78 empties
+the bag and leaves us 34 behind: 0.0%. A small play that keeps the blank is
+the only shot. The five outside moves in the report are all plays of one or
+two tiles that keep it, and all win 28 to 30%.
 
 ### NIM: a private lane
 
@@ -212,13 +206,10 @@ Rack **AFIMNNS**, score 339–310, 10 in the bag. Unseen: ABCEEGIKLLOOPRRTT.
 | 12K F(E)N | #10 | 6 | AIMNS | 87.5 |
 | M12 FIN | #1 | 21 | AMNS | 85.2 |
 
-NIM takes only an S after it, and there is only one S left, which is on our
-rack. So NIM gives us exclusive access to the bottom lane to hit the
-triple-word square.
-
-**Checked.** NIM takes no letter in front and only S behind; no S and no
-blank is unseen. The S goes on K15, so the lane is row 15 through K15, which
-reaches H15 on one side and O15 on the other.
+NIM takes no letter in front and only an S behind, on K15. We hold the last
+S, and no blank is unseen, so row 15 through K15 is a lane only we can play
+in. It reaches the triple-word square at H15 on one side and the one at O15
+on the other.
 
 ### GIVEN: a spot for the X
 
@@ -252,12 +243,10 @@ Rack **AAGINVX**, score 365–366, 10 in the bag. Unseen: ADDEEEGJMNNORSSTT.
 | I14 AX | #4 | 22 | AGINV | 54.8 |
 | C12 (V)AX | #1 | 26 | AGINV | 51.7 |
 
-GIVEN sets up a big AX play for us next turn.
-
-**Checked.** With the leave alone, 14E AX scores 53: the X lands on the
-triple-letter square at F14 and counts in both AX and XI, and the A makes AG.
-We hold the last X. A play on E14 needs an A there, AG being the only
-two-letter word that ends in G.
+GIVEN sets up a spot for the X: with the leave alone, 14E AX scores 53 next
+turn. The X lands on the triple-letter square at F14 and counts in both AX
+and XI, and the A makes AG. We hold the last X, and a play on E14 needs an A
+there, AG being the only two-letter word that ends in G.
 
 ### OIL: a Y hook on the triple-word square
 
@@ -290,13 +279,10 @@ Rack **AILLNTY**, score 348–370, 17 in the bag. Unseen: ?AAAABDEEEFFGIIJKNNOOR
 | 11A LAYIN | #1 | 31 | LT | 36.5 |
 | H12 (O)ILY | #3 | 23 | ALNT | 35.2 |
 
-OIL sets up a potential OILY hook on the triple-word square at H15. The only
-other tile that can hit it is the blank: if the opponent has it we are in
-trouble, but it is much more likely that we hit it.
-
-**Checked.** OIL takes an S or a Y behind it; no S or Y is unseen, and one
-blank is. The T of QUARTILE above the O rules out a front hook. With the
-leave alone, 15F LAY scores 39. OILY now, for 23, wins 35.2%.
+OIL takes an S or a Y behind it, on the triple-word square at H15, and the T
+of QUARTILE above the O rules out a front hook. No S or Y is unseen, so the
+one unseen blank is the only tile that can hit the square before our Y does.
+With the leave alone, 15F LAY scores 39. OILY now, for 23, wins 35.2%.
 
 ### AD: two hook squares on the triple-word row
 
@@ -329,13 +315,11 @@ Rack **AADDHOY**, score 312–345, 11 in the bag. Unseen: DEEEEEIINOPRTTUWWY.
 | 14A AH | #33 | 25 | ADDOY | 37.2 |
 | 15A DHA(K) | #1 | 36 | ADOY | 33.6 |
 
-AD sets up some lucrative hooks on the triple-word row. Among the tiles left
-in the game, AD takes only an O or a D, and we have two of the four such
-tiles on our rack, so it is more likely that we get it.
-
-**Checked.** A play on row 15 from A15 now needs a letter under the A that
-extends FA and a letter under the D that extends AD: D, O, S or Z, and no S
-or Z is unseen. With the leave alone, 15A YO or HO scores 46.
+AD narrows who can use the triple-word square at A15. A play on row 15 from
+A15 now needs a letter under the A that extends FA and a letter under the D
+that extends AD: D, O, S or Z. No S or Z is left in the game, and of the two
+D's and two O's that are, we hold one of each. With the leave alone, 15A YO
+or HO scores 46.
 
 ### PITCH: the last Y
 
@@ -369,12 +353,10 @@ Rack **ACHIMTY**, score 255–295, 22 in the bag. Unseen: AABEEEEFFGILMNNNOOORRR
 | H10 (P)ATCHY | #2 | 51 | IM | 41.5 |
 | H10 (P)ITCHY | #1 | 51 | AM | 40.2 |
 
-PITCH takes only a Y hook, and we have the only Y left. This gives us
-exclusive access to a monster hook on the triple-word square at H15.
-
-**Checked.** No Y and no blank is unseen. With the leave alone, 15F MAY or
-15H YAM scores 72. PITCHY now, for 51, wins 40.2%: the sim prefers 13 points
-and the hook to 51 points.
+PITCH takes only a Y, on the triple-word square at H15, and we hold the last
+one: no Y and no blank is unseen. With the leave alone, 15F MAY or 15H YAM
+scores 72. PITCHY now, for 51, wins 40.2%: the sim prefers 13 points and a
+private hook to 51 points.
 
 ## Further positions
 
