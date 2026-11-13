@@ -9,7 +9,8 @@ Per N, over the pools:
   recall       how often the pool's sim-best move (the leader, the largest q)
                is in the set
   cover        the q the set holds: the soft recall, P(best in the set)
-  regret       the leader's win probability minus the set's best
+  regret       the leader's win probability minus that of the set's best
+               member, its largest q, over the rollouts both ran
   tail_recall  recall on the pools whose leader is outside the static-equity
                top TAIL_RANK
 """
@@ -35,6 +36,22 @@ def _leader(pool: Pool) -> int:
     return int(np.argmax(pool.q))
 
 
+def _regret(pool: Pool, leader: int, members: np.ndarray) -> float:
+    """The leader's mean win value minus that of the set's best member (its
+    largest q), over the rollouts both ran. The race stops a weak candidate
+    after its first few rollouts, and its mean over those deals does not
+    compare with the leader's over all of them: on easy deals it can exceed
+    the leader's, which made the regret of a set that held such a move
+    negative. Rollout i is the same deal for every candidate that reached it,
+    so the shared prefix is a paired comparison."""
+    best = int(members[np.argmax(pool.q[members])])
+    starts = np.cumsum(pool.rollouts, dtype=np.int64) - pool.rollouts
+    n = int(min(pool.rollouts[leader], pool.rollouts[best]))
+    of_leader = pool.rollout_values[starts[leader] : starts[leader] + n]
+    of_best = pool.rollout_values[starts[best] : starts[best] + n]
+    return float(np.mean(of_leader - of_best, dtype=np.float64))
+
+
 def _in_tail(pool: Pool) -> bool:
     rank = pool.equity_rank[_leader(pool)]
     return not 0 <= rank < TAIL_RANK
@@ -54,7 +71,7 @@ def set_metrics(pools: list[Pool], choose: Chooser, prefix: str) -> dict[str, fl
             best = _leader(p)
             hits.append(best in s)
             covers.append(float(p.q[s].sum()))
-            regrets.append(float(p.win_prob[best] - p.win_prob[s].max()))
+            regrets.append(_regret(p, best, s))
         hits = np.array(hits)
         out[f"{prefix}eval_recall_{n}"] = float(hits.mean())
         out[f"{prefix}eval_cover_{n}"] = float(np.mean(covers))
