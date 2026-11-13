@@ -116,6 +116,7 @@ class DeepBot : public Agent {
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
+  void observe_turn(const MoveRequest& req) override;
   void observe_move(const Move& move) override;
 
   // Build from `--player "--type=deepbot [options]"` tokens, with --type and

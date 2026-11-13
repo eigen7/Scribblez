@@ -11,6 +11,7 @@
 #include "agent/bob_subtree.h"
 #include "agent/deep_bot.h"
 #include "agent/hasty_bot.h"
+#include "arena/recorded_turn.h"
 #include "belief/leave_params.h"
 #include "encoding/leave_inference_input_encoder.h"
 #include "game/game.h"
@@ -119,6 +120,37 @@ TEST(DeepBot, AsksTheModelForAlicesBeliefAtEachModelledTurn) {
   DeepBot bot(small_params(4, "hasty"), cpu_backend(predict, table));
   play(bot);
   EXPECT_GE(calls, 5);  // every turn but the first, a bingo's or a pass's, and the endgame
+}
+
+// Replayed to one of its turns of a recorded game, DeepBot holds what it held
+// there in play: it asks the model the same question and picks the same move.
+TEST(DeepBot, ReplayedToARecordedTurnItAsksAndPicksAsItDidInPlay) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  auto table = std::make_shared<const LeaveValueArrays>(
+    LeaveValues::load(HastyEquity::default_leaves_path("NWL23")));
+  std::vector<std::vector<float>> asked;
+  belief::LeaveParamsFn predict = [&](const float* rows, int, belief::LeaveParams* out) {
+    asked.emplace_back(rows, rows + Encoder::kInputFloats);
+    out[0] = belief::LeaveParams{};
+  };
+  DeepBot live(small_params(5, "hasty"), cpu_backend(predict, table));
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
+  Game game(live, hasty, nwl23(), /*seed=*/1);
+  game.play();
+  const GameLogStorage log = game.extract_log();
+  const std::vector<std::vector<float>> in_play = std::move(asked);
+  asked.clear();
+
+  // DeepBot's fifth turn: by then its query reads its own earlier racks.
+  const int turn = 8;
+  ASSERT_GT(log.turns[turn].bag_size_before, 0);
+  DeepBot replayed(small_params(5, "hasty"), cpu_backend(predict, table));
+  const RecordedPick pick = pick_at_recorded_turn(replayed, log.view(), turn, nwl23());
+  EXPECT_EQ(pick.pick, log.turns[turn].move);
+  EXPECT_EQ(pick.rack, log.turns[turn].rack_before);
+  EXPECT_EQ(pick.bag, log.turns[turn].bag_size_before);
+  ASSERT_EQ(asked.size(), 1u);  // the earlier turns record, and ask nothing
+  EXPECT_NE(std::find(in_play.begin(), in_play.end(), asked[0]), in_play.end());
 }
 
 // In Bob's subtrees the model is asked once per of Alice's candidates, for
