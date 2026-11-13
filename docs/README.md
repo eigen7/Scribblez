@@ -113,6 +113,12 @@ Dashboard and compute:
   setting approves of, and why it may nonetheless be the winning play. Board
   images are rendered by the repo's own board renderer; the directory holds
   the game, the variants and the render config.
+- **[analysis/hidden_blind_spots.md](analysis/hidden_blind_spots.md)**:
+  worked positions from the hidden-leaves blind-spot set, where a move far
+  down HastyBot's ranking out-sims its top ten. What each winning move is
+  doing (hook setups for a held tile, fishing when far behind, who empties
+  the bag, late exchanges), and which verdicts lean on the rollout opponent
+  never passing or blocking.
 
 ## Plans and design proposals
 
