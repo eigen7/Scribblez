@@ -305,7 +305,6 @@ def _metrics_record(
     plot on the Loss tab's Accuracy panel; other metrics go to the table."""
     record = {
         "epoch": epoch,
-        "positions": state.rows_trained,
         "settled": int(settled),
         "loss": losses["total"],
         "loss_wld": losses["wld"],

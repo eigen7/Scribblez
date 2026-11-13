@@ -168,7 +168,6 @@ def _record(state, gen, result, elapsed, optim_arm) -> dict:
     losses = result.losses
     return {
         "epoch": gen,
-        "positions": state.rows_trained,
         "loss": losses["total"],
         "loss_wld": losses["wld"],
         "loss_score_diff": losses["score_diff"],

@@ -196,7 +196,6 @@ def _checkpoint_and_eval(
     t0 = time.time()
     record = {
         "epoch": gen,
-        "positions": state.rows_trained,
         "loss": result.loss,
         "train_nll_vs_uniform": result.loss_vs_uniform,
         "valid_frac": result.valid_frac,

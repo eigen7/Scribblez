@@ -368,7 +368,6 @@ def train_one_epoch(model, optimizer, recorder, paths, device, params, state, ct
     # the other quality series have their own figures (plots.MSET_QUALITY).
     record = {
         "epoch": epoch,
-        "positions": state.rows_trained,
         # Unsettled passes are scored against a still-growing holdout, so their
         # metrics are not comparable with the settled ones.
         "settled": int(settled),

@@ -71,7 +71,9 @@ def _ingest_run(conn, record: dict):
 
 def _ingest_generation(conn, paths: TagPaths, record: dict):
     gen, positions = record["generation"], record["positions"]
-    db.write_metrics(conn, gen, record["metrics"])
+    # The rows clock becomes the `positions` series every rows-keyed figure
+    # (the Loss tab, the control markers, match labels) reads.
+    db.write_metrics(conn, gen, {**record["metrics"], "positions": positions})
     for e in record["control_events"]:
         db.write_control_event(conn, e["positions"], e["name"], e["value"], t=e["t"])
     tables = [t for t in record["preds"] if t in db.PRED_TABLES]  # retired ones left unread
