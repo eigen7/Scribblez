@@ -72,3 +72,20 @@ def test_a_pick_is_read_against_its_positions_report(found):
 def test_a_pick_the_report_never_simmed_has_no_gain(found):
     table = picks.tabulate(picks.read_spots(found), [_pick(found, 0, "1A ZZZ")])
     assert (table["all"]["unsimmed"], table["all"]["gain"]) == (1, 0)
+
+
+def test_the_pre_endgame_ranks_score_a_pick_by_the_draws_it_wins(found, tmp_path):
+    spots = picks.read_spots(found)
+    rank = {
+        "slog": str(found / "a.slog"),
+        "game": 2,
+        "turn": 4,
+        "bag": 3,
+        "total": 8,
+        "plays": [{"move": "8H BA", "points": 6.0}, {"move": "7A UP", "points": 2.0}],
+    }
+    (tmp_path / "ranks.jsonl").write_text(json.dumps(rank) + "\n")
+    ranks = picks.read_peg_ranks(tmp_path / "ranks.jsonl")
+    table = picks.tabulate(spots, [_pick(found, 2, "7A UP"), _pick(found, 0, "9C SET")], ranks)
+    assert table["all"]["ranked"] == 1  # game 0 has no ranking
+    assert (table["all"]["peg"], table["all"]["peg_best"]) == (0.25, 0.75)
