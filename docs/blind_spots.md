@@ -154,6 +154,24 @@ down; the positions whose best outside move is a pass are left out unless
 `--passes`, since an opponent who can pass back refutes most of them.
 `--picks picks.jsonl` tabulates a run again without asking.
 
+**A referee with a few tiles in the bag.** There the sim's verdict is at its
+weakest: its opponent plays HastyBot's move, where a real one, who after a
+play that empties the bag knows the mover's rack, blocks the fish or goes
+out. `pre_endgame_rank_tool` runs the pre-endgame solver
+(endgame/pre_endgame_solver.h) at such positions and writes every play's
+share of the bag's possible contents it wins against an opponent who replies
+with full knowledge, and `blind_spot_picks.py --peg-ranks` reads an agent's
+picks against it:
+
+```
+python3 -m scripts.deep_bot.blind_spot_picks --tag <tag> --max-bag 1 --positions-out bag1.txt
+pre_endgame_rank_tool --positions bag1.txt --out ranks.jsonl
+python3 -m scripts.deep_bot.blind_spot_picks --tag <tag> --picks picks.jsonl --peg-ranks ranks.jsonl
+```
+
+The solver takes minutes a position on one thread (a rack with a blank has
+thousands of plays), and the tool writes each position as it finishes.
+
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
 chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those
 gained at least 2 points on confirmation, and 28 at least 5: one blind spot
