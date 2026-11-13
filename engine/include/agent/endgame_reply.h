@@ -25,7 +25,8 @@ class Dictionary;
 // Alice's value of each candidate c in `which`, each of which empties the
 // bag: the mean over her racks for Bob of the endgame after it, 1, 1/2 or 0
 // for her by the class the solver proves within `budget` nodes, or unproven
-// by the sign of its spread estimate. kPruned for the other candidates.
+// by the outcome when Bob plays the solve's move and both then play
+// HastyBot's to the end. kPruned for the other candidates.
 std::vector<double> endgame_reply_values(const AliceTurn& turn, const std::vector<size_t>& which,
                                          uint64_t budget, const Dictionary& dict);
 

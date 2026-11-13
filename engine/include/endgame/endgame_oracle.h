@@ -27,6 +27,13 @@ enum class EndgameGoal {
   kSpread,  // the spread matters (the pre-endgame's tiebreak)
 };
 
+// The final spread for the side to move if it plays `first` (null: HastyBot's
+// move) and both sides then play HastyBot's move to the end, under the
+// solver's rules: going out collects twice the other rack, and two
+// consecutive scoreless turns end the game with each side docked its own
+// rack. HastyEquity must be initialized.
+int32_t greedy_playout_spread(const EndgameState& state, const Move* first = nullptr);
+
 class EndgameOracle {
  public:
   virtual ~EndgameOracle() = default;

@@ -13,18 +13,22 @@ namespace scribblez {
 namespace {
 
 // Alice's value of the endgame after `applied`, her move that emptied the
-// bag, with Bob to move holding `bob`.
+// bag, with Bob to move holding `bob`: the class the solver proves, or else
+// the outcome when Bob plays the solve's move and both then play HastyBot's to
+// the end. An unproven solve's move is usable and its value is not
+// (docs/plans/deep_bot.md, "When Alice's move empties the bag"); a solve the
+// budget declines has no move either, and HastyBot's stands in.
 double endgame_value(const RolloutStart& applied, const Rack& bob, uint64_t budget,
                      const Dictionary& dict) {
   // The bag is empty, so the tiles Bob cannot see are her rack.
   const Rack alice = Rack::from_counts(applied.board.unseen_tiles(bob));
-  SolverEndgameOracle oracle(thread_endgame_solver(), budget);
-  const EndgameVerdict bobs = oracle.evaluate(
-    {&dict, applied.board, bob, alice, applied.opp_score, applied.my_score, /*scoreless=*/0},
-    EndgameSolver::Params{}.plies, EndgameGoal::kClass);
-  const int cls =
-    bobs.cls != EndgameVerdict::kClassUnknown ? bobs.cls : (bobs.spread > 0) - (bobs.spread < 0);
-  return 0.5 * (1 - cls);
+  const EndgameState state{
+    &dict, applied.board, bob, alice, applied.opp_score, applied.my_score, /*scoreless_turns=*/0};
+  const EndgameResult solved = thread_endgame_solver().solve(state, {.budget = budget});
+  if (solved.proven_class != EndgameResult::kClassUnknown) return 0.5 * (1 - solved.proven_class);
+  const int32_t bobs =
+    greedy_playout_spread(state, solved.depth_completed >= 1 ? &solved.best : nullptr);
+  return 0.5 * (1 - ((bobs > 0) - (bobs < 0)));
 }
 
 // The distinct racks of `racks`, and each rack's index among them: with a
