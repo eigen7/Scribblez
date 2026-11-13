@@ -849,4 +849,9 @@ EndgameResult EndgameSolver::solve(const EndgameState& state, const Params& para
   return result;
 }
 
+EndgameSolver& thread_endgame_solver() {
+  thread_local EndgameSolver solver;
+  return solver;
+}
+
 }  // namespace scribblez

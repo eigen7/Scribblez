@@ -69,6 +69,9 @@ DeepBot::Params small_params(uint64_t seed, const std::string& reply = "subtree"
                     .seed = seed};
   p.subtree = {.opp_racks = 3, .candidates = 2, .late_candidates = 2};
   p.second = {.opp_racks = 3, .candidates = 2, .late_candidates = 2};
+  // A candidate that empties the bag keeps its first-pass value, except in
+  // the test of the endgame solver's reply.
+  p.endgame_reply_budget = 0;
   return p;
 }
 
@@ -389,6 +392,40 @@ TEST(DeepBot, TheDumpReadsBobsBeliefAgainstTheLeaveAliceKeeps) {
     EXPECT_EQ(moved > 1e-6, tilt != 0.0f) << "tilt " << tilt;
     std::filesystem::remove_all(dir);
   }
+}
+
+// With an endgame reply budget, a candidate that empties the bag is valued by
+// the endgames after it, one per rack Alice sampled for Bob: each a win, a
+// draw or a loss, so its value is a mean of those, and it has one only if
+// the first pass kept it.
+TEST(DeepBot, TheEndgameSolverRepliesToACandidateThatEmptiesTheBag) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const auto dir = scribblez::testing::make_temp_dir("scribblez_test_endgame_reply");
+  DeepBot::Params p = small_params(7);
+  p.subtree_candidates = 2;
+  p.endgame_reply_budget = 400;
+  p.subtree_dump = (dir / "dump.jsonl").string();
+  DeepBot bot(p, cpu_backend());
+  play(bot);
+  std::ifstream in(p.subtree_dump);
+  int solved = 0;
+  for (std::string line; std::getline(in, line);) {
+    const boost::json::object turn = boost::json::parse(line).as_object();
+    int valued = 0;
+    for (const boost::json::value& v : turn.at("candidates").as_array()) {
+      const boost::json::object& c = v.as_object();
+      valued += !c.at("subtree_value").is_null();
+      if (c.at("searched").as_bool() || c.at("subtree_value").is_null()) continue;
+      // Half-wins over the three racks: a whole number of sixths.
+      const double sixths = c.at("subtree_value").as_double() * 2 * p.bob_racks;
+      EXPECT_NEAR(sixths, std::round(sixths), 1e-9) << line;
+      ++solved;
+    }
+    EXPECT_LE(valued, p.subtree_candidates) << line;
+    EXPECT_GE(valued, 1) << line;
+  }
+  EXPECT_GT(solved, 0);  // this seed's game reaches a turn that can empty the bag
+  std::filesystem::remove_all(dir);
 }
 
 // With --subtree-candidates 1, a first pass of hasty sims leaves one

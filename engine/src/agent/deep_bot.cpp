@@ -2,6 +2,7 @@
 
 #include "agent/agent_options.h"
 #include "agent/alice_subtree.h"
+#include "agent/endgame_reply.h"
 #include "agent/hasty_bot.h"
 #include "agent/subtree_dump.h"
 #include "belief/leave_query.h"
@@ -19,6 +20,7 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 #include <optional>
@@ -94,6 +96,10 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "alice-subtree: the bag size she sees from which --second-late-candidates applies")  //
     ("second-race", po::value<bool>(&p.second.race)->default_value(p.second.race),
      "alice-subtree: stop her second turn's clearly beaten candidates between rounds")  //
+    ("endgame-reply-budget",
+     po::value<uint64_t>(&p.endgame_reply_budget)->default_value(p.endgame_reply_budget),
+     "subtree: after a candidate that empties the bag the endgame solver makes Bob's reply, "
+     "within this many nodes an endgame; 0 = the candidate keeps its hasty sims' value")  //
     ("subtree-dump", po::value<std::string>(&p.subtree_dump),
      "subtree: append a JSON line per turn comparing Bob's subtree replies with HastyBot's "
      "(runs the hasty sims and the subtrees a second time)")  //
@@ -147,12 +153,11 @@ bool empties_bag(const Move& m, int bag) {
   return m.type() == MoveType::PLAY && m.num_glyphs() >= bag;
 }
 
-// `values` with each candidate that empties the bag valued by the first
-// pass, whose hasty sims play the game to its end.
-std::vector<double> with_first_pass(std::vector<double> values, const std::vector<Move>& moves,
-                                    const std::vector<PoolLabel>& hasty, int bag) {
-  for (size_t c = 0; c < moves.size(); ++c)
-    if (empties_bag(moves[c], bag)) values[c] = hasty[c].win_prob;
+// `values` with each candidate `emptying` values (its entry is not kPruned)
+// given that value.
+std::vector<double> overlaid(std::vector<double> values, const std::vector<double>& emptying) {
+  for (size_t c = 0; c < values.size(); ++c)
+    if (!std::isnan(emptying[c])) values[c] = emptying[c];
   return values;
 }
 
@@ -310,18 +315,41 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
   // The first pass: every candidate's hasty sims, on the same racks.
   const HastySims hasty =
     hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false, turn_seed());
-  const std::vector<size_t> searched = survivors(moves, hasty.labels, req.bag_size);
-  const std::vector<double> values = params_.reply == "subtree"
-                                       ? bob_subtree_values(req, turn, hasty, searched)
-                                       : second_turn_values(req, turn, searched);
-  return moves[best_candidate(with_first_pass(values, moves, hasty.labels, req.bag_size))];
+  const std::vector<size_t> kept = survivors(moves, hasty.labels, req.bag_size);
+  const std::vector<double> emptying = emptying_values(req, turn, hasty.labels, kept);
+  std::vector<size_t> searched;
+  for (const size_t c : kept)
+    if (!empties_bag(moves[c], req.bag_size)) searched.push_back(c);
+  const std::vector<double> values =
+    params_.reply == "subtree" ? bob_subtree_values(req, turn, hasty, searched, emptying)
+                               : overlaid(second_turn_values(req, turn, searched), emptying);
+  return moves[best_candidate(values)];
+}
+
+bool DeepBot::solves_endgame_replies() const {
+  return params_.reply == "subtree" && params_.endgame_reply_budget > 0;
+}
+
+std::vector<double> DeepBot::emptying_values(const MoveRequest& req, const AliceTurn& turn,
+                                             const std::vector<PoolLabel>& hasty,
+                                             const std::vector<size_t>& kept) const {
+  if (solves_endgame_replies()) {
+    std::vector<size_t> which;
+    for (const size_t c : kept)
+      if (empties_bag(turn.candidates[c], req.bag_size)) which.push_back(c);
+    return endgame_reply_values(turn, which, params_.endgame_reply_budget, req.dict);
+  }
+  std::vector<double> out(turn.candidates.size(), kPruned);
+  for (size_t c = 0; c < out.size(); ++c)
+    if (empties_bag(turn.candidates[c], req.bag_size)) out[c] = hasty[c].win_prob;
+  return out;
 }
 
 std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
                                        const std::vector<PoolLabel>& hasty, int bag) const {
   std::vector<size_t> out;
   for (size_t c = 0; c < moves.size(); ++c)
-    if (!empties_bag(moves[c], bag)) out.push_back(c);
+    if (solves_endgame_replies() || !empties_bag(moves[c], bag)) out.push_back(c);
   const size_t keep =
     params_.subtree_candidates == 0 ? out.size() : size_t(params_.subtree_candidates);
   if (out.size() <= keep) return out;
@@ -334,7 +362,8 @@ std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
 
 std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
                                                 const HastySims& hasty,
-                                                const std::vector<size_t>& searched) {
+                                                const std::vector<size_t>& searched,
+                                                const std::vector<double>& emptying) {
   const BobReplies replies =
     bob_replies(turn, searched, belief_model(), *backend_.values, params_.subtree,
                 params_.sims_per_rack, req.dict, turn_seed());
@@ -342,11 +371,10 @@ std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const Al
   const ReplyPayoffs payoffs =
     payoffs_after_replies(turn, searched, replies.replies, *backend_.values, req.dict, turn_seed(),
                           /*residuals=*/!params_.subtree_dump.empty());
-  if (!params_.subtree_dump.empty()) {
-    dump_turn(req, turn, hasty, searched, replies, payoffs,
-              with_first_pass(payoffs.values, turn.candidates, hasty.labels, req.bag_size));
-  }
-  return payoffs.values;
+  const std::vector<double> values = overlaid(payoffs.values, emptying);
+  if (!params_.subtree_dump.empty())
+    dump_turn(req, turn, hasty, searched, replies, payoffs, values);
+  return values;
 }
 
 std::vector<double> DeepBot::second_turn_values(const MoveRequest& req, const AliceTurn& turn,
