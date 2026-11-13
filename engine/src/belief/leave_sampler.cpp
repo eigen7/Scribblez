@@ -90,6 +90,12 @@ Rack LeaveSampler::leave(size_t row) const {
   return rack;
 }
 
+size_t LeaveSampler::row_of(const Rack& leave) const {
+  size_t row = 0;
+  while (row < rows() && !(this->leave(row) == leave)) ++row;
+  return row;
+}
+
 LeaveMoments LeaveSampler::moments() const {
   LeaveMoments m{};
   double value_sq = 0;

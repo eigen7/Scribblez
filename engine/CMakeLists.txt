@@ -84,6 +84,7 @@ add_library(scribblez_core STATIC
   src/agent/deep_bot.cpp
   src/agent/policy_bot.cpp
   src/agent/policy_scorer.cpp
+  src/agent/belief_truth.cpp
   src/agent/policy_agreement.cpp
   src/agent/alice_subtree.cpp
   src/agent/bob_subtree.cpp

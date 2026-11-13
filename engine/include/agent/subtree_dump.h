@@ -21,10 +21,15 @@
 //     contender against the leaf network's prior there
 //     (sim/map_residuals.h): what step 8's noise readout reads
 //     (py/scripts/deep_bot/residual_noise.py);
+//   - each candidate's rank by static equity (0 is HastyBot's move), and with
+//     a leave inference model, what Bob's belief about Alice's leave makes of
+//     the leave she keeps after it (agent/belief_truth.h), read by
+//     py/scripts/deep_bot/belief_truth.py;
 //   - with --policy-model, how often the policy head's top move at Bob's
 //     position is β (agent/policy_agreement.h): what step 10's readout reads
 //     (py/scripts/deep_bot/policy_agreement.py).
 
+#include "agent/belief_truth.h"
 #include "agent/bob_subtree.h"
 #include "agent/policy_agreement.h"
 #include "game/move.h"
@@ -59,6 +64,9 @@ struct SubtreeTurn {
   const ReplyPayoffs* payoffs = nullptr;
   // By candidate, for the searched; null without a policy model.
   const std::vector<PolicyAgreement>* policy = nullptr;
+  std::vector<int> equity_ranks;  // by candidate, among every legal move
+  // By candidate, for the searched; empty without a leave inference model.
+  std::vector<BeliefTruth> beliefs;
   TurnSims sims;
 };
 

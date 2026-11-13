@@ -350,6 +350,47 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   std::filesystem::remove_all(dir);
 }
 
+// The dump reads Bob's belief against the leave Alice keeps after each
+// searched candidate: under a model with nothing to say it is the prior's
+// log probability, and a model that tilts toward better leaves moves it.
+TEST(DeepBot, TheDumpReadsBobsBeliefAgainstTheLeaveAliceKeeps) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  auto table = std::make_shared<const LeaveValueArrays>(
+    LeaveValues::load(HastyEquity::default_leaves_path("NWL23")));
+  for (const float tilt : {0.0f, 0.5f}) {
+    const auto dir = scribblez::testing::make_temp_dir("scribblez_test_belief_truth");
+    belief::LeaveParamsFn predict = [tilt](const float*, int count, belief::LeaveParams* out) {
+      for (int k = 0; k < count; ++k) out[k] = belief::LeaveParams{.theta = {}, .a = tilt, .b = 0};
+    };
+    DeepBot::Params p = small_params(7);
+    p.subtree_dump = (dir / "dump.jsonl").string();
+    DeepBot bot(p, cpu_backend(predict, table));
+    play(bot);
+    std::ifstream in(p.subtree_dump);
+    int read = 0;
+    double moved = 0;
+    for (std::string line; std::getline(in, line);) {
+      const boost::json::array candidates =
+        boost::json::parse(line).as_object().at("candidates").as_array();
+      for (size_t c = 0; c < candidates.size(); ++c) {
+        const boost::json::object& o = candidates[c].as_object();
+        // Without the screen the candidates are the static-equity top, in
+        // order; tied moves share a rank.
+        EXPECT_LE(o.at("equity_rank").as_int64(), int64_t(c));
+        if (!o.contains("belief")) continue;
+        const boost::json::object& b = o.at("belief").as_object();
+        EXPECT_LE(b.at("racks").as_int64(), p.bob_racks);
+        EXPECT_LT(b.at("prior_log_prob").as_double(), 0.0);
+        moved += std::abs(b.at("log_prob").as_double() - b.at("prior_log_prob").as_double());
+        ++read;
+      }
+    }
+    EXPECT_GT(read, 5);
+    EXPECT_EQ(moved > 1e-6, tilt != 0.0f) << "tilt " << tilt;
+    std::filesystem::remove_all(dir);
+  }
+}
+
 // With --subtree-candidates 1, a first pass of hasty sims leaves one
 // candidate for Bob's subtree, the best by its hasty value of those that do
 // not empty the bag; those others have no subtree value, one that empties the

@@ -37,6 +37,7 @@
 // with the bag empty, and DeepBot alone plays HastyBot's move there.
 
 #include "agent/agent.h"
+#include "agent/belief_truth.h"
 #include "agent/bob_subtree.h"
 #include "agent/policy_agreement.h"
 #include "agent/policy_bot.h"
@@ -189,6 +190,10 @@ class DeepBot : public Agent {
   std::vector<PolicyAgreement> policy_agreements(const MoveRequest& req, const AliceTurn& turn,
                                                  const std::vector<size_t>& searched,
                                                  const BobReplies& replies);
+  // What Bob's belief makes of the leave Alice keeps after each searched
+  // candidate (agent/belief_truth.h); empty without a leave inference model.
+  std::vector<BeliefTruth> belief_truths(const MoveRequest& req, const AliceTurn& turn,
+                                         const std::vector<size_t>& searched) const;
   // What Alice's and her model of Bob's beliefs come from.
   BeliefModel belief_model() const { return {backend_.predict, backend_.table.get()}; }
 

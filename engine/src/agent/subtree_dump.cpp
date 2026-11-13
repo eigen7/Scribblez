@@ -153,6 +153,7 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
   json::array candidates;
   for (size_t c = 0; c < turn.candidates.size(); ++c) {
     json::object o{{"move", describe_move(turn.candidates[c], turn.position.board)},
+                   {"equity_rank", t.equity_ranks[c]},
                    {"subtree_value", subtree_value(t.subtree_values[c])},
                    {"hasty_value", t.hasty_values[c]},
                    {"searched", bool(t.searched[c])}};
@@ -160,6 +161,11 @@ std::string subtree_turn_json(const SubtreeTurn& t) {
       o["replies"] =
         reply_summary((*t.replies)[c], (*t.rerun)[c], t.payoffs->payoffs[c], turn.applied[c].board);
       if (!t.payoffs->residuals.empty()) o["residuals"] = residuals_json(t.payoffs->residuals[c]);
+      if (!t.beliefs.empty() && t.beliefs[c].racks > 0) {
+        o["belief"] = {{"racks", t.beliefs[c].racks},
+                       {"log_prob", t.beliefs[c].log_prob},
+                       {"prior_log_prob", t.beliefs[c].prior_log_prob}};
+      }
       if (t.policy) {
         o["policy"] = {{"pool_share", (*t.policy)[c].pool_share},
                        {"simmed_share", (*t.policy)[c].simmed_share}};

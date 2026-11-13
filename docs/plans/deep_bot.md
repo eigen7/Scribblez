@@ -11,7 +11,10 @@ player's evidence on its own side, fix the store's items, put a model-free
 budget first and record the reply-model ablation ([The evidence
 store](#the-evidence-store), [Budget](#budget), [Candidates](#candidates)),
 with the policy-set model's set forms moved to an
-[appendix](#appendix-the-shelved-set-forms); not yet placed in
+[appendix](#appendix-the-shelved-set-forms); revised 2026-11-13 to choose
+Alice's candidates by a screen of every legal move ([The screen at the
+root](#the-screen-at-the-root)) and to put the generations ahead of the
+store ([Build order](#build-order)); not yet placed in
 the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
@@ -1065,11 +1068,36 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   leave at every turn ([architecture.md](../architecture.md)).
 - **Train `I_k` only on `P_k`'s games, warm-started from `I_{k−1}`.** Trained
   on a buffer that mixes generations, an inference network converges to Bayes'
-  rule under the *average* policy, not the current one. Once a policy-set
-  model serves, games for `I_k` are generated cheaply, by playing `P_k`'s
-  policy-set model's top-1 without search. Under the equity proposer that
-  top-1 is HastyBot, the policy `I_0` already models, so games come from the
-  agent itself at a reduced budget.
+  rule under the *average* policy, not the current one. The games come from
+  the agent itself at a reduced budget: DeepBot under the `hasty` reply
+  model, whose [screen](#the-screen-at-the-root) finds the moves static
+  equity buries in a fifth of a second a turn. The policy's top move without
+  search would be cheaper still, but it does not play those moves yet: on the
+  `policy_set` tag `v1`'s held-out pools whose best move lies outside the
+  static-equity top 10, its top move is that move 2.6% of the time.
+- **A model of `P_k` misreads a player who is not `P_k`.** `I_0` learned from
+  HastyBot's games, where the move played is always the static-equity best.
+  In Bob's subtree most of Alice's candidates are moves HastyBot would not
+  play, and his belief about her leave is `I_0`'s reading of them. A setup
+  that keeps the S for a hook reads as a rack without the S: HastyBot,
+  holding it, would have used it. Measured 2026-11-13 over 156 turns of
+  DeepBot's play (`--subtree-dump`, agent/belief_truth.h; leave inference
+  model `v1` generation 292): the log probability Bob's belief gives the
+  leave Alice in fact keeps after a candidate, over that of a uniform draw
+  from the tiles he cannot see, by the candidate's static-equity rank:
+
+  | Alice's candidate | Candidates | Nats over the uniform draw | Share of candidates below it |
+  |---|---|---|---|
+  | HastyBot's move (rank 0) | 102 | +0.80 | 0.24 |
+  | Ranks 1 to 9 | 434 | −0.54 | 0.49 |
+  | Rank 10 and below | 583 | −4.80 | 0.82 |
+
+  After HastyBot's move the belief is worth what its held-out evaluation
+  says. After the moves the screen now brings to the root it is worse than
+  no belief, and Bob's subtree answers a rack Alice does not hold. Each
+  generation trains on games that hold such moves, which is what closes
+  the gap, and why the generations come before the store in the [build
+  order](#build-order).
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
@@ -1275,7 +1303,7 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
    the bound at the root, and racing her candidates partway through the
    split's sequence, saves time without changing what the agent computes,
    and its ceiling is modest beside the learned budget's, so it moves to
-   step 12, whose decisions need Bob's subtree to pause mid-turn in any
+   step 13, whose decisions need Bob's subtree to pause mid-turn in any
    case.
 7. **Continuation heads on the leaf network,** trained from game records:
    ownership and points, then going out and end-of-game points.
@@ -1345,22 +1373,43 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
       network's classes, scale and moment losses, so the two networks' maps
       read alike. The heads are trained, not yet exported: the agent reads
       maps from the leaf network until the store needs the search network's
-      (step 11);
+      (step 12);
     - the measurement at the agent's positions (built): DeepBot's
       `--policy-model` serves a policy-set export beside the subtrees, and
       each dumped candidate records how often the policy's top move at Bob's
       position, over his whole pool and over the candidates his subtree
       simmed, is the reply the subtree chose (agent/policy_agreement.h), next
       to HastyBot's share; `py/scripts/deep_bot/policy_agreement.py`
-      tabulates a dump by bag. It awaits a policy-set export trained with the
-      value and continuation heads, which the running tags predate.
-11. **The store input,** trained by masked prediction on the grouped pools.
+      tabulates a dump by bag. Measured 2026-11-13 on 156 turns of
+      DeepBot's play under the `policy_set` tag `v1`'s generation 69, over
+      1,218 searched candidates: the policy's top move over Bob's pool is
+      his subtree's reply at 46.2% of racks, HastyBot's move at 46.5%, and
+      the reply of a second run of the subtree on fresh samples at 45.0%. At
+      `R_B = 20` the reply is too noisy a reference to tell a policy from
+      HastyBot: each agrees with it as often as it agrees with itself.
+11. **Generations.** DeepBot plays itself under the `hasty` reply model,
+    and its games train the next leave inference model (on those games
+    alone, warm-started), leaf network and policy, the pools and grouped
+    pools labeled from their positions under the new models
+    ([Generations](#generations)). They come before the store because the
+    store's lessons are about Bob's replies, and under `I_0` his belief
+    after a move HastyBot would not play is worse than no belief, so
+    grouped pools labeled under it would teach the store replies to racks
+    Alice does not hold. Once Bob's subtree runs in
+    the generating agent, its self-play also logs each turn's paired `Δ`
+    for the candidates that reach the subtree, and the root correction head
+    trains on those records. *Measure:* per generation, Bob's belief
+    against the leave Alice keeps, by her candidate's static-equity rank
+    (`py/scripts/deep_bot/belief_truth.py`); the picks at the blind spots
+    under each reply model (`py/scripts/deep_bot/blind_spot_picks.py`); and
+    the root correction head's held-out error against `Δ = 0`.
+12. **The store input,** trained by masked prediction on the grouped pools.
     *Measure:* its value and policy predictions against the empty-store
     pass, split by evidence from the same candidate and from other
     candidates; the calibration of its variance; and, at a rack with a
     search's count of its own sims, how often its top move is the rack's
     full-label best, against the argmax of those sims alone.
-12. **Steering and the learned budget in the agent:** admission, budget
+13. **Steering and the learned budget in the agent:** admission, budget
     decisions 1 and 3 with their audit, Bob's choice from the
     store-informed policy with the simmed-rack audit, and the single
     allocator, with the model-free stops deferred from step 6: a rack stops
@@ -1368,14 +1417,9 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
     best case falls below another's worst case is dropped, and racing her
     candidates stops each one partway through the split's sequence.
     *Measure:* sims per turn and strength at equal time against the agent
-    that sims every rack in full, and both audits' disagreement rates.
-13. **Generations.** DeepBot's self-play logs each turn's paired `Δ` for
-    the candidates that reach the subtree. Its games, its root records, and
-    the pools and grouped pools labeled from its positions train the next
-    leave inference model, leaf network and search network, the root
-    correction head included. *Measure:* the root correction head's
-    held-out error against `Δ = 0`, and how often the subtree's pick is
-    among Alice's first candidates, with the head and without.
+    that sims every rack in full, and both audits' disagreement rates; and
+    how often the subtree's pick is among Alice's first candidates, with
+    the root correction head and without.
 
 ## Limits
 
