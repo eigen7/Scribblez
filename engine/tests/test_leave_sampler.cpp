@@ -108,6 +108,14 @@ TEST_F(LeaveSamplerTest, NeverYieldsWhatThePoolCannotSupply) {
   }
 }
 
+TEST_F(LeaveSamplerTest, FindsTheRowThatHoldsALeave) {
+  const LeaveSampler s(belief::LeaveParams{}, 3, mid_game_pool(), *table_);
+  for (const size_t row : {size_t(0), s.rows() / 2, s.rows() - 1})
+    EXPECT_EQ(s.row_of(s.leave(row)), row);
+  // No row of the three-tile table holds a two-tile leave.
+  EXPECT_EQ(s.row_of(Rack::from_string("AE")), s.rows());
+}
+
 TEST_F(LeaveSamplerTest, RefusesQueriesWithNoLeaves) {
   const TileCounts pool = mid_game_pool();
   EXPECT_THROW(LeaveSampler(LeaveParams{}, 0, pool, *table_), util::Exception);

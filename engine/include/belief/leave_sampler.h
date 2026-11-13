@@ -59,6 +59,11 @@ class LeaveSampler {
   // The leave at `row`.
   Rack leave(size_t row) const;
 
+  size_t rows() const { return cdf_.size(); }
+  // The row that holds `leave`, or rows() when none does (a leave of another
+  // length). A scan of the rows: for diagnostics, not for the sims.
+  size_t row_of(const Rack& leave) const;
+
   // The belief's presence marginals and value moments, from one pass over its
   // rows.
   LeaveMoments moments() const;

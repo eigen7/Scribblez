@@ -112,6 +112,25 @@ constexpr uint64_t kScreenSeed = 0x5C2EE45C2EE45C2EULL;
 
 bool is_pass(const Move& m) { return m.type() == MoveType::PASS; }
 
+// Each of `moves`' rank among the legal moves of `req` by static equity: how
+// many have more, so 0 is HastyBot's move and tied moves share a rank.
+std::vector<int> equity_ranks(const MoveRequest& req, const std::vector<Move>& moves) {
+  const std::vector<Move> legal = equity_top_k(req, std::numeric_limits<int>::max());
+  const std::vector<double> equity =
+    HastyEquity::instance().equities(legal, req.board, req.bag_size, req.opp_rack, req.my_rack);
+  std::vector<int> out;
+  out.reserve(moves.size());
+  for (const Move& m : moves) {
+    // The legal moves come best first, so a move's rank is where its equity
+    // first appears.
+    const size_t at = size_t(std::find(legal.begin(), legal.end(), m) - legal.begin());
+    size_t first = at;
+    while (first > 0 && equity[first - 1] <= equity[at]) --first;
+    out.push_back(int(first));
+  }
+  return out;
+}
+
 // Every legal move of `req` the screen sims, best static equity first: the
 // policy-set pool's (policy_set::pool_candidates) less the pass, which stays
 // only when nothing else is legal.
@@ -356,6 +375,14 @@ std::vector<PolicyAgreement> DeepBot::policy_agreements(const MoveRequest& req,
   return out;
 }
 
+std::vector<BeliefTruth> DeepBot::belief_truths(const MoveRequest& req, const AliceTurn& turn,
+                                                const std::vector<size_t>& searched) const {
+  if (!backend_.predict) return {};
+  std::vector<BeliefTruth> out(turn.candidates.size());
+  for (const size_t c : searched) out[c] = belief_truth(turn, c, belief_model(), req.dict);
+  return out;
+}
+
 void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
                         const std::vector<size_t>& searched, const BobReplies& replies,
                         const ReplyPayoffs& payoffs, const std::vector<double>& values) {
@@ -377,6 +404,8 @@ void DeepBot::dump_turn(const MoveRequest& req, const AliceTurn& turn, const Has
     .rerun = &rerun.replies,
     .payoffs = &payoffs,
     .policy = scorer_ ? &policy : nullptr,
+    .equity_ranks = equity_ranks(req, turn.candidates),
+    .beliefs = belief_truths(req, turn, searched),
     .sims = {.first_pass = hasty.sims, .subtrees = replies.sims, .after_replies = payoffs.sims}};
   for (size_t c : searched) t.searched[c] = true;
   for (const PoolLabel& l : hasty.labels) t.hasty_values.push_back(l.win_prob);
