@@ -22,6 +22,7 @@ from cloud.bundles import BundleManifest
 from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
 from cloud.ssh_machine import SshMachineError
+from cloud.ssh_transfer import INCOMING_DIR, SPOOL_PREFIX
 from cloud.worker_entrypoint import EXIT_FATAL
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
@@ -2837,6 +2838,44 @@ def test_removing_a_stopped_trainer_takes_its_final_state_pair(manager, monkeypa
     manager.remove_worker(spec, task, "tr")
     assert swept == ["tr"]
     assert homes == ["tr"]  # the home's data plane comes here before it moves
+
+
+def test_a_data_home_sweep_shows_on_the_slot_as_it_runs(manager, monkeypatch):
+    """Removing the data home's trainer takes minutes of sweeping; meanwhile a
+    status read shows the slot removing, with the step and what the copy has
+    spooled so far, and once it is gone nothing of the removal lingers."""
+    spec = workloads.get("position_eval")
+    task = _rented_home_task(manager, monkeypatch)
+    manager.tasks.save(spec, task)
+    monkeypatch.setattr(WorkerManager, "_refresh_probe", lambda self, spec, task, w: "stopped")
+    monkeypatch.setattr(WorkerManager, "_machine_gone", lambda self, spec, task, w: False)
+    machine = SimpleNamespace(remove_container=lambda name: None, remove_volume=lambda name: None)
+    monkeypatch.setattr(WorkerManager, "_ssh_machine", lambda self, task, w: machine)
+    monkeypatch.setattr(WorkerManager, "_sweep_ssh", lambda self, m, spec, task, w: None)
+    monkeypatch.setattr(WorkerManager, "_ssh_host", lambda self, task, w: w.machine)
+    monkeypatch.setattr(workers_mod, "sweep_stopped", lambda machine, **kw: [])
+    seen = []
+
+    def sweep_dirs(machine, *, local_root, rel, **kw):
+        spool = local_root / INCOMING_DIR / f"{SPOOL_PREFIX}{Path(rel).name}.tar"
+        spool.parent.mkdir(parents=True, exist_ok=True)
+        spool.write_bytes(b"\0" * 3_000_000)
+        status = manager.worker_status(spec, manager.tasks.load(spec, "t"))
+        seen.append({i["worker_id"]: (i["state"], i.get("removal_step")) for i in status})
+        spool.unlink()
+        return []
+
+    monkeypatch.setattr(workers_mod, "sweep_dirs", sweep_dirs)
+    assert next(i for i in manager.worker_status(spec, task) if i["worker_id"] == "tr")[
+        "sweeps_home"
+    ]
+    manager.remove_worker(spec, task, "tr")
+    assert [s["tr"] for s in seen] == [
+        ("removing", "sweeping the data home's generations (3 MB so far)"),
+        ("removing", "sweeping the data home's held-out set (3 MB so far)"),
+    ]
+    assert seen[0]["g1"][0] != "removing"  # only the slot being removed
+    assert manager._removing == {}
 
 
 def test_the_tag_volume_goes_with_the_last_slot_on_its_machine(manager, monkeypatch):

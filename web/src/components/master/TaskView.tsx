@@ -20,6 +20,11 @@ type WorkerInfo = {
   threads: number | null; host: string | null; ssh?: string;
   gate_reason?: string; bundle_id: string | null; exit_reason?: string; retry_in_s?: number;
   undelivered: number | null; launched: boolean;
+  // Removing this slot first sweeps the tag's data home off its machine.
+  sweeps_home: boolean;
+  // While state is 'removing': the step the removal is on, with what a sweep
+  // has copied so far.
+  removal_step?: string;
   // ssh: the task's machine the slot runs on (null for a bare host string).
   machine: string | null;
 };
@@ -73,9 +78,22 @@ function discardWarning(workers: WorkerInfo[]): string | null {
   return `Discard finished output still held by ${described.join(', ')}?`;
 }
 
+// The confirmation removing `workers` needs, or null for none: the discard
+// warning, and notice that a data home's sweep takes minutes, so an operator
+// does not take the wait for a hang. `diskLost` (a gone or stopped rental,
+// whose disk goes with it) means nothing is swept.
+function removalWarning(workers: WorkerInfo[], diskLost = false): string | null {
+  const discard = discardWarning(workers);
+  const home = diskLost ? undefined : workers.find((w) => w.sweeps_home);
+  if (!home) return discard;
+  const notice = `Removing ${home.worker_id} first copies the tag's data home (every generation `
+    + 'in the window) back here, which can take minutes; the slot shows the progress until it goes.';
+  return `${notice}\n\n${discard ?? 'Remove it?'}`;
+}
+
 // A slot mid-transition: its process/container has not yet caught up to the operator's
 // intent, so its Start/Pause control is disabled and shows a spinner.
-const IN_FLIGHT = new Set(['starting', 'stopping']);
+const IN_FLIGHT = new Set(['starting', 'stopping', 'removing']);
 // Mirrors IDLE_STOP_SECONDS in py/scribblez/dashboard/workers.py.
 const IDLE_STOP_MINUTES = 10;
 type ProfileChange = { name: string; profile: number | boolean | string; task: number | boolean | string };
@@ -324,7 +342,8 @@ function MachinesCard({ workload, tag, machines, workers, onError, onChanged }: 
     }
   };
   const remove = (m: MachineInfo) => {
-    const warning = discardWarning(workers.filter((w) => w.machine === m.name));
+    const diskLost = m.state === 'gone' || (m.state === 'stopped' && m.instance_id != null);
+    const warning = removalWarning(workers.filter((w) => w.machine === m.name), diskLost);
     if (warning && !window.confirm(warning)) return;
     if (m.instance_id && m.state !== 'gone'
       && !window.confirm(`Terminate ${m.name} (${m.instance_type})? Its disk goes with it.`)) return;
@@ -497,7 +516,7 @@ function WorkersTable({ workers, taskBundle, onAction }: {
   onAction: (workerId: string, action: string) => void;
 }) {
   const onRemove = (w: WorkerInfo) => {
-    const warning = discardWarning([w]);
+    const warning = removalWarning([w]);
     if (warning && !window.confirm(warning)) return;
     onAction(w.worker_id, 'remove');
   };
@@ -545,6 +564,11 @@ function WorkersTable({ workers, taskBundle, onAction }: {
                 title={w.gate_reason ? `parked by the scheduler: ${w.gate_reason}` : undefined}
               >
                 {w.state}{w.state === 'waiting' && w.gate_reason ? ` (${w.gate_reason})` : ''}
+                {w.removal_step && (
+                  <div style={{ fontWeight: 400, fontSize: 12, color: '#445063', maxWidth: 460 }}>
+                    {w.removal_step}
+                  </div>
+                )}
                 {/* Why it is not running, from the container itself: a worker
                     that cannot start says so here rather than only in its log. */}
                 {w.exit_reason && (
@@ -630,7 +654,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
     }
   };
   const removeAll = () => {
-    const warning = discardWarning(info.workers);
+    const warning = removalWarning(info.workers);
     if (warning && !window.confirm(warning)) return;
     act({ action: 'remove' });
   };

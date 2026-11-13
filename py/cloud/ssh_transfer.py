@@ -579,6 +579,20 @@ def pull_ready_dirs(
     return installed
 
 
+def spooled_bytes(local_root: Path) -> int:
+    """The bytes the sweep in progress under `local_root` has copied so far,
+    read from its spools, which grow as the copy streams in; 0 with no sweep
+    in progress. A spool unpacked and unlinked between the listing and its
+    stat counts as nothing."""
+    total = 0
+    for spool in (local_root / INCOMING_DIR).glob(f"{SPOOL_PREFIX}*"):
+        try:
+            total += spool.stat().st_size
+        except FileNotFoundError:
+            pass
+    return total
+
+
 def sweep_dirs(
     machine, container: str, *, remote_root: str, local_root: Path, rel: str
 ) -> list[str]:

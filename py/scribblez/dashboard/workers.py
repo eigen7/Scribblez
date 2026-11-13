@@ -55,6 +55,7 @@ from cloud.ssh_transfer import (
     push_file,
     relay_files,
     seed_volume,
+    spooled_bytes,
     sweep_dirs,
     sweep_stopped,
 )
@@ -622,6 +623,11 @@ class WorkerManager:
         self._new_transfer_pool = lambda: ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="scz-transfer"
         )
+        # Slot key -> the step its removal is on (_removal_step), for the
+        # status reads to show while the removal holds the blocking thread: a
+        # data home's sweep takes minutes, and a slot that sits there unchanged
+        # reads as a removal that failed.
+        self._removing: dict[str, str] = {}
         # Slot key -> its collection in flight, or done and not yet recorded.
         self._collecting: dict[str, Future] = {}
         # Per-file digests behind source_hash, so the drift check every status
@@ -1687,20 +1693,33 @@ class WorkerManager:
         `disk_lost` (an ssh slot whose instance is gone, or is stopped and about
         to be terminated) its container and the tag's volume go with the
         instance's disk, so there is nothing to check or clean."""
-        if w.kind == "local":
-            assert not self._local_alive(spec, task, w), f"{w.worker_id} is running; pause it first"
-        elif w.kind == "ssh" and not disk_lost:
-            self._remove_container(spec, task, w)
-            if spec.scheduler == TICK_FOR_TASK:
-                self._release_tag_volume(spec, task, w)
-        self._forget_slot(_key(spec, task.tag, w.worker_id))
-        task.workers.remove(w)
-        self.tasks.save(spec, task)
+        key = _key(spec, task.tag, w.worker_id)
+        try:
+            if w.kind == "local":
+                assert not self._local_alive(spec, task, w), (
+                    f"{w.worker_id} is running; pause it first"
+                )
+            elif w.kind == "ssh" and not disk_lost:
+                self._remove_container(spec, task, w)
+                if spec.scheduler == TICK_FOR_TASK:
+                    self._removal_step(spec, task, w, "releasing the tag's volume")
+                    self._release_tag_volume(spec, task, w)
+            self._forget_slot(key)
+            task.workers.remove(w)
+            self.tasks.save(spec, task)
+        finally:
+            self._removing.pop(key, None)
+
+    def _removal_step(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, step: str):
+        """Record that slot `w`'s removal has reached `step`, which
+        worker_status shows on the slot until the removal ends."""
+        self._removing[_key(spec, task.tag, w.worker_id)] = step
 
     def _remove_container(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Remove ssh slot `w`'s container, refusing while it runs or cannot be
         observed, and sweeping a trainer's last flush first."""
         # Observe afresh: a removal must not act on a remembered state.
+        self._removal_step(spec, task, w, "checking its container")
         probe = self._refresh_probe(spec, task, w)
         assert probe not in ("running", "paused"), f"{w.worker_id} is running; pause it first"
         # Removing while unreachable could orphan a live container that
@@ -1715,9 +1734,11 @@ class WorkerManager:
                 # A trainer's last flush holds its final state pair, which
                 # no collection reached; it is small, unlike a generator's
                 # backlog (the Remove dialog warns about that).
+                self._removal_step(spec, task, w, "sweeping its last flush")
                 self._sweep_ssh(machine, spec, task, w)
             if self._remote_data_home(spec, task) is w:
                 self._sweep_home(machine, spec, task, w)
+            self._removal_step(spec, task, w, "removing its container")
             machine.remove_container(_container_name(spec, task.tag, w.worker_id))
 
     def _release_tag_volume(self, spec, task: tasks.TaskRecord, leaving: tasks.WorkerRecord):
@@ -1984,10 +2005,24 @@ class WorkerManager:
                     info["exit_reason"] = reason
             if w.failed and not alive:
                 info["exit_reason"] = w.failed  # why the slot was given up on
+            self._show_removal(spec, task, w, info)
             # Real liveness, for reconcile's desired-vs-observed enforcement.
             info["observed_running"] = alive
             out.append(info)
         return out
+
+    def _show_removal(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, info: dict):
+        """Mark slot `w`'s status `info` as removing while a removal of it is
+        under way, with the step it is on and the megabytes a sweep has copied
+        so far; marks whether removing it sweeps the tag's data home, which
+        the Remove dialog warns takes minutes."""
+        info["sweeps_home"] = self._remote_data_home(spec, task) is w
+        step = self._removing.get(_key(spec, task.tag, w.worker_id))
+        if step is None:
+            return
+        info["state"] = "removing"
+        spooled = spooled_bytes(self.tasks.paths(spec, task.tag).root)
+        info["removal_step"] = f"{step} ({spooled / 1e6:.0f} MB so far)" if spooled else step
 
     def _observe_slots(self, spec, task: tasks.TaskRecord) -> dict[str, bool]:
         """The pass's look at every slot, and what it records: each container's
@@ -2401,8 +2436,11 @@ class WorkerManager:
             "remote_root": str(paths.root),
             "local_root": paths.root,
         }
+        self._removal_step(spec, task, home, "sweeping the data home's generations")
         sweep_dirs(machine, **target, rel=_generations_rel(paths))
+        self._removal_step(spec, task, home, "sweeping the data home's held-out set")
         sweep_dirs(machine, **target, rel=_held_out_rel(paths))
+        self._removal_step(spec, task, home, "sweeping the data home's staging and ledger")
         sweep_stopped(
             machine,
             **target,

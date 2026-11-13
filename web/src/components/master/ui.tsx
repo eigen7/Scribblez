@@ -26,7 +26,7 @@ export const stateColors: Record<string, string> = {
   stopped: '#8494a5', gone: '#b23b3b',
   waiting: '#a05a00',
   unreachable: '#a05a00',
-  starting: '#1f77b4', stopping: '#1f77b4',
+  starting: '#1f77b4', stopping: '#1f77b4', removing: '#1f77b4',
   // No reconcile pass has observed this slot yet (only that pass talks to the
   // machines; a status request reads what it left behind).
   checking: '#8494a5',
