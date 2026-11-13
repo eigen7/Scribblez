@@ -90,6 +90,27 @@ def test_the_equity_baseline_metrics_by_set_size():
     assert (m["equity_eval_tail_recall_4"], m["equity_eval_tail_recall_16"]) == (0, 1)
 
 
+def test_regret_compares_a_raced_out_member_on_the_rollouts_it_ran():
+    # The race stopped the equity favourite after two easy deals, where it
+    # won 0.8 to the leader's 0.9; over all eight the leader won 0.6. Its raw
+    # mean beats the leader's, but on the deals both ran it trails by 0.1.
+    leader = [0.9, 0.9, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+    pool = _pool([0.9, 0.1, 0.0], [0.6, 0.8, 0.0], [5, 0, -1], [leader, [0.8, 0.8], [0.0] * 8])
+    m = metrics.set_metrics([pool], metrics.equity_top, "")
+    assert m["eval_regret_1"] == pytest.approx(0.1)
+    assert m["eval_regret_16"] == pytest.approx(0)
+
+
+def test_regret_reads_the_sets_likeliest_best_member():
+    # Of the set's two members the raced-out one has the larger raw mean and
+    # the smaller q; the regret is against the other.
+    values = [[0.6] * 8, [0.5] * 8, [0.9, 0.9], [0.0] * 8]
+    pool = _pool([0.7, 0.25, 0.05, 0.0], [0.6, 0.5, 0.9, 0.0], [9, 0, 1, -1], values)
+    assert metrics.set_metrics([pool], metrics.equity_top, "")["eval_regret_2"] == pytest.approx(
+        0.1
+    )
+
+
 @pytest.mark.parametrize("bad", [lambda p, n: np.array([], int), lambda p, n: np.arange(n + 1)])
 def test_a_chooser_must_return_a_set_of_at_most_n(bad):
     with pytest.raises(ValueError):
