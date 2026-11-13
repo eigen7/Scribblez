@@ -282,6 +282,14 @@ target_link_libraries(position_pick_tool PRIVATE
   Boost::system
   Threads::Threads)
 
+# The pre-endgame solver's ranking at positions of recorded games.
+add_executable(pre_endgame_rank_tool apps/pre_endgame_rank_tool.cpp)
+target_link_libraries(pre_endgame_rank_tool PRIVATE
+  scribblez_core
+  Boost::program_options
+  Boost::json
+  Threads::Threads)
+
 add_executable(manual_gcg_tool apps/manual_gcg_tool.cpp)
 target_link_libraries(manual_gcg_tool PRIVATE
   scribblez_core

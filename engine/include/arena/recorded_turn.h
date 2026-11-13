@@ -10,9 +10,49 @@
 #include "game/move.h"
 #include "game/rack.h"
 
+#include <array>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
 namespace scribblez {
 
 class Dictionary;
+
+// A turn of a recorded game, as a positions file names it: a line
+// "<.slog path> <game> <turn>", both 0-based.
+struct RecordedTurnRef {
+  std::string slog;
+  uint32_t game = 0;
+  int turn = 0;
+};
+
+// The turns a positions file names, in its order. Throws util::CleanException
+// naming the file and the line it cannot read.
+std::vector<RecordedTurnRef> read_recorded_turn_refs(const std::string& path);
+
+// The .slog files `refs` name, by path, each loaded once. Throws
+// util::CleanException for a file of another format version, one played with
+// face-up leaves (the replay hides the opponent's rack), or a ref to a game
+// its file lacks.
+std::map<std::string, std::vector<char>> load_recorded_slogs(
+  const std::vector<RecordedTurnRef>& refs);
+
+// The decision point before a recorded turn, whole: the replay knows both
+// racks.
+struct RecordedPosition {
+  Board board;
+  std::array<Rack, 2> racks;  // by seat
+  std::array<int, 2> scores;
+  int bag = 0;
+  int mover = 0;            // the seat to move
+  int scoreless_turns = 0;  // consecutive scoreless turns just before it
+};
+
+// The position before turn `turn` of `g`. Reads only each record's move and
+// draw.
+RecordedPosition recorded_position(const GameLog& g, int turn);
 
 // The decision point before a recorded turn, and what the agent chose there.
 struct RecordedPick {
