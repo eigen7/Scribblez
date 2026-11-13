@@ -10,6 +10,7 @@
 #include "sim/pool_jobs.h"
 #include "sim/pool_labeler.h"
 #include "sim/sim_runner.h"
+#include "training/policy_set_inputs.h"
 #include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
@@ -18,6 +19,8 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
 #include <optional>
 #include <utility>
 
@@ -38,11 +41,17 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "the leave inference model (ONNX) Bob's leaves are drawn from; without it his whole rack "
      "is drawn uniformly")  //
     ("candidates", po::value<int>(&p.candidates)->default_value(p.candidates),
-     "candidates by static equity")  //
+     "candidates, the screen's best")  //
     ("late-candidates", po::value<int>(&p.late_candidates)->default_value(p.late_candidates),
      "candidates with --late-bag or fewer tiles in the bag")  //
     ("late-bag", po::value<int>(&p.late_bag)->default_value(p.late_bag),
      "the bag size from which --late-candidates applies")  //
+    ("screen-rollouts", po::value<int>(&p.screen_rollouts)->default_value(p.screen_rollouts),
+     "the screen that chooses the candidates: hasty rollouts per legal move, raced; 0 = no "
+     "screen, the static-equity top moves")  //
+    ("blank-prune-points",
+     po::value<int>(&p.blank_prune_points)->default_value(p.blank_prune_points),
+     "the screen leaves out a blank move scoring this far below the highest-scoring play")  //
     ("reply", po::value<std::string>(&p.reply)->default_value(p.reply),
      "how Alice models Bob's reply: subtree (Bob's own sims on his information), hasty "
      "(HastyBot's move), or alice-subtree (HastyBot's move, then Alice's own sims choose her "
@@ -97,6 +106,22 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
 
 // A second run of the subtrees, on fresh samples and draws.
 constexpr uint64_t kRerunSeed = 0x2E2D2E2D2E2D2E2DULL;
+// The screen's samples and draws, apart from those of the sims that value its
+// picks: a move the screen's luck lifted meets fresh racks there.
+constexpr uint64_t kScreenSeed = 0x5C2EE45C2EE45C2EULL;
+
+bool is_pass(const Move& m) { return m.type() == MoveType::PASS; }
+
+// Every legal move of `req` the screen sims, best static equity first: the
+// policy-set pool's (policy_set::pool_candidates) less the pass, which stays
+// only when nothing else is legal.
+std::vector<Move> screen_pool(const MoveRequest& req, int blank_prune_points) {
+  std::vector<Move> pool = policy_set::pool_candidates(
+                             equity_top_k(req, std::numeric_limits<int>::max()), blank_prune_points)
+                             .moves;
+  if (pool.size() > 1) std::erase_if(pool, is_pass);
+  return pool;
+}
 
 // A candidate after which Alice's draw empties the bag.
 bool empties_bag(const Move& m, int bag) {
@@ -126,6 +151,7 @@ void validate(const DeepBot::Params& p) {
   if (p.candidates < 1 || p.late_candidates < 1)
     throw util::CleanException("deepbot: --candidates and --late-candidates must be >= 1");
   if (p.rollouts < 1) throw util::CleanException("deepbot: --rollouts must be >= 1");
+  if (p.screen_rollouts < 0) throw util::CleanException("deepbot: --screen-rollouts must be >= 0");
   if (p.reply != "subtree" && p.reply != "hasty" && p.reply != "alice-subtree")
     throw util::CleanException("deepbot: --reply must be subtree, hasty or alice-subtree");
   if (p.bob_racks < 1 || p.sims_per_rack < 1 || p.subtree.opp_racks < 1 || p.second.opp_racks < 1)
@@ -178,9 +204,39 @@ uint64_t DeepBot::turn_seed() const {
   return util::splitmix64(params_.seed ^ util::splitmix64(uint64_t(ply_)));
 }
 
-std::vector<Move> DeepBot::candidates(const MoveRequest& req) const {
-  const bool late = req.bag_size <= params_.late_bag;
-  return equity_top_k(req, late ? params_.late_candidates : params_.candidates);
+int DeepBot::candidate_count(const MoveRequest& req) const {
+  return req.bag_size <= params_.late_bag ? params_.late_candidates : params_.candidates;
+}
+
+std::vector<Move> DeepBot::candidate_pool(const MoveRequest& req) const {
+  if (params_.screen_rollouts == 0) return equity_top_k(req, candidate_count(req));
+  return screen_pool(req, params_.blank_prune_points);
+}
+
+std::vector<Move> DeepBot::candidates(const MoveRequest& req, std::vector<Move> pool,
+                                      const belief::LeaveSampler* belief) const {
+  const int count = candidate_count(req);
+  if (pool.size() <= size_t(count)) return pool;
+  const std::vector<PoolLabel> screen = hasty_labels(req, pool, belief, params_.screen_rollouts,
+                                                     /*race=*/true, turn_seed() ^ kScreenSeed)
+                                          .labels;
+  return likeliest_best(pool, screen, count);
+}
+
+std::vector<Move> likeliest_best(const std::vector<Move>& moves,
+                                 const std::vector<PoolLabel>& labels, int count) {
+  if (moves.size() <= size_t(count)) return moves;
+  std::vector<size_t> order(moves.size());
+  std::iota(order.begin(), order.end(), size_t(0));
+  // Stable: among equally likely moves, the better static equity.
+  std::stable_sort(order.begin(), order.end(),
+                   [&](size_t a, size_t b) { return labels[a].q > labels[b].q; });
+  order.resize(size_t(count));
+  std::sort(order.begin(), order.end());
+  std::vector<Move> out;
+  out.reserve(order.size());
+  for (const size_t i : order) out.push_back(moves[i]);
+  return out;
 }
 
 std::shared_ptr<const belief::LeaveSampler> DeepBot::root_belief(
@@ -196,12 +252,13 @@ MoveDecision DeepBot::make_move(const MoveRequest& req) {
   if (req.bag_size == 0) return hasty_best_move_wmp(req);
   // Every other turn records the rack, which later queries' masks read.
   const belief::LeaveQuery q = recorder_.own_query(req);
-  const std::vector<Move> moves = candidates(req);
-  if (moves.size() == 1) return moves.front();
+  std::vector<Move> pool = candidate_pool(req);
+  if (pool.size() == 1) return pool.front();
   const std::shared_ptr<const belief::LeaveSampler> belief = root_belief(q);
+  const std::vector<Move> moves = candidates(req, std::move(pool), belief.get());
   if (params_.reply != "hasty") return subtree_move(req, moves, belief.get());
   const std::vector<PoolLabel> labels =
-    hasty_labels(req, moves, belief.get(), params_.rollouts, params_.race).labels;
+    hasty_labels(req, moves, belief.get(), params_.rollouts, params_.race, turn_seed()).labels;
   const auto best = std::max_element(
     labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
   return moves[size_t(best - labels.begin())];
@@ -209,9 +266,8 @@ MoveDecision DeepBot::make_move(const MoveRequest& req) {
 
 DeepBot::HastySims DeepBot::hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
                                          const belief::LeaveSampler* belief, int rollouts,
-                                         bool race) const {
-  PoolJob job =
-    position_job(sim_position_from(req), moves, turn_seed(), belief, req.dict, rollouts);
+                                         bool race, uint64_t seed) const {
+  PoolJob job = position_job(sim_position_from(req), moves, seed, belief, req.dict, rollouts);
   PoolLabeler labeler(*backend_.values, {.rollouts = rollouts, .race = race});
   HastySims out{.labels = label(labeler, std::move(job)).labels, .sims = 0};
   out.sims = labeler.stats().tasks;
@@ -233,7 +289,8 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
                                        .earlier = earlier};
   const AliceTurn turn{position, moves, root.starts, racks, root.group};
   // The first pass: every candidate's hasty sims, on the same racks.
-  const HastySims hasty = hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false);
+  const HastySims hasty =
+    hasty_labels(req, moves, belief, params_.bob_racks, /*race=*/false, turn_seed());
   const std::vector<size_t> searched = survivors(moves, hasty.labels, req.bag_size);
   const std::vector<double> values = params_.reply == "subtree"
                                        ? bob_subtree_values(req, turn, hasty, searched)
@@ -354,9 +411,10 @@ DeepBot::Params DeepBot::parse_params(const std::vector<std::string>& tokens, in
 std::string DeepBot::options_help() {
   Params defaults;  // binding targets; only the defaults are read
   return agent_options_help(
-    "  DeepBot: sims its static-equity top moves on the GPU, each rack for the opponent\n"
-    "  seating a leave from the leave inference model's belief, the leaf network at the\n"
-    "  end. --reply subtree has the opponent choose his reply by his own sims on his own\n"
+    "  DeepBot: sims its candidates on the GPU, each rack for the opponent seating a\n"
+    "  leave from the leave inference model's belief, the leaf network at the end. The\n"
+    "  candidates are the best of a screen, a few raced sims of every legal move but the\n"
+    "  pass. --reply subtree has the opponent choose his reply by his own sims on his own\n"
     "  information; --reply hasty has him play HastyBot's move; --reply alice-subtree\n"
     "  has him play HastyBot's move and her own sims choose her second move. Hidden\n"
     "  leaves only; deepbot-endgame solves the endgame.\n",

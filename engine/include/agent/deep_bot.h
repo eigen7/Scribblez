@@ -1,10 +1,19 @@
 #pragma once
 
-// DeepBot (docs/plans/deep_bot.md): Alice values each of her candidates (the
-// static-equity top N, N by the bag) by short sims on the GPU. Rollout i seats
-// a leave for Bob drawn from her leave inference belief
-// (belief::LeaveHistoryRecorder's query, the training row of her position) and
-// draws the rest of both racks. How Bob replies is the reply model:
+// DeepBot (docs/plans/deep_bot.md): Alice values each of her candidates by
+// short sims on the GPU. Rollout i seats a leave for Bob drawn from her leave
+// inference belief (belief::LeaveHistoryRecorder's query, the training row of
+// her position) and draws the rest of both racks.
+//
+// Her candidates are the best N (N by the bag) of a screen: every legal move
+// but the pass gets a few hasty sims, raced, as a policy-set pool labels a
+// position, and the N likeliest best go on. Static equity buries the moves
+// the sims exist to find (a setup, a fish, a one-tile play that keeps the bag
+// open), so it does not choose the candidates. The pass stays out: where it
+// sims best, the sims' opponent, who never passes back, is why.
+//
+// How Bob replies in the sims that then value the candidates is the reply
+// model:
 //
 //   - `subtree`: Bob decides on his own information (agent/bob_subtree.h).
 //     For rack i, his own sims give his moves their chances of being his
@@ -69,9 +78,15 @@ class DeepBot : public Agent {
     // The leave inference model (ONNX) Bob's leaves are drawn from; empty draws
     // his whole rack uniformly. Read by the factory.
     std::string leave_inference{};
-    int candidates = 10;       // Alice's, by static equity
+    int candidates = 10;       // Alice's, the screen's best
     int late_candidates = 32;  // ... with late_bag or fewer tiles in the bag
     int late_bag = 40;
+    // The screen's rollouts per legal move, raced; 0: no screen, and the
+    // candidates are the static-equity top moves.
+    int screen_rollouts = 100;
+    // The screen leaves out a blank move scoring this far below the
+    // highest-scoring play, as the pools do (policy_set::pool_candidates).
+    int blank_prune_points = 40;
     std::string reply = "subtree";  // the reply model: subtree, hasty or alice-subtree
     // hasty: rollouts per candidate, each with its own rack for Bob, raced.
     int rollouts = 1000;
@@ -131,18 +146,27 @@ class DeepBot : public Agent {
                              const char* type_label);
 
  private:
-  std::vector<Move> candidates(const MoveRequest& req) const;
+  // How many candidates Alice values, by the bag.
+  int candidate_count(const MoveRequest& req) const;
+  // The moves her candidates are chosen from, best static equity first: the
+  // screen's pool, or without a screen the candidates themselves.
+  std::vector<Move> candidate_pool(const MoveRequest& req) const;
+  // Her candidates: the screen's best of `pool`, or all of a pool no larger
+  // than their count.
+  std::vector<Move> candidates(const MoveRequest& req, std::vector<Move> pool,
+                               const belief::LeaveSampler* belief) const;
   // Alice's belief about Bob's leave, null where the model has none to give.
   std::shared_ptr<const belief::LeaveSampler> root_belief(const belief::LeaveQuery& q) const;
   uint64_t turn_seed() const;
-  // The hasty sims of `moves` over `rollouts` racks for Bob, and the rollouts
-  // they ran.
+  // The hasty sims of `moves` over `rollouts` racks for Bob, dealt by `seed`,
+  // and the rollouts they ran.
   struct HastySims {
     std::vector<PoolLabel> labels;
     long long sims = 0;
   };
   HastySims hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
-                         const belief::LeaveSampler* belief, int rollouts, bool race) const;
+                         const belief::LeaveSampler* belief, int rollouts, bool race,
+                         uint64_t seed) const;
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
   // The candidates whose hasty first pass (`hasty`) ranks them among the best
@@ -179,5 +203,10 @@ class DeepBot : public Agent {
   int ply_ = 0;    // moves observed this game
   int games_ = 0;  // games begun, this one included
 };
+
+// The `count` of `moves` that `labels` (parallel) make likeliest the best, in
+// the order of `moves`; all of them when there are no more than `count`.
+std::vector<Move> likeliest_best(const std::vector<Move>& moves,
+                                 const std::vector<PoolLabel>& labels, int count);
 
 }  // namespace scribblez
