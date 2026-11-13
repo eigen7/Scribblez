@@ -61,11 +61,16 @@ export interface SurveyMove {
 // model and under no information. `modelled` is false where the model says
 // nothing (turn 0, after a pass or an empty leave, an empty bag): the rack is
 // then a uniform draw, and `inferred` equals `uniform` and is drawn as such.
+// Precomputed with sample racks (py/scribblez/blind_spots_beliefs.py) under
+// `model`; `stand_in_for` names the pools' own model when that one differs.
 export interface RackBeliefChart {
   modelled: boolean;
   leave_length: number; // tiles the opponent kept at their last move
   refill: number; // tiles drawn since
   presence: { tile: string; inferred: number; uniform: number }[]; // A..Z, then '?'
+  racks: { leave: string; refill: string }[];
+  model: string; // "<leave_inference tag> gen <N>"
+  stand_in_for?: string;
 }
 
 export interface SurveyPosition {

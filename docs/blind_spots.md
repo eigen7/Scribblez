@@ -109,6 +109,8 @@ chunk delivers into `/workspace/mount/tags/hidden_blind_spots/<tag>/data/`
 - `found/<stem>.slog`, `found/<stem>.forgone`: the chunk's games and their
   forgone plays, which step 4's tools replay; the pools are dropped;
 - `found/<stem>.blindspots.json`: the confirmation's report;
+- `found/<stem>.beliefs.json` (inferred beliefs): the viewer's opponent-rack
+  panel for the kept positions, under the tag's leave inference model;
 - `gcg/<stem>-g<G>-turn<N>.gcg`: each kept position.
 
 Browse a tag's kept positions in the sim-survey viewer:
@@ -121,12 +123,15 @@ It lists each position's outside moves above the top moves, with their
 confirming and screening win rates and the pool's `q`, and highlights the
 opponent's last move. The GPU sims keep no per-rollout summaries, so the
 survey's margin and next-move panels do not appear. Under the panels, what the
-mover believes about the opponent's rack, from the leave inference model the
-tag's pools were labeled with (`leave_inference/beliefs.py`, on the CPU): per
-tile, the chance the rack holds one under the model beside the same under no
-information, and ten distinct sample racks, the kept leave apart from the
-refill, redrawn on demand. It uses the sim-survey viewer's ports, so it
-replaces a running `sim_survey_viewer.py`.
+mover believes about the opponent's rack, read from the `.beliefs.json`
+sidecars (`blind_spots_beliefs.py`): per tile, the chance the rack holds one
+under the leave inference model beside the same under no information, and ten
+distinct sample racks, the kept leave apart from the refill. The generator
+computes them under the model the pools were labeled with, so the viewer needs
+no model and starts at once. A tag from before the sidecars gets them from
+`py/tools/one_off/backfill_blind_spots_beliefs.py`, under a stand-in model if
+the pools' own is gone (`--leave-tag`), which the panel then names. It uses the
+sim-survey viewer's ports, so it replaces a running `sim_survey_viewer.py`.
 
 On the 2,000 pools of a `tilted2`-gen-1188 / `leaf-conv-join-32-4b`-gen-730
 chunk set (2026-10-25), 238 pools had a leader outside the top 10, 51 of those

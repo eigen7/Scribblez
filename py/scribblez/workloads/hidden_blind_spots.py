@@ -8,11 +8,14 @@ Its one role, a GPU generator, runs on local or ssh workers. A cycle plays a chu
 hidden-leaves HastyBot self-play, labels `positions_per_game` turns of each
 game into pools as policy_set's generators do (policy_set.write_pools: the
 .forgone sidecar, then policy_set_pool_tool), and confirms every pool whose
-leader sits outside the cut with blind_spot_confirm_tool. The worker delivers
-what the step-4 tools read and drops the pools, megabytes per chunk:
+leader sits outside the cut with blind_spot_confirm_tool. Under inferred
+beliefs it then writes the viewer's opponent-rack panel for the kept positions
+(blind_spots_beliefs.py). The worker delivers what the step-4 tools and the
+viewer read and drops the pools, megabytes per chunk:
 
     data/found/<stem>.slog              the chunk's games
     data/found/<stem>.forgone           their forgone plays (inferred beliefs)
+    data/found/<stem>.beliefs.json      the kept positions' beliefs (inferred beliefs)
     data/found/<stem>.blindspots.json   every confirmed position, kept or not
     data/gcg/<stem>-g<G>-turn<N>.gcg    the game up to each kept position
 
@@ -30,6 +33,9 @@ from pathlib import Path
 from typing import NamedTuple
 
 from scribblez import params as params_mod
+from scribblez.blind_spots_beliefs import BeliefWriter
+from scribblez.blind_spots_viewer import BELIEFS_SUFFIX
+from scribblez.leave_inference.beliefs import LeaveBeliefs
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import run_games
@@ -45,8 +51,8 @@ FOUND_SUFFIX = ".blindspots.json"
 # The tag's data/ subdirectory of everything but the .gcg exports.
 FOUND_DIR = "found"
 # What a chunk delivers into FOUND_DIR, in order: the games, then their
-# sidecars. The .forgone exists only under inferred beliefs.
-FOUND_SUFFIXES = (".slog", ".forgone", FOUND_SUFFIX)
+# sidecars. The .forgone and the beliefs exist only under inferred beliefs.
+FOUND_SUFFIXES = (".slog", ".forgone", BELIEFS_SUFFIX, FOUND_SUFFIX)
 
 
 @dataclass(frozen=True)
@@ -148,13 +154,28 @@ class CycleResult(NamedTuple):
     nbytes: int  # delivered
 
 
-def run_cycle(ctx: WorkerContext, leaf: Path, model: Path | None, chunk_dir: Path) -> CycleResult:
-    """One cycle: play, pool, confirm and deliver a chunk in `chunk_dir`."""
+def write_beliefs(writer: BeliefWriter, chunk_dir: Path):
+    """The viewer's beliefs for the confirmed chunk in `chunk_dir`."""
+    (slog,) = chunk_dir.glob("*.slog")
+    writer.write(slog.with_name(slog.stem + FOUND_SUFFIX), chunk_dir / GCG_DIR)
+
+
+def run_cycle(
+    ctx: WorkerContext,
+    leaf: Path,
+    model: Path | None,
+    writer: BeliefWriter | None,
+    chunk_dir: Path,
+) -> CycleResult:
+    """One cycle: play, pool, confirm and deliver a chunk in `chunk_dir`, with
+    `writer`'s beliefs where the pools use `model`."""
     p = ctx.params
     t0 = time.monotonic()
     play_chunk(chunk_dir, ctx.worker_id, p, ctx.threads)
     t1 = time.monotonic()
     confirm_chunk(p, leaf, model, chunk_dir, ctx.threads)
+    if writer is not None:
+        write_beliefs(writer, chunk_dir)
     t2 = time.monotonic()
     found, nbytes = deliver_chunk(ctx.sink, chunk_dir)
     phases = {"gen_s": t1 - t0, "sim_s": t2 - t1, "upload_s": time.monotonic() - t2}
@@ -170,6 +191,12 @@ def run_generate(ctx: WorkerContext) -> int:
     except (FileNotFoundError, params_mod.ParamsError) as e:
         print(f"error: hidden_blind_spots source: {e}", file=sys.stderr)
         return 1
+    writer = None
+    if model is not None:
+        p = ctx.params
+        writer = BeliefWriter(
+            LeaveBeliefs(model), p.leave_inference_tag, p.leave_inference_generation
+        )
     work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
     shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir(parents=True)
@@ -181,7 +208,7 @@ def run_generate(ctx: WorkerContext) -> int:
             cycle += 1
             chunk_dir = work_dir / f"cycle-{cycle}"
             chunk_dir.mkdir()
-            r = run_cycle(ctx, leaf, model, chunk_dir)
+            r = run_cycle(ctx, leaf, model, writer, chunk_dir)
             shutil.rmtree(chunk_dir)
             stats.cycle_done(r.phases, units=r.found, nbytes=r.nbytes)
             print(f"cycle {cycle}: {r.found} position(s) kept")

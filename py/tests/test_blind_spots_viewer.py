@@ -1,5 +1,6 @@
 """The blind-spots viewer's data: a hidden_blind_spots report and its .gcg
-exports turned into the sim-survey viewer's payload."""
+exports turned into the sim-survey viewer's payload, and the beliefs sidecar
+that carries its opponent-rack panel."""
 
 import json
 from http.server import ThreadingHTTPServer
@@ -11,7 +12,8 @@ from urllib.request import urlopen
 
 import numpy as np
 import pytest
-from scribblez.blind_spots_viewer import BeliefPanel, played_move, readable, viewer_data
+from scribblez.blind_spots_beliefs import BeliefWriter
+from scribblez.blind_spots_viewer import played_move, readable, viewer_data
 from scribblez.survey_viewer_server import survey_handler
 
 GCG = """#character-encoding UTF-8
@@ -121,7 +123,7 @@ def test_played_move_reads_plays_exchanges_and_passes():
 
 
 class StubBeliefs:
-    """LeaveBeliefs' surface BeliefPanel calls, recording what it was asked."""
+    """LeaveBeliefs' surface BeliefWriter calls, recording what it was asked."""
 
     def __init__(self):
         self.calls = []
@@ -137,44 +139,60 @@ class StubBeliefs:
         return [{"leave": "ABC", "refill": "D" * b.refill}][:n]
 
 
-def test_the_belief_panel_charts_each_position_and_serves_samples(tag):
+def test_the_beliefs_sidecar_charts_each_kept_position_with_sample_racks(tag):
     found, gcg = tag
-    data = viewer_data(found, gcg)
     model = StubBeliefs()
-    panel = BeliefPanel(data, found, model)
-    # One query per .slog, at each position's 0-based turn, with its unseen
-    # pool (everything off the board and the mover's rack) and the opponent's
-    # rack size.
-    entries = data["positions"]
+    sidecar = BeliefWriter(model, "li", 7).write(found / "s.blindspots.json", gcg)
+    assert sidecar == found / "s.beliefs.json"
+    # One query per report, at each kept position's 0-based turn, with its
+    # unseen pool (everything off the board and the mover's rack) and the
+    # opponent's rack size.
+    entries = viewer_data(found, gcg)["positions"]
     on_board = [sum(c is not None for row in e["board"] for c in row) for e in entries]
+    rack_sizes = [e["opp_rack_count"] for e in entries]
     assert model.calls == [
-        (
-            "s.slog",
-            [(0, 2), (2, 9)],
-            [100 - n - 7 for n in on_board],
-            [e["opp_rack_count"] for e in entries],
-        )
+        ("s.slog", [(0, 2), (2, 9)], [100 - n - 7 for n in on_board], rack_sizes)
     ]
-    chart = entries[0]["belief"]
-    assert (chart["modelled"], chart["leave_length"]) == (True, 3)
-    assert chart["refill"] == entries[0]["opp_rack_count"] - 3
-    assert chart["presence"][26] == {"tile": "?", "inferred": 0.5, "uniform": 0.25}
-    racks = panel.samples({"position": ["1"], "seed": ["5"]})["racks"]
-    assert racks == [{"leave": "ABC", "refill": "D" * (entries[1]["opp_rack_count"] - 3)}]
+    written = json.loads(sidecar.read_text())
+    assert written["leave_model"] == {"tag": "li", "generation": 7}
+    first = written["positions"][0]
+    assert (first["game"], first["turn"], first["leave_length"]) == (0, 2, 3)
+    assert first["presence"][26] == {"tile": "?", "inferred": 0.5, "uniform": 0.25}
+    assert first["racks"] == [{"leave": "ABC", "refill": "D" * (rack_sizes[0] - 3)}]
 
 
-def test_the_server_answers_routes_and_refuses_bad_queries():
-    def route(query):
-        return {"echo": int(query["x"][0])}
+def labeled(found: Path, model: dict):
+    report = found / "s.blindspots.json"
+    report.write_text(json.dumps(json.loads(report.read_text()) | {"leave_model": model}))
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), survey_handler(b"{}", {"/api/r": route}))
+
+def test_the_viewer_attaches_each_positions_belief_from_the_sidecar(tag):
+    found, gcg = tag
+    labeled(found, {"hash": "ab", "tag": "li", "generation": 7})
+    assert all("belief" not in p for p in viewer_data(found, gcg)["positions"])
+    BeliefWriter(StubBeliefs(), "li", 7).write(found / "s.blindspots.json", gcg)
+    entries = viewer_data(found, gcg)["positions"]
+    belief = entries[1]["belief"]
+    assert belief["refill"] == entries[1]["opp_rack_count"] - 3
+    assert belief["model"] == "li gen 7" and "stand_in_for" not in belief
+    assert "game" not in belief and len(belief["racks"]) == 1
+
+
+def test_a_stand_in_model_names_the_one_the_pools_used(tag):
+    found, gcg = tag
+    labeled(found, {"hash": "ab", "tag": "gone", "generation": 1188})
+    BeliefWriter(StubBeliefs(), "li", 7).write(found / "s.blindspots.json", gcg)
+    belief = viewer_data(found, gcg)["positions"][0]["belief"]
+    assert belief["model"] == "li gen 7" and belief["stand_in_for"] == "gone gen 1188"
+
+
+def test_the_server_answers_the_survey_only():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), survey_handler(b"{}"))
     Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        assert json.loads(urlopen(f"{base}/api/r?x=4").read()) == {"echo": 4}
         assert urlopen(f"{base}/api/survey").read() == b"{}"
-        for bad in ("/api/r?x=no", "/api/r", "/api/nothing"):
-            with pytest.raises(HTTPError):
-                urlopen(base + bad)
+        with pytest.raises(HTTPError):
+            urlopen(f"{base}/api/nothing")
     finally:
         server.shutdown()
