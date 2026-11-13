@@ -15,6 +15,7 @@ ports, so it replaces a running sim_survey_viewer.py.
 Usage:
     ./py/scripts/blind_spots_viewer.py --tag v1
     ./py/scripts/blind_spots_viewer.py --tag v1 --min-bag 8
+    ./py/scripts/blind_spots_viewer.py --tag v1 --no-beliefs
     ./py/scripts/blind_spots_viewer.py --found-dir <dir of reports> --gcg-dir <dir of .gcg>
 """
 
@@ -38,6 +39,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--min-bag", type=int, default=0, help="show positions with at least this many in the bag"
     )
+    p.add_argument(
+        "--no-beliefs",
+        action="store_true",
+        help="skip the opponent-rack panel, e.g. when the pools' leave inference model is gone",
+    )
     p.add_argument("--api-port", type=int, default=DEFAULT_API_PORT, help="survey API server port")
     p.add_argument("--dev-port", type=int, default=DEFAULT_DEV_PORT, help="Vite dev server port")
     add_mount_root_argument(p)
@@ -55,7 +61,11 @@ def main() -> int:
         print(f"no kept position in {args.found_dir} with bag >= {args.min_bag}", file=sys.stderr)
         return 1
     routes = {}
-    model = leave_model_path(report_header(args.found_dir), args.mount_root)
+    model = (
+        None
+        if args.no_beliefs
+        else leave_model_path(report_header(args.found_dir), args.mount_root)
+    )
     if model is not None:  # the opponent-rack panel, under the pools' own beliefs
         panel = BeliefPanel(data, args.found_dir, LeaveBeliefs(model))
         routes["/api/leave_samples"] = panel.samples
