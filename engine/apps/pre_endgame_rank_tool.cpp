@@ -9,8 +9,9 @@
 //   pre_endgame_rank_tool --positions list.txt --out ranks.jsonl
 //
 // --positions names a file of lines "<.slog path> <game> <turn>", both
-// 0-based (position_pick_tool's). --out gets a JSON line per position, in the
-// file's order: its "slog", "game" and "turn", the "bag", the "total" bag
+// 0-based (position_pick_tool's). --out gets a JSON line per position, each
+// as its solve finishes (minutes apiece, so a run cut short keeps what it
+// solved): its "slog", "game" and "turn", the "bag", the "total" bag
 // draws each play is scored over, and "plays", best first, each a "move" in
 // the reports' notation (data/gcg_writer.h's move_notation) with the "points"
 // it wins of them, a draw counting half. The mover's rack is the replay's; the
@@ -37,6 +38,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -119,17 +121,20 @@ void run(const Options& opt) {
   const std::map<std::string, std::vector<char>> slogs = load_recorded_slogs(asked);
   const Dictionary& dict = load_dictionary_or_throw();
   HastyEquity::ensure_initialized(Lexicon::instance().name());
-  std::vector<std::string> lines(asked.size());
-  util::parallel_for(
-    asked.size(), [&](size_t i) { lines[i] = rank(asked[i], slogs.at(asked[i].slog), dict, opt); });
   std::ofstream file;
   if (!opt.out.empty()) {
     file.open(opt.out);
     if (!file) throw util::CleanException("cannot write {}", opt.out);
   }
   std::ostream& out = opt.out.empty() ? std::cout : file;
-  for (const std::string& line : lines) out << line << "\n";
-  std::cerr << std::format("ranked {} position(s)\n", asked.size());
+  std::mutex writing;
+  size_t done = 0;
+  util::parallel_for(asked.size(), [&](size_t i) {
+    const std::string line = rank(asked[i], slogs.at(asked[i].slog), dict, opt);
+    const std::lock_guard lock(writing);
+    out << line << "\n" << std::flush;
+    std::cerr << std::format("ranked {} / {}\n", ++done, asked.size());
+  });
 }
 
 }  // namespace
