@@ -519,7 +519,7 @@ def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypa
     assert record["slot_eval_pointer_scale"] == pytest.approx(slot.POINTER_SCALE_INIT, rel=0.1)
     # The dashboard's figures read the record's keys; only set sizes past the
     # slots are absent.
-    for _, keys, *_ in plots.POLICY_SET_QUALITY:
+    for _, keys, *_ in plots.POLICY_SET_QUALITY + plots.POLICY_SET_LOSS:
         for key in keys:
             assert key in record or int(key.rsplit("_", 1)[1]) > TINY.slots, key
     assert paths.rolling_checkpoint.exists()

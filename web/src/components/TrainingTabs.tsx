@@ -146,7 +146,9 @@ export function FigureTab({
 // the Linear x/Log x selector that governs the x-axis of BOTH figures), then the
 // value-quality figure below, with the controls specific to it -- Smooth and a
 // Secondary tag to overlay -- sitting between the two. The two figures are
-// fetched separately so those controls can live between them.
+// fetched separately so those controls can live between them. A workload whose
+// loss terms need more than the stacked training loss (a held-out counterpart)
+// names its own `detailFigure`, shown last, linear x only.
 //
 // The Linear x/Log x and Absolute/% knobs never talk to the API: each figure
 // arrives with every knob variant as pre-built named rows -- the quality figure
@@ -160,7 +162,9 @@ const X_AXIS_LOG = 'x_log';
 const NORM_ABSOLUTE = 'abs';
 const NORM_PERCENT = 'pct';
 
-export function LossTab({ task, tag }: { task: string; tag: string | null }) {
+export function LossTab({ task, tag, detailFigure }: {
+  task: string; tag: string | null; detailFigure?: string;
+}) {
   const [normalized, setNormalized] = useState(false);
   const lossHandle = useRef<FigureHandle | null>(null);
   const qualityHandle = useRef<FigureHandle | null>(null);
@@ -179,6 +183,7 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
     `&smooth=${smoothed ? 1 : 0}${secondary ? `&secondary=${encodeURIComponent(secondary)}` : ''}`,
     qualityHandle,
   );
+  const detailItem = useFigureItem(task, detailFigure ? tag : null, detailFigure ?? '', 'metrics', '');
   const otherTags = tags.filter((t) => t !== tag);
   const xAxisRows = useMemo<Visibility>(
     () => ({ [X_AXIS_LINEAR]: !logX, [X_AXIS_LOG]: logX }), [logX],
@@ -236,6 +241,9 @@ export function LossTab({ task, tag }: { task: string; tag: string | null }) {
             item={qualityItem} emptyText="" visibility={xAxisRows} handleRef={qualityHandle}
           />
         </>
+      )}
+      {detailItem != null && (
+        <div style={{ marginTop: 16 }}><FigureBody item={detailItem} emptyText="" /></div>
       )}
     </div>
   );
