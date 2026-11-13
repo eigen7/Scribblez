@@ -14,7 +14,9 @@ with the policy-set model's set forms moved to an
 [appendix](#appendix-the-shelved-set-forms); revised 2026-11-13 to choose
 Alice's candidates by a screen of every legal move ([The screen at the
 root](#the-screen-at-the-root)) and to put the generations ahead of the
-store ([Build order](#build-order)); not yet placed in
+store ([Build order](#build-order)), which
+[deep_bot_generations.md](deep_bot_generations.md) plans as one workload;
+not yet placed in
 the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
@@ -1090,9 +1092,12 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
 - **The labels are free.** A `.slog` stores the initial racks and every move
   with the tiles drawn after it, so replay reconstructs every player's true
   leave at every turn ([architecture.md](../architecture.md)).
-- **Train `I_k` only on `P_k`'s games, warm-started from `I_{k−1}`.** Trained
+- **Train `I_k` on the newest games, warm-started from `I_{k−1}`.** Trained
   on a buffer that mixes generations, an inference network converges to Bayes'
-  rule under the *average* policy, not the current one. The games come from
+  rule under the *average* policy, not the current one, so the window is
+  short: a few of DeepBot's own generations, which differ far less than
+  HastyBot differs from any of them
+  ([deep_bot_generations.md](deep_bot_generations.md#the-trainer)). The games come from
   the agent itself at a reduced budget: DeepBot under the `hasty` reply
   model, whose [screen](#the-screen-at-the-root) finds the moves static
   equity buries in a fifth of a second a turn. The policy's top move without
@@ -1119,9 +1124,13 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   After HastyBot's move the belief is worth what its held-out evaluation
   says. After the moves the screen now brings to the root it is worse than
   no belief, and Bob's subtree answers a rack Alice does not hold. Each
-  generation trains on games that hold such moves, which is what closes
-  the gap, and why the generations come before the store in the [build
-  order](#build-order).
+  generation trains on games that hold such moves, which closes the gap
+  where the agent goes on to play the move, and is why the generations come
+  before the store in the [build order](#build-order). After a candidate
+  Alice would not play from her rack the row stays negative under any
+  belief that follows Bayes' rule, since the racks that play it are not
+  hers, so each generation is read at the move played
+  ([deep_bot_generations.md](deep_bot_generations.md#measurements)).
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
@@ -1411,10 +1420,12 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
       the reply of a second run of the subtree on fresh samples at 45.0%. At
       `R_B = 20` the reply is too noisy a reference to tell a policy from
       HastyBot: each agrees with it as often as it agrees with itself.
-11. **Generations.** DeepBot plays itself under the `hasty` reply model,
-    and its games train the next leave inference model (on those games
-    alone, warm-started), leaf network and policy, the pools and grouped
-    pools labeled from their positions under the new models
+11. **Generations,** as one dashboard workload
+    ([deep_bot_generations.md](deep_bot_generations.md)). DeepBot plays
+    itself under the `hasty` reply model, and its games train the next leave
+    inference model (warm-started, on a short window), leaf network and
+    policy, the pools kept from self-play's own screen and the grouped pools
+    labeled from its positions under the new models
     ([Generations](#generations)). They come before the store because the
     store's lessons are about Bob's replies, and under `I_0` his belief
     after a move HastyBot would not play is worse than no belief, so
@@ -1422,9 +1433,9 @@ Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
     Alice does not hold. Once Bob's subtree runs in
     the generating agent, its self-play also logs each turn's paired `Δ`
     for the candidates that reach the subtree, and the root correction head
-    trains on those records. *Measure:* per generation, Bob's belief
-    against the leave Alice keeps, by her candidate's static-equity rank
-    (`py/scripts/deep_bot/belief_truth.py`); the picks at the blind spots
+    trains on those records. *Measure:* per generation, the belief
+    against the leave the mover keeps, by the static-equity rank of the move
+    played; the picks at the blind spots
     under each reply model (`py/scripts/deep_bot/blind_spot_picks.py`); and
     the root correction head's held-out error against `Δ = 0`.
 12. **The store input,** trained by masked prediction on the grouped pools.
