@@ -344,11 +344,14 @@ The last column is over the picks the report simmed. A `hasty` turn at these
 positions takes 0.21 s with the screen against 0.07 s without (a sample of
 150, the dev laptop's GPU otherwise idle).
 
-The confirming sims' opponent is HastyBot, so the `hasty` rows measure the
-screen alone: with it, the agent finds what a pool's labels find. The
-`subtree` rows differ from them where modeling Bob as a searcher changes
-the verdict, where the subtree's own noise does, and where the two reply
-models meet in one comparison: with 2 to 7 tiles in the bag, the `subtree`
+The reports' verdicts are hasty sims', so the table does not rank the
+reply models: no agent can score above `hasty` on a reference `hasty`
+produced. What it shows is whether the candidates hold the move. The
+`hasty` rows measure that alone: with the screen, the agent finds what a
+pool's labels find. The `subtree` rows count how often that agent departs
+from the hasty verdict, which it does where modeling Bob as a searcher
+changes the verdict, where the subtree's own noise does, and where the two
+reply models meet in one comparison: with 2 to 7 tiles in the bag, the `subtree`
 agent's pick empties the bag at 50% of these positions and the `hasty`
 agent's at 28%, and a candidate that empties the bag keeps its hasty value
 beside the others' subtree values ([When Alice's move empties the
