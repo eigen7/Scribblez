@@ -12,15 +12,6 @@
 
 namespace scribblez {
 
-namespace {
-
-EndgameSolver& thread_solver() {
-  thread_local EndgameSolver solver;
-  return solver;
-}
-
-}  // namespace
-
 void PreEndgameTurnParams::add_options(boost::program_options::options_description& desc,
                                        const std::string& prefix) {
   namespace po = boost::program_options;
@@ -37,7 +28,7 @@ EndgameTurnPolicy::EndgameTurnPolicy(const EndgameSolver::Params& params,
     : params_(params), peg_(peg) {}
 
 EndgameSolver& EndgameTurnPolicy::solver() const {
-  EndgameSolver& s = thread_solver();
+  EndgameSolver& s = thread_endgame_solver();
   s.set_incremental_movegen(incremental_movegen_);
   return s;
 }
@@ -89,7 +80,7 @@ void EndgameTurnPolicy::observe_move(const Move& move) {
 void EndgameTurnPolicy::begin_game() {
   scoreless_turns_ = 0;
   solve_totals_ = {};
-  thread_solver().clear();
+  thread_endgame_solver().clear();
 }
 
 }  // namespace scribblez

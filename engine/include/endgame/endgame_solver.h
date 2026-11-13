@@ -305,4 +305,11 @@ class EndgameSolver {
   uint16_t tt_gen_ = 1;  // current generation; entries with gen != this are empty
 };
 
+// The calling thread's own solver. A solver's transposition table is
+// thread-exclusive, and parallel work runs on whichever threads the pool gives
+// it, so code that solves from a parallel loop solves on this one. Its hash is
+// position-keyed, so entries one caller left are another's reuse, never its
+// error.
+EndgameSolver& thread_endgame_solver();
+
 }  // namespace scribblez

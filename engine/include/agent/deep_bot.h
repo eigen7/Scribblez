@@ -28,10 +28,12 @@
 //     information choose her second move (agent/alice_subtree.h); two hasty
 //     plies after it value the candidate. For a HastyBot opponent.
 //
-// Under the subtrees, the candidates are a first pass of hasty sims' best;
-// under any model, a candidate that empties the bag gets the hasty sims, which
-// then play the game to its end: Bob, holding every unseen tile, has nothing
-// to infer.
+// Under the subtrees, a first pass of hasty sims over every candidate leaves
+// its best for the reply model. A candidate that empties the bag has no
+// subtree: Bob, holding every unseen tile, has nothing to infer. Under
+// `subtree` the endgame solver makes his reply to it
+// (agent/endgame_reply.h); under the other models it keeps the first pass's
+// value, whose sims play the game to its end by HastyBot.
 //
 // Hidden leaves only, before the endgame: EndgameAgent<DeepBot> solves the turns
 // with the bag empty, and DeepBot alone plays HastyBot's move there.
@@ -101,7 +103,11 @@ class DeepBot : public Agent {
     // apportioned among his contenders.
     int sims_per_rack = 12;
     SubtreeParams subtree{};  // Bob's, under `subtree`
-    SubtreeParams second{};   // Alice's second turn's, under `alice-subtree`
+    // Under `subtree`, the node budget of each endgame solved after a
+    // candidate that empties the bag; 0: such a candidate keeps the first
+    // pass's value.
+    uint64_t endgame_reply_budget = 2000;
+    SubtreeParams second{};  // Alice's second turn's, under `alice-subtree`
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
     // the hasty sims and a second run of the subtrees.
     std::string subtree_dump{};
@@ -170,16 +176,28 @@ class DeepBot : public Agent {
                          uint64_t seed) const;
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
-  // The candidates whose hasty first pass (`hasty`) ranks them among the best
-  // subtree_candidates that do not empty the bag, in candidate order: the ones
-  // the subtree searches.
+  // Whether the endgame solver makes Bob's reply to a candidate that empties
+  // the bag.
+  bool solves_endgame_replies() const;
+  // The candidates the hasty first pass (`hasty`) ranks among its best
+  // subtree_candidates, in candidate order. One that empties the bag competes
+  // only when the endgame solver will value it; otherwise all of those keep
+  // their first-pass values, and the best are of the rest.
   std::vector<size_t> survivors(const std::vector<Move>& moves, const std::vector<PoolLabel>& hasty,
                                 int bag) const;
+  // Alice's value of each candidate that empties the bag, kPruned for the
+  // rest: the endgame solver's for those of `kept`, or without it the first
+  // pass's for all of them.
+  std::vector<double> emptying_values(const MoveRequest& req, const AliceTurn& turn,
+                                      const std::vector<PoolLabel>& hasty,
+                                      const std::vector<size_t>& kept) const;
   // Alice's value of each candidate under the reply model's subtree, for the
-  // `searched`; kPruned for the rest.
+  // `searched`, and `emptying`'s for the candidates it values; kPruned for
+  // the rest.
   std::vector<double> bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
                                          const HastySims& hasty,
-                                         const std::vector<size_t>& searched);
+                                         const std::vector<size_t>& searched,
+                                         const std::vector<double>& emptying);
   std::vector<double> second_turn_values(const MoveRequest& req, const AliceTurn& turn,
                                          const std::vector<size_t>& searched);
   void dump_turn(const MoveRequest& req, const AliceTurn& turn, const HastySims& hasty,
