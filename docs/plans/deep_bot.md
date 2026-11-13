@@ -127,14 +127,38 @@ cannot see are exactly Alice's rack, and his subtree does not apply:
 - Bob needs no belief about Alice's rack, since he can deduce it, and Alice
   needs no replenishment draws, since there are none.
 
-So for each sampled rack `r`, Alice skips the subtree and plays one sim to
-the game's end: Bob and Alice alternate moves by the mechanical rule until
-someone goes out or the game stalls, and the exact outcome enters `q(a)`.
-This is the play-to-the-end rule of [the sims](#sims), started one move
-earlier.
+So for each sampled rack `r`, Alice skips the subtree, and the endgame
+solver (`EndgameSolver`) makes Bob's move, on the CPU
+(agent/endgame_reply.h). Where it proves the endgame's class within its node
+budget, that class is her value at the rack. Where it does not, Bob plays
+the solve's move, both players continue by the mechanical rule until someone
+goes out or the game stalls, and the outcome is her value. A candidate that
+empties the bag is valued this way only if the hasty first pass keeps it
+among its best ([Budget](#budget)), like any other.
 
-That makes Bob's empty-bag move the one decision in the design that he does
-not search. The endgame solver (`EndgameSolver`) could choose it instead.
+Under the `hasty` and `alice-subtree` reply models Bob's empty-bag move is
+the mechanical rule's, as his other moves are: the candidate keeps its hasty
+sims' value, the play-to-the-end rule of [the sims](#sims) started one move
+earlier. Under `subtree` that value used to sit beside values earned against
+a searching Bob, and it read too well. Measured 2026-11-13 at the 794
+positions of the `hidden_blind_spots` tag `v1` with 7 or fewer tiles in the
+bag whose best outside move is not a pass
+(`py/scripts/deep_bot/blind_spot_picks.py`, [the screen's
+measurement](#the-screen-at-the-root)):
+
+| Reply model, and Bob's empty-bag move | Pick empties the bag, 2 to 7 in the bag | Picks the outside move: 1 / 2–3 / 4–7 in the bag | Seconds a turn: 1 / 2–3 / 4–7 |
+|---|---|---|---|
+| `hasty` | 0.281 | 0.953 / 0.921 / 0.842 | |
+| `subtree`, HastyBot's from the first pass | 0.504 | 0.913 / 0.509 / 0.407 | |
+| `subtree`, the endgame solver's | 0.219 | 0.423 / 0.373 / 0.435 | 0.30 / 1.00 / 1.28 |
+
+With the first pass's values the `subtree` agent emptied the bag at half the
+positions, against 28% for the `hasty` agent on the same ones; with the
+solver's it does so at 22%. With one tile in the bag every play empties it,
+so there the solver's reply is the whole evaluation, and it turns down more
+than half of the outside moves the hasty sims favour: a Bob who sees Alice's
+rack answers the fish or the setup that HastyBot walks past.
+
 Measured 2026-10-24 on the first empty-bag position of 200 HastyBot games,
 against a reference solve at budget 51,200 (which proved 131 of them):
 
@@ -145,8 +169,8 @@ against a reference solve at budget 51,200 (which proved 131 of them):
 | The budget-400 solve's own value, where it proved nothing (103) | 24 |
 
 A budget-400 solve takes 2.4 ms on one thread, a hasty playout 0.34 ms. A
-solve that proves nothing gives a usable move but not a usable value. The
-solver's move is a later upgrade, worth what an A/B of the agent shows; the
+solve that proves nothing gives a usable move but not a usable value, which
+is why an unproven endgame is played out from the solve's move. The
 positions above are mostly decided endgames, and the solver's gains in the
 [endgame benchmark](../endgame_bench_results.md) sit in close ones.
 
