@@ -163,6 +163,11 @@ void DeepBot::begin_game(const BeginGameRequest& req) {
   ++games_;
 }
 
+void DeepBot::observe_turn(const MoveRequest& req) {
+  // The rack make_move() would have recorded, which later queries' masks read.
+  if (req.bag_size > 0) recorder_.own_query(req);
+}
+
 void DeepBot::observe_move(const Move& move) {
   recorder_.observe(move);
   if (encoder_) encoder_->apply_move(move);

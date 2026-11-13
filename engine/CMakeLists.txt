@@ -52,6 +52,7 @@ add_library(scribblez_core STATIC
   src/agent/greedy_agent.cpp
   src/arena/game_engine.cpp
   src/arena/game_runner.cpp
+  src/arena/recorded_turn.cpp
   src/lexicon/hasty_equity.cpp
   src/agent/human_web_agent.cpp
   src/serve/service_url.cpp
@@ -260,6 +261,17 @@ target_link_libraries(scribblez_neural_agents PUBLIC
 add_executable(play_game
   apps/play_game.cpp)
 target_link_libraries(play_game PRIVATE
+  scribblez_core
+  scribblez_neural_agents
+  Boost::program_options
+  Boost::json
+  Boost::filesystem
+  Boost::system
+  Threads::Threads)
+
+# An agent's picks at positions of recorded games (docs/blind_spots.md).
+add_executable(position_pick_tool apps/position_pick_tool.cpp)
+target_link_libraries(position_pick_tool PRIVATE
   scribblez_core
   scribblez_neural_agents
   Boost::program_options

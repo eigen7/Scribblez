@@ -92,6 +92,12 @@ class Agent {
   // sequence, so this is where a stateful agent resets.
   virtual void begin_game(const BeginGameRequest& req) {}
 
+  // Called in place of make_move() at a turn of this agent's seat whose move
+  // was made for it: a recorded game replayed to a later position
+  // (apps/position_pick_tool.cpp). An agent whose later turns read what it
+  // saw at its earlier ones records it here.
+  virtual void observe_turn(const MoveRequest& req) {}
+
   // Called after every move of the game, both seats', in turn order, so a
   // stateful agent can mirror the whole game.
   virtual void observe_move(const Move& move) {}

@@ -190,6 +190,10 @@ PlayerFactory::Players PlayerFactory::make_players(const Params& params, int thr
   return out;
 }
 
+std::unique_ptr<Agent> PlayerFactory::make_player(const std::string& spec, int thread_id) {
+  return make_one(parse_player_spec(spec), thread_id, /*opp_name=*/"");
+}
+
 std::string PlayerFactory::all_player_types_help() {
   std::ostringstream o;
   for (const PlayerType& pt : kPlayerTypes) {

@@ -41,6 +41,10 @@ class PlayerFactory {
   // Throws util::CleanException on bad input.
   static Players make_players(const Params& params, int thread_id);
 
+  // One agent from one --player value, for a tool that seats a single agent.
+  // Throws util::CleanException on bad input.
+  static std::unique_ptr<Agent> make_player(const std::string& spec, int thread_id);
+
   static std::string all_player_types_help();
 };
 
