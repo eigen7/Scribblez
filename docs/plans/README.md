@@ -55,6 +55,14 @@ moved on. New plans go here, not in `docs/` proper.
   publishes eval metrics. The win table is a standalone fit that the leave
   inference workload also refits each generation, and every artifact carries
   a format version distinct from its generation.
+- **[deep_bot_generations.md](deep_bot_generations.md)**: *proposed, not
+  built.* One workload whose tag is a line of DeepBot generations. GPU
+  generators play DeepBot against itself on the tag's newest models, and
+  self-play's own root screen supplies the policy's pools. One trainer
+  trains the leave inference model, the leaf network and the policy on each
+  generation, scoring them on it first, and publishes the three as a release
+  that running generators pick up. A measure role plays each release against
+  fixed opponents and at the known positions.
 - **[gpu_hasty_rollouts.md](gpu_hasty_rollouts.md)**: *feasibility analysis
   and build plan, not built.* Running batches of HastyBot rollouts on the
   GPU: a block per rollout, exhaustive word-map probing reduced to an argmax
