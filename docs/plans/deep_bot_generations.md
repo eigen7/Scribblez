@@ -17,8 +17,10 @@ runs.
   together as a **release**.
 - **Generators pick up each release** at their next chunk. Nothing is pinned
   at task creation except the seeds.
-- **A measure role** plays each release against fixed opponents and at the
-  known positions, and charts the results by release.
+- **A measure role** plays each release against HastyBot and against release
+  0, records its picks at the known positions, and charts the results by
+  release. BestBot is too slow for the loop: a match against it is run on
+  demand, against any kept release.
 
 The tag reuses the generational machinery as it stands: one data home beside
 one trainer, staged chunks, generation manifests and the `open_ahead` gate
@@ -160,8 +162,9 @@ same units, so they still run, and their results stay bit-identical. The
    checkpoint holding the three models' and optimizers' state, the cursor,
    and last the generation's record. A release exists once its manifest
    does, so a generator never reads two models of different releases. Every
-   `keep_checkpoint_every`th release's checkpoint is kept, as a seed for a
-   later tag.
+   release's exports are kept, about 23 MB, so that any release can be
+   played later. Every `keep_checkpoint_every`th release's checkpoint is
+   kept as well, as a seed for a later tag.
 4. **Evict** generations older than the longest window.
 
 A series of scores, each on a different generation's games, mixes the
@@ -274,9 +277,9 @@ Per generation, from the trainer, each also under release 0:
 
 Per release, from the measure role (every `match_every_generations`):
 
-- **Matches** of `A_k` against `A_0` and against BestBot, paired. A match
-  takes GPU time from generation: 500 games of the generating agent are
-  about half an hour of one laptop GPU.
+- **A match against HastyBot** (`hastybot-endgame`) and **a match against
+  `A_0`**, each `match_games` games, mirrored in pairs. See [the
+  matches](#the-matches).
 - **The picks at the known positions** (`positions/NWL23/interesting-positions`,
   [docs/analysis](../analysis)) under the full agent, `--reply subtree`, on
   the release's models: a handful of turns. These are the positions the
@@ -285,6 +288,70 @@ Per release, from the measure role (every `match_every_generations`):
   ([blind_spots.md](../blind_spots.md)), as a regression read under one
   reply model. Their verdicts come from hasty sims under the seeds' leaf
   network, so they do not rank releases finely.
+
+### The matches
+
+Measured 2026-11-14 on the dev laptop (28 threads, one RTX 5000 Ada), the
+generating agent on the seeds' newest exports:
+
+| Opponent | Games | Cost of a game | The agent's wins | Correlation of a pair's two results (win, spread) |
+|---|---|---|---|---|
+| HastyBot (`hastybot-endgame`) | 300 | 1.8 s of the GPU | 186 (62%) | −0.11, −0.30 |
+| BestBot (`bestbot-endgame`) | 55 | 18 core-minutes | 28 | −0.47, −0.80 (27 pairs) |
+| `A_0` (the agent itself) | | 3.3 s of the GPU, from self-play's rate | | |
+
+BestBot's sims run on the CPU: a match fills every core for about 1.4 games
+a minute, 12 hours for 1,000 games. So it is not in the loop.
+
+**In the loop,** `match_games` starts at 200 against each opponent. On one
+laptop that is 17 minutes of the GPU, about 15% of a 2,000-game generation's.
+The win rate of 200 games has a standard error of about 3.4 points, which
+does not resolve one release's gain; the chart draws each release's rate and
+the mean over a trailing window of releases, and a day's releases together
+come to about 1 point. Mirrored pairs gain little against HastyBot, whose
+games part ways early.
+
+The two opponents read differently:
+
+- **HastyBot is a regression read.** Under the `hasty` reply the agent's
+  model of its opponent is HastyBot exactly, so release 0 is the release
+  best fitted to this opponent. Later releases learn their beliefs and leaf
+  values from DeepBot's games, which describe HastyBot less well. The rate
+  can stall or fall while the agent gets stronger; a fall is still worth
+  seeing.
+- **`A_0` is where the loop's own gain shows,** though only against its own
+  line.
+
+**On demand,** a match command takes the tag, a release and an opponent's
+player spec, runs on any machine (the release's exports are all it needs),
+and files its games under that release, where the chart draws them beside
+the loop's. This is how a release is measured against BestBot, during the
+run or after it.
+
+**A luck correction, later.** Most of a match's variance is the tiles. The
+correction (AIVAT's, for chance events) takes a value function fixed apart
+from the game and, at each draw, subtracts the value of the state after the
+tiles drawn less its mean over the draws the bag could have dealt. Whatever
+the value function, the sum has mean zero, so the corrected outcome
+estimates the same win rate; the better the value function, the less
+variance is left. It reads nothing from the players, only each state before
+and after a draw, so it can be computed from a game's log after the fact. The loop is built to let it arrive later:
+
+- **Every match game's log is kept** (`.slog`: the opening racks, the moves
+  and the tiles drawn after each), beside a row per game naming the release,
+  the opponent, the seats, the seed and the scores. A game's log is about
+  600 bytes.
+- **The chart is computed from the per-game rows** by one estimator, today
+  the mean. A correction adds a column to the rows and a second estimator;
+  no match is replayed.
+
+The natural value function is one batch of the agent's hasty rollouts with
+release 0's leaf network per draw: 1,000 rollouts, what the agent gives one
+of its ten candidates. Its worth is unmeasured. The floor is known: on
+40,000 HastyBot self-play games, a correction linear in the counts of each
+tile drawn removes 19% of the win variance and 28% of the spread's. Its
+first output would be the variance it removes on the stored games, BestBot's
+included.
 
 ## What the controller needs
 
@@ -295,7 +362,8 @@ Per release, from the measure role (every `match_every_generations`):
 | Adding and removing generator slots on machines | built, by hand | none |
 | A role's out-of-tag inputs (the seeds) | built, pushed when a container is created | none |
 | A new release reaching a running remote slot | not built: inputs are pushed once | push the newest release to every running generator and measure slot each reconcile pass, as `_push_controls` pushes the controls file |
-| Work dispatched per export, results ingested and charted | built for match eval, on one export series and a neural player | a runner that builds a DeepBot player from a release; dispatch reads the release series |
+| Work dispatched per export, results ingested and charted | built for match eval, on one export series and a neural player | a runner that builds a DeepBot player from a release; dispatch reads the release series; a row and a `.slog` kept per game |
+| A match on demand against a kept release | not built | a command that plays the match anywhere and files its games under the release |
 | Charts | one model's metrics per tag | a grid per model from one record |
 | Queue placement | `layout` and `gpu_need` hooks | measure the generator's and the trainer's GPU memory |
 
@@ -315,6 +383,9 @@ are added by hand, as `policy_set` tag `v1`'s are.
 - **Training goes non-finite:** the trainer stops before publishing
   (`finite_guard`) and its slot is paused as failed, which parks the
   generators. The last release stays the newest.
+- **A match against BestBot:** run the match command on a release, on a
+  machine with idle cores. It fills them, so not on a generator's machine
+  unless its threads are capped.
 - **A release plays worse:** nothing gates a release, as nothing gates
   AlphaZero's. The match chart shows it, and the remedy is a new tag seeded
   from an earlier release's kept checkpoint.
@@ -337,6 +408,8 @@ are added by hand, as `policy_set` tag `v1`'s are.
 
 On one laptop GPU the loop plays about 26,000 games a day: 13 releases at
 2,000 games each, with 520,000 leave and leaf rows and as many pools. The
+matches take about 15% of that at `match_games` 200, leaving 11 releases a
+day. The
 seeds trained on 117 million rows (leave inference), 419 million (leaf) and
 1.3 million pools (policy: about 140,000 pools, each about ten times).
 
@@ -370,8 +443,13 @@ Each is a pull request.
    and the belief metric by the played move's rank. *Measure:* pools a
    second and bytes a game against the table above; the policy's curve
    against pools trained.
-6. **The measure role:** matches, the known positions, the blind spots.
+6. **The measure role:** the matches against HastyBot and `A_0` with their
+   games kept, the match command, the known positions, the blind spots.
+   *Measure:* the GPU time a match takes from a running generator.
 7. **Queue placement:** the roles' measured GPU memory and the layout.
+
+Not scheduled: the [luck correction](#the-matches), over the games step 6
+keeps.
 
 ## Alternatives considered
 
