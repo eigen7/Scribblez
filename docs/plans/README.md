@@ -55,6 +55,13 @@ moved on. New plans go here, not in `docs/` proper.
   publishes eval metrics. The win table is a standalone fit that the leave
   inference workload also refits each generation, and every artifact carries
   a format version distinct from its generation.
+- **[deep_bot_roadmap.md](deep_bot_roadmap.md)**: *proposed, not built.*
+  The order of DeepBot's remaining work. The agent whose sims use HastyBot's
+  replies is matured first: an exact last turn, its parts measured one at a
+  time against Macondo's BestBot's, and generations. Then the policy, as a
+  transformer, becomes the opponent's reply inside the sims, so that the
+  sims' opponent blocks a setup. The opponent's subtree, the evidence store
+  and the learned budget wait.
 - **[deep_bot_generations.md](deep_bot_generations.md)**: *proposed, not
   built.* One workload whose tag is a line of DeepBot generations. GPU
   generators play DeepBot against itself on the tag's newest models, and

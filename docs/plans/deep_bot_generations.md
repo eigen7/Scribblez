@@ -1,7 +1,8 @@
 # Plan: one workload that advances DeepBot's generations
 
 **Status: proposed 2026-11-13, not built.** This is step 11 of DeepBot's
-[build order](deep_bot.md#build-order) as a dashboard workload. Its
+[build order](deep_bot.md#build-order) as a dashboard workload, and step 3
+of [the order of the remaining work](deep_bot_roadmap.md). Its
 measurements inform the next step; no pass or kill thresholds are fixed in
 advance.
 
@@ -281,9 +282,9 @@ Per release, from the measure role (every `match_every_generations`):
   `A_0`**, each `match_games` games, mirrored in pairs. See [the
   matches](#the-matches).
 - **The picks at the known positions** (`positions/NWL23/interesting-positions`,
-  [docs/analysis](../analysis)) under the full agent, `--reply subtree`, on
-  the release's models: a handful of turns. These are the positions the
-  project is judged on.
+  [docs/analysis](../analysis)) on the release's models, under the
+  generating agent and under `--reply subtree`: a handful of turns. These
+  are the positions the project is judged on.
 - **The picks at the blind spots**
   ([blind_spots.md](../blind_spots.md)), as a regression read under one
   reply model. Their verdicts come from hasty sims under the seeds' leaf
@@ -396,11 +397,12 @@ are added by hand, as `policy_set` tag `v1`'s are.
 
 - **The policy is trained but not played.** The `hasty` generating agent
   reads `I_k` and `L_k`. `π_k` rides in the release so that the agent can
-  take it up without a change here: as the screen's replacement (the turn's
-  cost is mostly the screen) or as Bob's proposer in the subtree.
-- **Bob's subtree is not in the generating agent:** it costs seconds a turn
-  where the `hasty` reply costs a fifth of one. So the loop logs no paired
-  `Δ` and trains no root correction head yet.
+  take it up without a change here. The [order of the remaining
+  work](deep_bot_roadmap.md) has it played as Bob's reply in the sims, and
+  the generating agent then switches to that reply.
+- **Bob's subtree is not in the generating agent,** and waits: it costs
+  seconds a turn where the `hasty` reply costs a fifth of one. So the loop
+  logs no paired `Δ` and trains no root correction head.
 - **Grouped pools** stay off until the store input is built. They are a
   sidecar the pool tool writes over the chunk, as in `policy_set`.
 

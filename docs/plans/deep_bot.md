@@ -16,7 +16,9 @@ Alice's candidates by a screen of every legal move ([The screen at the
 root](#the-screen-at-the-root)) and to put the generations ahead of the
 store ([Build order](#build-order)), which
 [deep_bot_generations.md](deep_bot_generations.md) plans as one workload;
-not yet placed in
+revised 2026-11-15: [deep_bot_roadmap.md](deep_bot_roadmap.md) orders the
+remaining work, the `hasty` agent and a policy as Bob's reply first, with
+Bob's subtree, the store and the learned budget waiting; not yet placed in
 the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
@@ -1296,6 +1298,10 @@ Three cheaper levers remain:
 Each step names what it measures. The measurements guide the next step.
 Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
 Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
+Steps 1 to 10 are built. [deep_bot_roadmap.md](deep_bot_roadmap.md) sets
+the order from here: step 11's generations under the `hasty` reply, then a
+policy as Bob's reply in the sims, which this list does not have; the
+subtree's part of step 11 and steps 12 and 13 wait.
 
 1. **The leave inference model, `I_0`,** from HastyBot games, and the v0
    win table. *Measure:* held-out log-likelihood of the true leave against
