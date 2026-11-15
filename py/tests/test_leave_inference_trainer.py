@@ -19,7 +19,14 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 
 from scribblez import ffi, workloads  # noqa: E402
 from scribblez.dataset import SlogDataset  # noqa: E402
-from scribblez.leave_inference import forgone, holdout, loss, train_loop, trainer  # noqa: E402
+from scribblez.leave_inference import (  # noqa: E402
+    forgone,
+    holdout,
+    loss,
+    train_loop,
+    trainer,
+    unit,
+)
 from scribblez.leave_inference.heads import HEAD_TILTED, HEADS  # noqa: E402
 from scribblez.leave_inference.model import LeaveInferenceModel  # noqa: E402
 from scribblez.leave_inference.onnx_export import PUBLIC_KEY  # noqa: E402
@@ -65,9 +72,9 @@ def test_face_up_corpus_is_refused(tmp_path):
     for path in face_up.glob("*.slog"):
         buf = bytearray(path.read_bytes())
         h = np.frombuffer(buf, header, count=1)
-        h["flags"] |= trainer.FACE_UP_FLAG
+        h["flags"] |= unit.FACE_UP_FLAG
         path.write_bytes(bytes(buf))
-    guard = trainer.FaceUpGuard()
+    guard = unit.FaceUpGuard()
     guard.check([hidden])
     with pytest.raises(RuntimeError, match="face-up"):
         guard.check([face_up])
@@ -132,37 +139,24 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     assert calls == [(False, 0.0, (forgone.SUFFIX,))]
 
 
+def _small_unit(**params) -> unit.LeaveInferenceUnit:
+    params = leave_inference.LeaveInferenceParams(trunk_channels=8, num_blocks=1, **params)
+    return unit.LeaveInferenceUnit(params, torch.device("cpu"))
+
+
 @pytest.mark.parametrize("head", HEADS)
 def test_each_generation_exports_the_served_head_only(tmp_path, head):
     paths = _paths(tmp_path)
-    shapes = {s.name: s.dims for s in ffi.task_input_shapes("leave_inference")}
-    model = LeaveInferenceModel(
-        shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1, head=head
-    )
-    params = leave_inference.LeaveInferenceParams(head=head)
-    ctx = {
-        "tag": "t",
-        "config": {trainer.TABLE_KEY: "abc"},
-        "spatial_planes": shapes["input_spatial"][0],
-        "scalar_size": shapes["input_scalar"][0],
-    }
-    trainer.export_generation(paths, params, 3, model, ctx)
+    small = _small_unit(head=head)
+    trainer.export_generation(paths, small.params, 3, small, "t")
     assert paths.onnx_path(3).exists() == (head == HEAD_TILTED)
 
 
 @pytest.mark.parametrize("public", [False, True])
 def test_the_export_says_whether_the_model_is_public(tmp_path, public):
     paths = _paths(tmp_path)
-    params = leave_inference.LeaveInferenceParams(public=public)
-    shapes = {s.name: s.dims for s in ffi.task_input_shapes(trainer._task(params))}
-    model = LeaveInferenceModel(shapes["input_spatial"][0], shapes["input_scalar"][0], 8, 1)
-    ctx = {
-        "tag": "t",
-        "config": {trainer.TABLE_KEY: "abc"},
-        "spatial_planes": shapes["input_spatial"][0],
-        "scalar_size": shapes["input_scalar"][0],
-    }
-    trainer.export_generation(paths, params, 3, model, ctx)
+    small = _small_unit(public=public)
+    trainer.export_generation(paths, small.params, 3, small, "t")
     meta = {p.key: p.value for p in onnx.load(str(paths.onnx_path(3))).metadata_props}
     assert meta[PUBLIC_KEY] == ("1" if public else "0")
 
@@ -178,10 +172,9 @@ def test_holdout_decodes_the_runs_view(monkeypatch, public):
         def iter_batches(self, *args, **kwargs):
             return iter(())
 
-    monkeypatch.setattr(trainer, "SlogDataset", FakeDataset)
-    held = holdout.HoldoutSet(dir=Path("unused"), slogs=(), content_hash="")
+    monkeypatch.setattr(unit, "SlogDataset", FakeDataset)
     params = leave_inference.LeaveInferenceParams(public=public)
-    trainer._holdout_batches(held, params, cpu=type("Cpu", (), {"dataloader_workers": 0})())
+    unit.eval_batches(Path("unused"), params, cpu=type("Cpu", (), {"dataloader_workers": 0})())
     assert tasks == ["public_leave_inference" if public else "leave_inference"]
 
 
@@ -196,18 +189,17 @@ def test_holdout_hides_every_rows_private_history_or_none(monkeypatch, hide):
         def iter_batches(self, *args, **kwargs):
             return iter(())
 
-    monkeypatch.setattr(trainer, "SlogDataset", FakeDataset)
-    held = holdout.HoldoutSet(dir=Path("unused"), slogs=(), content_hash="")
+    monkeypatch.setattr(unit, "SlogDataset", FakeDataset)
     params = leave_inference.LeaveInferenceParams()
     cpu = type("Cpu", (), {"dataloader_workers": 0})()
-    trainer._holdout_batches(held, params, cpu, hide_private=hide)
+    unit.eval_batches(Path("unused"), params, cpu, hide_private=hide)
     assert fractions == [1.0 if hide else 0.0]
 
 
 def test_hidden_metrics_report_the_gap_to_the_own_view():
     own = {"eval_nll": 5.0, "eval_nll_vs_uniform": -0.4, "eval_value_bias": 0.1}
     hidden = {"eval_nll": 5.25, "eval_nll_vs_uniform": -0.15, "eval_value_bias": 0.3}
-    assert trainer.hidden_metrics(own, hidden) == {
+    assert unit.hidden_metrics(own, hidden) == {
         "eval_hidden_nll": 5.25,
         "eval_hidden_nll_vs_uniform": -0.15,
         "eval_hidden_gap": 0.25,

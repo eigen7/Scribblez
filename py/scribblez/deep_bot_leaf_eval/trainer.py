@@ -40,7 +40,7 @@ from scribblez.generational.controls import CpuController, default_controls, pro
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.leave_inference import holdout, win_table
-from scribblez.leave_inference.trainer import FaceUpGuard
+from scribblez.leave_inference.unit import FaceUpGuard
 from scribblez.paths import TagPaths
 from scribblez.position_eval.train_loop import run_epoch
 from scribblez.position_eval.trainer import (
