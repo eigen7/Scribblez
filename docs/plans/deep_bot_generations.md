@@ -428,9 +428,12 @@ and 40,000 rows a generation is what the short window is for.
 
 Each is a pull request.
 
-1. **The trainers' model units.** The three trainers split into unit and
-   loop, with no change in behavior. *Measure:* each standalone trainer's
-   outputs on a fixed seed, before and after.
+1. **The trainers' model units.** Built 2026-11-15: each of the three
+   trainers is a loop around a unit (`leave_inference/unit.py`,
+   `deep_bot_leaf_eval/unit.py`, `policy_set/unit.py`), with no change in
+   behavior. *Measure:* each standalone trainer's outputs on a fixed seed,
+   before and after. Each trainer's weights and record after one generation
+   on a small corpus are the same bit for bit.
 2. **The `deep_bot` trainer:** seeds and warm start, the three units on one
    cursor, evaluation before training with release 0 beside it, releases,
    the combined checkpoint and record, the re-sized clocks.
