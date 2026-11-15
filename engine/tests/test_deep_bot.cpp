@@ -116,6 +116,30 @@ class FavouringValues : public RolloutValues {
   Board favoured_;
 };
 
+// The CPU reference, counting the rollouts it runs from a position with
+// `emptied` tiles on the board or more (a candidate that emptied the bag) and
+// from the rest.
+class CountingValues : public RolloutValues {
+ public:
+  explicit CountingValues(int emptied) : inner_(nwl23(), synthetic_leaf()), emptied_(emptied) {}
+
+  BatchValues run(const RolloutBatch& batch) override {
+    for (const rollout_abi::RolloutTask& t : batch.tasks)
+      ++(batch.starts[t.position].board.num_tiles() >= emptied_ ? after_emptying : after_rest);
+    return inner_.run(batch);
+  }
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
+    return inner_.predict(leaves);
+  }
+
+  int after_emptying = 0;
+  int after_rest = 0;
+
+ private:
+  CpuRolloutValues inner_;
+  int emptied_;
+};
+
 // A game of `deepbot` against HastyBot from a fixed deal; returns its moves.
 std::vector<Move> play(DeepBot& deepbot) {
   HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
@@ -450,6 +474,59 @@ TEST(DeepBot, TheEndgameSolverRepliesToACandidateThatEmptiesTheBag) {
   }
   EXPECT_GT(solved, 0);  // this seed's game reaches a turn that can empty the bag
   std::filesystem::remove_all(dir);
+}
+
+// Under the hasty reply too: with a budget no sim runs from a candidate that
+// empties the bag, whose value the endgames give, and the rest, if any, still
+// race; without one every candidate is simmed. Past --subtree-candidates of
+// them, a first pass sims each at every rack and its best are solved.
+TEST(DeepBot, UnderTheHastyReplyTheSolverValuesACandidateThatEmptiesTheBag) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  HastyBot a({.thread_id = 0, .name = "A"});
+  HastyBot b({.thread_id = 0, .name = "B"});
+  Game game(a, b, nwl23(), /*seed=*/2);
+  game.play();
+  const GameLogStorage log = game.extract_log();
+  // The first turn whose static-equity top holds two candidates that empty
+  // the bag.
+  const int count = 6;
+  for (int turn = 0; turn < int(log.turns.size()); ++turn) {
+    const RecordedPosition at = recorded_position(log.view(), turn);
+    if (at.bag == 0 || at.bag > RACK_SIZE) continue;
+    const size_t mover = size_t(at.mover);
+    const Rack hidden;
+    const MoveRequest req{
+      at.board, nwl23(), at.racks[mover], hidden, at.scores[mover], at.scores[1 - mover], at.bag};
+    const std::vector<Move> top = equity_top_k(req, count);
+    const auto emptying = std::count_if(top.begin(), top.end(), [&](const Move& m) {
+      return m.type() == MoveType::PLAY && m.num_glyphs() >= at.bag;
+    });
+    if (emptying < 2) continue;
+
+    for (const uint64_t budget : {uint64_t(400), uint64_t(0)}) {
+      DeepBot::Params p = small_params(9, "hasty");
+      p.late_candidates = count;
+      p.endgame_reply_budget = budget;
+      auto values = std::make_shared<CountingValues>(at.board.num_tiles() + at.bag);
+      DeepBot bot(p, {.values = values, .predict = {}, .table = {}, .policy = std::nullopt});
+      bot.begin_game({});
+      const Move pick = bot.make_move(req).move;
+      EXPECT_NE(std::find(top.begin(), top.end(), pick), top.end());
+      EXPECT_EQ(values->after_emptying == 0, budget > 0) << "budget " << budget;
+      EXPECT_EQ(values->after_rest > 0, emptying < std::ssize(top));
+    }
+    DeepBot::Params p = small_params(9, "hasty");
+    p.late_candidates = count;
+    p.endgame_reply_budget = 400;
+    p.subtree_candidates = 1;
+    auto values = std::make_shared<CountingValues>(at.board.num_tiles() + at.bag);
+    DeepBot bot(p, {.values = values, .predict = {}, .table = {}, .policy = std::nullopt});
+    bot.begin_game({});
+    bot.make_move(req);
+    EXPECT_EQ(values->after_emptying, emptying * p.bob_racks);
+    return;
+  }
+  FAIL() << "no turn of the game has two candidates that empty the bag";
 }
 
 // With --subtree-candidates 1, a first pass of hasty sims leaves one

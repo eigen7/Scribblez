@@ -1,6 +1,5 @@
 #include "agent/endgame_reply.h"
 
-#include "agent/subtree_search.h"
 #include "endgame/endgame_oracle.h"
 #include "endgame/endgame_solver.h"
 #include "game/rack.h"
@@ -50,15 +49,17 @@ DistinctRacks distinct(const std::vector<Rack>& racks) {
 
 }  // namespace
 
-std::vector<double> endgame_reply_values(const AliceTurn& turn, const std::vector<size_t>& which,
-                                         uint64_t budget, const Dictionary& dict) {
-  const DistinctRacks bob = distinct(turn.bob_racks);
+std::vector<double> endgame_reply_values(const std::vector<RolloutStart>& applied,
+                                         const std::vector<Rack>& bob_racks,
+                                         const std::vector<size_t>& which, uint64_t budget,
+                                         const Dictionary& dict) {
+  const DistinctRacks bob = distinct(bob_racks);
   const size_t racks = bob.racks.size();
   std::vector<double> solved(which.size() * racks);
   util::parallel_for(solved.size(), [&](size_t k) {
-    solved[k] = endgame_value(turn.applied[which[k / racks]], bob.racks[k % racks], budget, dict);
+    solved[k] = endgame_value(applied[which[k / racks]], bob.racks[k % racks], budget, dict);
   });
-  std::vector<double> out(turn.candidates.size(), kPruned);
+  std::vector<double> out(applied.size(), kPruned);
   for (size_t j = 0; j < which.size(); ++j) {
     double sum = 0;
     for (const size_t r : bob.index) sum += solved[j * racks + r];

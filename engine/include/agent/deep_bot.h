@@ -23,7 +23,10 @@
 //   - `hasty`: Bob and then Alice reply by HastyBot and the leaf network values
 //     the end state, BestBot's loop with inferred racks and the leaf network.
 //     The sims race the candidates in rounds (sim/pool_labeler.h), and she
-//     plays the one most likely best.
+//     plays the one most likely best. At a turn with candidates that empty
+//     the bag, the best of those by a first pass of hasty sims are valued apart
+//     (below), the rest race among themselves, and she plays the best value:
+//     a solved candidate's, or the rest's likeliest best's.
 //   - `alice-subtree`: Bob replies by HastyBot, and Alice's own sims on her
 //     information choose her second move (agent/alice_subtree.h); two hasty
 //     plies after it value the candidate. For a HastyBot opponent.
@@ -31,9 +34,10 @@
 // Under the subtrees, a first pass of hasty sims over every candidate leaves
 // its best for the reply model. A candidate that empties the bag has no
 // subtree: Bob, holding every unseen tile, has nothing to infer. Under
-// `subtree` the endgame solver makes his reply to it
-// (agent/endgame_reply.h); under the other models it keeps the first pass's
-// value, whose sims play the game to its end by HastyBot.
+// `subtree` and `hasty` the endgame solver makes his reply to it
+// (agent/endgame_reply.h); under `alice-subtree`, whose Bob is HastyBot, it
+// keeps the first pass's value, whose sims play the game to its end by
+// HastyBot.
 //
 // Hidden leaves only, before the endgame: EndgameAgent<DeepBot> solves the turns
 // with the bag empty, and DeepBot alone plays HastyBot's move there.
@@ -94,18 +98,20 @@ class DeepBot : public Agent {
     // hasty: rollouts per candidate, each with its own rack for Bob, raced.
     int rollouts = 1000;
     bool race = true;  // stop a clearly beaten candidate between rounds
-    // The subtrees: R_A racks for Bob, each with a subtree and Alice's sims.
+    // R_A racks for Bob: under the subtrees each with a subtree and Alice's
+    // sims, and under every model the racks an endgame reply is solved at.
     int bob_racks = 100;
     // How many of Alice's candidates, the best by a first pass of hasty sims,
-    // get the subtree; 0: all.
+    // get the subtree; and under `hasty`, how many of those that empty the
+    // bag get the endgames. 0: all.
     int subtree_candidates = 8;
     // Alice's sims at each rack after Bob's reply; under `subtree`,
     // apportioned among his contenders.
     int sims_per_rack = 12;
     SubtreeParams subtree{};  // Bob's, under `subtree`
-    // Under `subtree`, the node budget of each endgame solved after a
-    // candidate that empties the bag; 0: such a candidate keeps the first
-    // pass's value.
+    // Under `subtree` and `hasty`, the node budget of each endgame solved
+    // after a candidate that empties the bag; 0: such a candidate keeps its
+    // hasty sims' value.
     uint64_t endgame_reply_budget = 2000;
     SubtreeParams second{};  // Alice's second turn's, under `alice-subtree`
     // A file to append a JSON line per turn to (agent/subtree_dump.h); costs
@@ -174,6 +180,20 @@ class DeepBot : public Agent {
   HastySims hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
                          const belief::LeaveSampler* belief, int rollouts, bool race,
                          uint64_t seed) const;
+  // The `hasty` reply model's pick among `moves`.
+  Move hasty_move(const MoveRequest& req, const std::vector<Move>& moves,
+                  const belief::LeaveSampler* belief) const;
+  // The subtree_candidates of `which` (indices into `moves`) with the best
+  // hasty sims at bob_racks racks for Bob, in candidate order.
+  std::vector<size_t> first_pass_best(const MoveRequest& req, const std::vector<Move>& moves,
+                                      const std::vector<size_t>& which,
+                                      const belief::LeaveSampler* belief) const;
+  // Alice's value of each of `moves` in `which`, all of which empty the bag,
+  // from the endgames after it at bob_racks racks for Bob; kPruned for the
+  // rest.
+  std::vector<double> endgame_values(const MoveRequest& req, const std::vector<Move>& moves,
+                                     const std::vector<size_t>& which,
+                                     const belief::LeaveSampler* belief) const;
   Move subtree_move(const MoveRequest& req, const std::vector<Move>& moves,
                     const belief::LeaveSampler* belief);
   // Whether the endgame solver makes Bob's reply to a candidate that empties
