@@ -20,6 +20,20 @@ namespace scribblez {
 
 namespace {
 
+// PolicyBot's params for the dump's policy model. Assigned field by field:
+// as a nested designated initializer, gcc 16 reports the service options'
+// defaulted `precision` as maybe-uninitialized.
+PolicyBot::Params dump_policy_params(const DeepBot::Params& p) {
+  PolicyBot::Params policy;
+  policy.thread_id = p.thread_id;
+  policy.name = p.name;
+  policy.dict = p.dict;
+  policy.service.model = p.policy_model;
+  policy.service.batch_size = nn::PolicySetSpec::kDefaultMaxRows;
+  policy.leave_inference = p.leave_inference;
+  return policy;
+}
+
 DeepBot::Backend make_backend(const DeepBot::Params& p) {
   RolloutBackend rollouts;
   rollouts.backend = p.leaf_model == RolloutBackend::kSyntheticLeaf ? "cpu" : "gpu";
@@ -28,15 +42,7 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   rollouts.validate();
   DeepBot::Backend b;
   b.values = rollouts.shared(load_dictionary_or_throw());
-  if (!p.policy_model.empty()) {
-    PolicyBot::Params policy{
-      .thread_id = p.thread_id,
-      .name = p.name,
-      .dict = p.dict,
-      .service = {.model = p.policy_model, .batch_size = nn::PolicySetSpec::kDefaultMaxRows},
-      .leave_inference = p.leave_inference};
-    b.policy = PolicyBot::make_backend(policy);
-  }
+  if (!p.policy_model.empty()) b.policy = PolicyBot::make_backend(dump_policy_params(p));
   if (p.leave_inference.empty()) return b;
   belief::AgentLeaveModel leave =
     belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
