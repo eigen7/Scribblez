@@ -18,7 +18,7 @@ if not (_ENGINE_DIR / "libscribblez_ffi.so").is_file():
 
 from scribblez import ffi, workloads  # noqa: E402
 from scribblez.dataset import SlogDataset  # noqa: E402
-from scribblez.deep_bot_leaf_eval import evaluation, trainer  # noqa: E402
+from scribblez.deep_bot_leaf_eval import evaluation, trainer, unit  # noqa: E402
 from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
     FILLED,
     LAYOUT,
@@ -38,7 +38,7 @@ from scribblez.position_eval.train_loop import run_epoch  # noqa: E402
 from scribblez.trunk_arms import TRUNKS  # noqa: E402
 from scribblez.workloads import deep_bot_leaf_eval  # noqa: E402
 
-TASK = trainer.TASK
+TASK = unit.TASK
 
 
 @pytest.fixture(scope="module")
@@ -143,7 +143,7 @@ def test_epoch_and_eval(batches, corpus, tmp_path, trunk):
     before = evaluation.evaluate(model, iter(batch), cpu, table, win_table.MACONDO_WIN_TABLE)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
     for _ in range(3):
-        result = run_epoch(model, optimizer, iter(batch), cpu, trainer.loss_config(params))
+        result = run_epoch(model, optimizer, iter(batch), cpu, unit.loss_config(params))
         assert np.isfinite(result.losses["total"])
     after = evaluation.evaluate(model, iter(batch), cpu, table, win_table.MACONDO_WIN_TABLE)
     assert after["eval_wld_nll"] < before["eval_wld_nll"]
@@ -169,7 +169,7 @@ def test_square_points_loss_reads_only_empty_squares():
     pred[0, 1] = 0.0  # zero variance, also exact: every mean is right
     pred[0, :, 0, :2] = 9.0  # filled squares: wrong, and ignored
     targets = {"ownership": fate, "square_points": points}
-    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    cfg = unit.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
     reported = SquarePointsHead(8).loss({"square_points": pred}, targets, cfg).reported
     assert reported["square_points_mean"] == 0 and reported["square_points_var"] == 0
     pred[0, 0, 1, 1] = 0.0  # miss the 30 points by 0.3 (scaled)
@@ -193,7 +193,7 @@ def test_ownership_loss_and_square_sums_read_only_empty_squares():
     square_points[0, 1] = 1.0 / POINTS_SCALE**2  # variance of 1 point squared
     square_points[0, :, 0, :2] = 9.0
     targets = {"ownership": fate, "square_points": points}
-    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    cfg = unit.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
     ce = OwnershipHead(8).loss({"ownership": logits}, targets, cfg).reported["ownership"]
     assert ce.item() == pytest.approx(np.log(5))
     out = {"ownership": logits, "square_points": square_points}
@@ -218,7 +218,7 @@ def test_end_of_game_losses_and_reads_skip_games_cut_short():
     preds[1, 1] = (7.0 / POINTS_SCALE) ** 2  # mean 0, variance exact for the miss
     preds[2] = 9.0
     targets = {"going_out": going_out, "end_points": end_points}
-    cfg = trainer.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    cfg = unit.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
     ce = GoingOutHead(8).loss({"going_out": logits}, targets, cfg).reported["going_out"]
     assert ce.item() == pytest.approx(np.log(3))
     reported = EndPointsHead(8).loss({"end_points": preds}, targets, cfg).reported
