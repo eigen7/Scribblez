@@ -193,6 +193,11 @@ against 4 without, at the same games a second (0.28 and 0.27), the GPU
 being what bounds it. Solving all 32 late candidates is 42 core-seconds a
 game, which is why the first pass keeps 8.
 
+`deepbot-endgame --peg 1` hands the turn with one tile in the bag to the
+pre-endgame solver, which is exact and single-threaded: on the first 11 of
+the 149 positions it took 8 to 892 seconds a turn, 86 at the median. That
+is a referee's cost, not a player's.
+
 Measured 2026-10-24 on the first empty-bag position of 200 HastyBot games,
 against a reference solve at budget 51,200 (which proved 131 of them):
 

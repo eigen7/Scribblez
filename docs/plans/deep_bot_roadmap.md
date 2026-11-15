@@ -45,7 +45,7 @@ one that searches Bob's reply, then make Bob's reply a learned policy.
 | Rollout | 5 plies, or to the end late | 2 plies | none: the kernel's depth is fixed |
 | Value at the rollout's end | Macondo's win table | the leaf network | none |
 | Stopping and the pick | Macondo's rule every 128 iterations; the highest mean win probability | racing in rounds; the likeliest best | `--race 0` |
-| A play that empties the bag | with one tile in the bag, the turn is solved exactly | the endgame solver makes Bob's reply | `--endgame-reply-budget 0`; `--peg 1` solves the turn |
+| A play that empties the bag | with one tile in the bag, the turn is solved exactly | the endgame solver makes Bob's reply | `--endgame-reply-budget 0` |
 | Rollouts run on | the CPU | the GPU | |
 
 Depth and the leaf are tangled: the leaf network is what lets the rollout
@@ -62,10 +62,11 @@ Each step names what it measures.
    endgame solver makes Bob's reply to a candidate that empties the bag, as
    it does under `subtree` ([When Alice's move empties the
    bag](deep_bot.md#when-alices-move-empties-the-bag), with its numbers).
-   `deepbot-endgame --peg 1`, BestBot's pre-endgame solver, is the exact and
-   slower alternative for the turn with one tile in the bag. *Measure:* the
-   picks at the 149 positions against the pre-endgame solver's ranks
-   (`blind_spot_picks.py --peg-ranks`), and the seconds a turn, for both.
+   `deepbot-endgame --peg 1`, BestBot's pre-endgame solver, is exact for the
+   turn with one tile in the bag and too slow to play with, a median of 86
+   seconds a turn. *Measure:* the picks at the 149 positions against the
+   pre-endgame solver's ranks (`blind_spot_picks.py --peg-ranks`), and the
+   seconds a turn.
 2. **The parts, one at a time, with today's switches.** The agent against
    itself with one part off: the leave inference model, the screen, the
    race. A game costs 3.3 seconds of the GPU, so 2,000 mirrored games, a
