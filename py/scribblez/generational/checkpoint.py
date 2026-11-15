@@ -54,7 +54,7 @@ def save(paths: TagPaths, model, optimizer, state: GenerationalState, config: di
     os.replace(tmp, path)
 
 
-def _load(paths: TagPaths, device, state_cls: type) -> tuple[dict | None, GenerationalState]:
+def load(paths: TagPaths, device, state_cls: type) -> tuple[dict | None, GenerationalState]:
     """The rolling checkpoint's raw dict (None when there is none yet) and its
     cursor as `state_cls`. A field missing from the checkpoint keeps its
     default."""
@@ -70,7 +70,7 @@ def peek_state(paths: TagPaths, state_cls: type = GenerationalState) -> Generati
     """The rolling checkpoint's cursor alone, for a run deciding whether there
     is work left before it builds a model. A zero cursor when no checkpoint
     exists yet."""
-    return _load(paths, "cpu", state_cls)[1]
+    return load(paths, "cpu", state_cls)[1]
 
 
 def regroup_optimizer_state(saved: dict, model, optimizer) -> dict:
@@ -107,7 +107,7 @@ def resume(
 ) -> GenerationalState:
     """Load the rolling checkpoint into `model` and `optimizer` and return its
     cursor as `state_cls`. A zero cursor when no checkpoint exists yet."""
-    ckpt, state = _load(paths, device, state_cls)
+    ckpt, state = load(paths, device, state_cls)
     if ckpt is None:
         return state
     model.load_state_dict(ckpt["model_state_dict"])

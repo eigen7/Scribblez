@@ -139,21 +139,22 @@ def _table_expected(path: Path, features: np.ndarray, macondo_format: bool) -> n
 
 @torch.no_grad()
 def evaluate(
-    model, batches: Iterable[dict], device, win_table: Path, macondo_table: Path
+    model, batches: Iterable[dict], device, win_table: Path | None, macondo_table: Path
 ) -> dict[str, float]:
     """The held-out metrics over every row of `batches`: the model's, the
-    fitted `win_table`'s, and Macondo's table's."""
+    fitted `win_table`'s when there is one, and Macondo's table's."""
     model.eval()
     parts: dict[str, list[np.ndarray]] = {}
     for raw in batches:
         for key, value in _model_rows(model, raw, device).items():
             parts.setdefault(key, []).append(value)
     rows = {k: np.concatenate(v) for k, v in parts.items()}
-    expected = {
-        "model": rows["expected"],
-        "wintable": _table_expected(win_table, rows["features"], macondo_format=False),
-        "wintable_macondo": _table_expected(macondo_table, rows["features"], macondo_format=True),
-    }
+    expected = {"model": rows["expected"]}
+    if win_table is not None:
+        expected["wintable"] = _table_expected(win_table, rows["features"], macondo_format=False)
+    expected["wintable_macondo"] = _table_expected(
+        macondo_table, rows["features"], macondo_format=True
+    )
     return eval_metrics(rows, expected)
 
 

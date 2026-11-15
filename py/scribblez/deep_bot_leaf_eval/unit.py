@@ -146,9 +146,10 @@ class LeafEvalUnit:
     def resume_training(self):
         self.optim_arm.train_mode()
 
-    def evaluate(self, root, cpu, fitted_table: Path) -> dict[str, float]:
+    def evaluate(self, root, cpu, fitted_table: Path | None = None) -> dict[str, float]:
         """The metrics on the games under `root`, a directory or several: the
-        model's, `fitted_table`'s (a win table) and Macondo's table's."""
+        model's, `fitted_table`'s (a win table) when there is one, and
+        Macondo's table's."""
         ds = SlogDataset(root, task=TASK, apply_symmetry=False, num_workers=cpu.dataloader_workers)
         batches = ds.iter_batches(EVAL_BATCH, seed=0)
         return evaluate(self.model, batches, self.device, fitted_table, win_table.MACONDO_WIN_TABLE)
