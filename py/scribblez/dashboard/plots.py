@@ -686,6 +686,69 @@ def match_eval_grid(conn):
     return fig
 
 
+# How many releases the release-match chart's trailing mean covers: one
+# match's standard error is several points, a window's about one.
+RELEASE_MATCH_WINDOW = 10
+
+# deep_bot's opponents (deep_bot/matches.py), as the chart titles them.
+RELEASE_OPPONENT_TITLES = {"hastybot": "HastyBot", "release_0": "release 0"}
+
+
+def trailing_mean(values: list[float], window: int) -> list[float]:
+    """Each value's mean with the up to `window` - 1 before it."""
+    return [
+        sum(values[max(0, i + 1 - window) : i + 1]) / min(i + 1, window) for i in range(len(values))
+    ]
+
+
+def _release_match_figure(opponent: str, rows: list[dict]):
+    """One opponent's panel: each release's win rate with its CI band, and
+    the trailing mean over RELEASE_MATCH_WINDOW releases."""
+    src = _match_source([r | {"epoch": r["release"]} for r in rows])
+    src.data["trailing"] = trailing_mean(src.data["score"], RELEASE_MATCH_WINDOW)
+    fig = figure(
+        sizing_mode="scale_width",
+        aspect_ratio=WIDE,
+        title=f"Win rate vs {RELEASE_OPPONENT_TITLES.get(opponent, opponent)}",
+        x_axis_label="release",
+        y_axis_label="pair score",
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+    fig.varea(x="x", y1="lower", y2="upper", source=src, fill_alpha=0.15)
+    dots = fig.scatter(x="x", y="score", source=src, size=6, legend_label="release")
+    fig.line(
+        x="x",
+        y="trailing",
+        source=src,
+        line_width=2,
+        legend_label=f"mean of the last {RELEASE_MATCH_WINDOW}",
+    )
+    tooltips = [
+        ("release", "@x"),
+        *_MATCH_TOOLTIPS[1:],
+        ("last releases' mean", "@trailing{0.000}"),
+    ]
+    fig.add_tools(HoverTool(tooltips=tooltips, renderers=[dots]))
+    fig.legend.location = "bottom_right"
+    _dashed_hline(fig, 0.5)
+    return fig
+
+
+def release_match_grid(conn):
+    """deep_bot's Matches tab: a panel per opponent. None when no match has
+    been recorded."""
+    rows = db.read_release_matches(conn)
+    if not rows:
+        return None
+    by_opponent: dict[str, list[dict]] = {}
+    for r in rows:
+        by_opponent.setdefault(r["opponent"], []).append(r)
+    return column(
+        [_release_match_figure(name, by_opponent[name]) for name in sorted(by_opponent)],
+        sizing_mode="scale_width",
+    )
+
+
 def match_arms_grid(conn):
     """The Arms tab: each arm's mean pair score against the fixed opponent, with
     its CI whisker, and under it the arm's throughput, in declared arm order.

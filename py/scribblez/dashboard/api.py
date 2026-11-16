@@ -69,6 +69,7 @@ VERSION_TABLES = (
     "metrics",
     "control_event",
     "match_eval",
+    "release_match",
     "match_arm",
 )
 
@@ -155,6 +156,10 @@ def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
 
+def _release_matches(conn, params, mount_root):
+    return plots.release_match_grid(conn)
+
+
 def _match_arms(conn, params, mount_root):
     return plots.match_arms_grid(conn)
 
@@ -175,6 +180,7 @@ FIGURES = {
     "leaf_eval_metrics": _leaf_eval_metrics,
     "deep_bot_metrics": _deep_bot_metrics,
     "match_eval": _match_eval,
+    "release_matches": _release_matches,
     "match_arms": _match_arms,
 }
 
