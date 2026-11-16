@@ -9,8 +9,10 @@ from cloud.sinks import LocalSink
 from scribblez import workloads
 from scribblez.deep_bot import KINDS, LEAF, LEAVE, release, seeds
 from scribblez.generational import lifecycle
+from scribblez.leave_inference import forgone
 from scribblez.params import ParamsError
 from scribblez.paths import TagPaths
+from scribblez.policy_set import POOL_SUFFIX, SURVIVORS_SUFFIX
 from scribblez.workloads import base, deep_bot, selfplay_gen
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot import DeepBotParams
@@ -70,26 +72,28 @@ def _ctx(tmp_path, max_cycles: int = 1, kind: str = "local") -> WorkerContext:
     )
 
 
-def test_each_cycle_plays_and_labels_on_the_newest_release(tmp_path, monkeypatch):
+def test_each_cycle_plays_the_newest_release_and_keeps_its_own_pools(tmp_path, monkeypatch):
     paths = SPEC.paths("t", tmp_path)
     _publish(paths, 0)
-    played, labeled = [], []
+    played = []
 
-    def run_games(out_dir, player_spec, **kwargs):
-        played.append(player_spec)
-        (out_dir / f"{out_dir.name}.slog").write_bytes(b"slog")
+    def run_games(out_dir, player_spec, pool_positions_per_game, **kwargs):
+        """play_game's part of a chunk: the games, and the pool sidecars of
+        the turns the agent searched."""
+        played.append((player_spec, pool_positions_per_game))
+        slog = out_dir / f"{out_dir.name}.slog"
+        for suffix in (".slog", POOL_SUFFIX, SURVIVORS_SUFFIX):
+            slog.with_suffix(suffix).write_bytes(b"x")
         if len(played) == 1:
             _publish(paths, 1)  # the trainer publishes while the first chunk plays
         return 0
 
-    def write_pools(pool_params, leaf, leave, chunk_dir, threads):
-        labeled.append((pool_params.positions_per_game, leaf, leave))
+    def write_forgone(chunk_dir, threads):
         for slog in chunk_dir.glob("*.slog"):
-            for suffix in deep_bot.CHUNK_SIDECARS:
-                slog.with_suffix(suffix).write_bytes(b"side")
+            slog.with_suffix(forgone.SUFFIX).write_bytes(b"x")
 
     monkeypatch.setattr(selfplay_gen, "run_games", run_games)
-    monkeypatch.setattr(deep_bot, "write_pools", write_pools)
+    monkeypatch.setattr(forgone, "write_sidecars", write_forgone)
 
     assert deep_bot.run_generate(_ctx(tmp_path, max_cycles=2)) == 0
 
@@ -97,9 +101,10 @@ def test_each_cycle_plays_and_labels_on_the_newest_release(tmp_path, monkeypatch
     for cycle, number in enumerate((0, 1)):
         leaf = release.export_path(paths, number, LEAF)
         leave = release.export_path(paths, number, LEAVE)
-        assert f"--leaf-model {leaf} --leave-inference {leave}" in played[cycle]
-        assert "--type=deepbot-endgame --reply hasty" in played[cycle]
-        assert labeled[cycle] == (PARAMS.pool_positions_per_game, leaf, leave)
+        spec, kept = played[cycle]
+        assert f"--leaf-model {leaf} --leave-inference {leave}" in spec
+        assert "--type=deepbot-endgame --reply hasty" in spec
+        assert kept == PARAMS.pool_positions_per_game
     staged = sorted(p.suffix for p in (paths.data_dir / "staging").iterdir())
     assert staged == sorted([*deep_bot.CHUNK_SIDECARS, ".slog"] * 2)
 

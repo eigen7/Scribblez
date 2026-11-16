@@ -37,6 +37,7 @@ def run_games(
     seed: int = 0,
     random_opening_mean: float = 0.0,
     face_up_leaves: bool = False,
+    pool_positions_per_game: int = 0,
 ) -> int:
     """Run `num_games` self-play games, logging .slog files to out_dir.
 
@@ -47,6 +48,9 @@ def run_games(
     uniformly random plies (mean `random_opening_mean`) for position
     diversity; positions before the last random ply are not training-eligible.
     `face_up_leaves` plays the variant in which retained tiles are public.
+    `pool_positions_per_game` > 0 has each .slog come with the .pool and
+    .survivors of that many turns of each game, from the searches an agent
+    that records them makes (deepbot).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # fmt: off
@@ -62,4 +66,6 @@ def run_games(
     # fmt: on
     if face_up_leaves:
         args.append("--face-up-leaves")
+    if pool_positions_per_game > 0:
+        args += ["--pool-positions-per-game", str(pool_positions_per_game)]
     return run_play_game(args)
