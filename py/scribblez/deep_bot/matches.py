@@ -12,6 +12,8 @@ Importable without torch or the engine.
 """
 
 import json
+import shutil
+import time
 from pathlib import Path
 
 from scribblez import stats
@@ -61,6 +63,55 @@ def result_record(release: int, opponent: str, games: list[dict], elapsed_s: flo
     """A finished match as it is delivered and kept: `games` are play_game's
     result lines, player 0 the release under test."""
     return {"release": release, "opponent": opponent, "elapsed_s": elapsed_s, "games": games}
+
+
+def play(
+    release: int,
+    opponent: str,
+    specs: tuple[str, str],
+    games: int,
+    seed: int,
+    threads: int,
+    work: Path,
+) -> tuple[dict, Path]:
+    """A match of `games` mirrored games from `seed` between `specs`, the
+    release's --player spec and the opponent's: its record and its .slog,
+    both under `work`."""
+    results = work / "results.jsonl"
+    slog_dir = work / "games"
+    shutil.rmtree(slog_dir, ignore_errors=True)
+    t0 = time.monotonic()
+    harness.play_round(
+        *specs,
+        num_pairs=games // 2,
+        threads=threads,
+        seed=seed,
+        results_file=results,
+        slog_dir=slog_dir,
+    )
+    rows = [json.loads(line) for line in results.read_text().splitlines() if line.strip()]
+    (slog,) = slog_dir.glob("*.slog")  # play_game writes up to 1000 games a file
+    return result_record(release, opponent, rows, time.monotonic() - t0), slog
+
+
+def deliver(sink, record: dict, slog: Path, work: Path) -> int:
+    """Hand a finished match to the tag behind `sink`: its games, then the
+    rows that announce them. Returns the bytes delivered."""
+    number, opponent = record["release"], record["opponent"]
+    rows = work / "result.json"
+    rows.write_text(json.dumps(record) + "\n")
+    nbytes = sink.deliver(slog, games_rel(number, opponent))
+    return nbytes + sink.deliver(rows, result_rel(number, opponent))
+
+
+def describe(record: dict) -> str:
+    """A finished match in a line."""
+    s = estimate(record["games"])
+    return (
+        f"[release {record['release']}] vs {record['opponent']}: {s['wins']}/{s['draws']}/"
+        f"{s['losses']} W/D/L, score={s['score']:.3f}+-{s['ci_half_width']:.3f} "
+        f"in {record['elapsed_s']:.0f}s"
+    )
 
 
 def read_result(path: Path) -> dict:
