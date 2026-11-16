@@ -246,6 +246,11 @@ class WorkloadSpec:
         """Parent directory of every tag of this workload."""
         return self.paths("placeholder", mount_root).root.parent
 
+    def is_complete(self, paths: TagPaths, params) -> bool:
+        """Whether the tag at `paths` has reached its end condition, by the
+        `complete` hook; False for a workload without one."""
+        return bool(self.complete) and resolve(self.complete)(self, paths, params)
+
     def role(self, name: str) -> RoleSpec:
         for r in self.roles:
             if r.name == name:

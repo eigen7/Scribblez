@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scribblez import workloads
 from scribblez.generational import lifecycle, scheduler
 from scribblez.paths import POSITION_EVAL, SCHEDULER_STATE_REL, TagPaths
 from scribblez.workloads.base import SchedulerHooks
@@ -209,7 +210,7 @@ def _task_tick(
 ):
     """One tick_for_task on a position_eval task under tmp_path, with the
     trainer's cursor at `rows_trained` (None: no cursor yet)."""
-    spec = SimpleNamespace(params_cls=PositionEvalParams)
+    spec = workloads.get(POSITION_EVAL)
     paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
     if rows_trained is not None:
         paths.train_state_path.parent.mkdir(parents=True, exist_ok=True)

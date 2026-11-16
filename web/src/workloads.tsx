@@ -66,6 +66,12 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
+  deep_bot: [
+    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
+    trainingTab('deep_bot_metrics', 'metrics', 'No generation scored yet.'),
+    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
+    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
+  ],
   policy_set: [
     {
       name: 'Loss',

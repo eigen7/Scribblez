@@ -417,6 +417,57 @@ POLICY_SET_QUALITY = (
         ),
     ]
 )
+
+
+def _beside_release_0(title: str, key: str, *others: str):
+    """A deep_bot chart group: the newest release's `key` beside release 0's
+    on the same games, and any `others`."""
+    return (title, [key, f"r0_{key}", *others])
+
+
+# The deep_bot read (scribblez/deep_bot/trainer.py's record): each generation's
+# games scored before the trainer trains on them, by the newest release's
+# models and by release 0's (the "r0_" prefix). The gap between the two curves
+# is the loop's gain over its seeds on that generation's games; either curve
+# alone also moves with the games, which a newer agent plays.
+DEEP_BOT_QUALITY = [
+    _beside_release_0(
+        "Leave inference: NLL vs the uniform prior (nats per leave)", "leave_eval_nll_vs_uniform"
+    ),
+    _beside_release_0(
+        "Leave inference, private history hidden: NLL vs uniform",
+        "leave_eval_hidden_nll_vs_uniform",
+    ),
+    _beside_release_0(
+        "Leaf network: log loss of the expected score",
+        "leaf_eval_model_logloss",
+        "leaf_eval_wintable_macondo_logloss",
+    ),
+    _beside_release_0("Leaf network: WLD cross-entropy", "leaf_eval_wld_nll"),
+    _beside_release_0(
+        "Leaf network: ownership cross-entropy per empty square", "leaf_eval_ownership_nll"
+    ),
+    *(
+        _beside_release_0(
+            f"Policy: {title} at N={n}", f"policy_eval_{metric}_{n}", f"equity_eval_{metric}_{n}"
+        )
+        for title, metric in (
+            ("recall of the sim-best move", "recall"),
+            ("regret (win probability)", "regret"),
+        )
+        for n in (1, 8)
+    ),
+    _beside_release_0(
+        "Policy: recall at N=8 where the sim-best is outside the equity top 10",
+        "policy_eval_tail_recall_8",
+        "equity_eval_tail_recall_8",
+    ),
+    ("Pools in the generation", ["eval_pools"]),
+    ("Share of pools whose sim-best is outside the equity top 10", ["eval_tail_share"]),
+    ("Training loss, by model", ["loss_leave", "loss_leaf", "loss_policy"], {"log": True}),
+    ("Learning rate, by model", ["leave_lr", "leaf_lr", "policy_lr"], {"log": True}),
+    ("Training time (s), by model", ["leave_train_s", "leaf_train_s", "policy_train_s"]),
+]
 # The Loss tab's per-term panel for policy_set: each form's loss terms,
 # training beside held-out, which the stacked training loss above it cannot
 # show.

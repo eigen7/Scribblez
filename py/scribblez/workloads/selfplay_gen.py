@@ -23,11 +23,16 @@ sidecars written before delivery, and each sidecar is delivered just before
 its .slog, so the scheduler never sees a .slog whose sidecars are not already
 staged (scheduler.py).
 
+A workload whose player changes while the tag runs (deep_bot, which plays its
+newest release) drives generate_cycles itself with a function that names each
+cycle's player and sidecar writer.
+
 The work dir is wiped on start. A crash mid-cycle can leave a truncated .slog,
 so leftovers are never delivered; a restart loses at most the in-flight chunk
 and any chunks still queued for delivery.
 """
 
+import functools
 import queue
 import shutil
 import threading
@@ -68,6 +73,15 @@ class ChunkSidecar(NamedTuple):
 
     suffixes: tuple[str, ...]
     write: Callable[[Path, int], None]
+
+
+class Cycle(NamedTuple):
+    """What one generator cycle plays: the --player spec of both seats, and
+    write(chunk_dir, threads), which writes the chunk's sidecars (None: the
+    chunk has none)."""
+
+    player_spec: str
+    write_sidecars: Callable[[Path, int], None] | None = None
 
 
 def _deliver_chunk_dir(
@@ -198,6 +212,28 @@ def generate(
     clock, and delivered with it. A cycle plays `games_per_chunk` games (at
     most play_game's 1000 per file), smaller where a sidecar costs far more
     per game than the game itself."""
+    write = sidecar.write if sidecar is not None else None
+    return generate_cycles(
+        ctx,
+        functools.partial(Cycle, player_spec, write),
+        sidecar.suffixes if sidecar is not None else (),
+        face_up_leaves,
+        random_opening_mean,
+        games_per_chunk,
+    )
+
+
+def generate_cycles(
+    ctx: WorkerContext,
+    next_cycle: Callable[[], Cycle],
+    sidecar_suffixes: tuple[str, ...],
+    face_up_leaves: bool,
+    random_opening_mean: float,
+    games_per_chunk: int = GAMES_PER_CHUNK,
+) -> int:
+    """`generate` with each cycle's player and sidecar writer asked of
+    `next_cycle` as the cycle starts. Every chunk carries `sidecar_suffixes`,
+    whichever cycle wrote it."""
     if not 0 < games_per_chunk <= GAMES_PER_CHUNK:
         raise ValueError(f"games_per_chunk must be in 1..{GAMES_PER_CHUNK}, got {games_per_chunk}")
     p = ctx.params
@@ -207,7 +243,7 @@ def generate(
     stats = WorkerStats(ctx)
     print(f"worker {ctx.worker_id} ({ctx.sink.kind}): generating tag '{ctx.tag}' with {p}")
 
-    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar.suffixes if sidecar is not None else ())
+    deliverer = Deliverer(ctx.sink, ctx.worker_id, sidecar_suffixes)
     cycle = 0
     try:
         while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
@@ -215,19 +251,20 @@ def generate(
             chunk_dir = work_dir / f"cycle-{cycle}"
             chunk_dir.mkdir()
             t0 = time.monotonic()
+            plan = next_cycle()
             rc = run_games(
                 chunk_dir,
                 num_games=games_per_chunk,
                 threads=ctx.threads,
-                player_spec=player_spec,
+                player_spec=plan.player_spec,
                 random_opening_mean=random_opening_mean,
                 face_up_leaves=face_up_leaves,
             )
             if rc != 0:
                 _publish(stats, deliverer.drain(), games_per_chunk)
                 return rc
-            if sidecar is not None:
-                sidecar.write(chunk_dir, ctx.threads)
+            if plan.write_sidecars is not None:
+                plan.write_sidecars(chunk_dir, ctx.threads)
             deliverer.submit(chunk_dir, time.monotonic() - t0)
             _publish(stats, deliverer.collect(), games_per_chunk)
             print(f"cycle {cycle}: chunk queued for delivery")

@@ -103,18 +103,19 @@ class SchedulerConfig:
 
 def tick_for_task(spec, task, hooks):
     """The WorkloadSpec.scheduler entry, run by the controller: gate the
-    generators from the data home's record (home_gate), or, once the trainer
-    has trained the task's `max_rows`, finish them. The scheduling itself
-    (`tick`) runs beside the trainer (generational/data_home.py).
+    generators from the data home's record (home_gate), or, once the tag is
+    complete by the workload's own hook (WorkloadSpec.complete), finish them.
+    The scheduling itself (`tick`) runs beside the trainer
+    (generational/data_home.py).
 
-    The trainer exits on its own at max_rows, but the generators would only be
+    The trainer exits on its own at its end, but the generators would only be
     gated once they ran `open_ahead` generations ahead, and a gated slot still
     wants to run, so the dashboard's idle rule would never stop a rented
     machine. Finishing the role stops its containers and lets the machines go.
     """
     params = params_mod.validate(spec.params_cls, task.params)
     paths = hooks.paths
-    if complete(spec, paths, params):
+    if spec.is_complete(paths, params):
         hooks.finish(GENERATE_ROLE)
         return
     hooks.gate(GENERATE_ROLE, home_gate(paths, hooks.role_running(TRAIN_ROLE), time.time()))

@@ -20,7 +20,16 @@ if not LEAVES.exists():
 
 import policy_set_chunk  # noqa: E402
 from cloud.sinks import LocalSink  # noqa: E402
-from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY, release, trainer, units  # noqa: E402
+from scribblez.deep_bot import (  # noqa: E402
+    KINDS,
+    LEAF,
+    LEAVE,
+    POLICY,
+    release,
+    seeds,
+    trainer,
+    units,
+)
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.records import TrainRecorder  # noqa: E402
 from scribblez.leave_inference import forgone  # noqa: E402
@@ -62,7 +71,7 @@ def _seed(paths: TagPaths, kind: str):
     """Save a tiny seed of `kind` where the tag keeps its seeds."""
     unit = units.UNIT_CLASSES[kind](SEED_PARAMS[kind], CPU)
     config = asdict(SEED_PARAMS[kind]) | units.unit_versions(kind, unit)
-    path = units.seed_path(paths, kind)
+    path = seeds.seed_path(paths, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": unit.model.state_dict(), "config": config}, path)
 
@@ -122,7 +131,7 @@ def replace_pools(params: DeepBotParams, per_game: int) -> DeepBotParams:
 
 
 def test_a_seed_of_another_format_is_refused(tag):
-    path = units.seed_path(tag, LEAF)
+    path = seeds.seed_path(tag, LEAF)
     seed = torch.load(path, weights_only=False)
     seed["config"]["leaf_eval_format_version"] = -1
     torch.save(seed, path)
@@ -155,7 +164,7 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
         # Before any training the newest release is release 0.
         assert record[key] == record[f"r0_{key}"], key
     for kind in KINDS:
-        assert record[f"{kind}_loss"] > 0, kind
+        assert record[f"loss_{kind}"] > 0, kind
     assert tag.checkpoint_path(1).exists()  # keep_checkpoint_every = 1
 
     resumed = units.build_units(tag, PARAMS, CPU)
