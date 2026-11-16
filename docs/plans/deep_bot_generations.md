@@ -436,7 +436,13 @@ Each is a pull request.
    on a small corpus are the same bit for bit.
 2. **The `deep_bot` trainer:** seeds and warm start, the three units on one
    cursor, evaluation before training with release 0 beside it, releases,
-   the combined checkpoint and record, the re-sized clocks.
+   the combined checkpoint and record, the re-sized clocks. Built
+   2026-11-15 (`scribblez/deep_bot/`, with the params in
+   `workloads/deep_bot.py`), driven so far only by its tests: a unit's
+   params are its seed's recorded config with this tag's window, turns per
+   game, learning rate and clocks, so its architecture is the seed's by
+   construction. Copying the seeds into a new tag and the charts come with
+   the workload (step 3).
 3. **The generator and the workload,** on the trainer's machine: DeepBot
    self-play on the newest release, pools from the pool tool at
    `positions_per_game` for now, the charts. The loop then runs end to end
