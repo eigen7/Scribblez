@@ -54,6 +54,56 @@ tile in the bag, the `hasty` agent's picks won 0.255 of the bag's draws with
 HastyBot making Bob's reply to a play that empties the bag, where the best
 play wins 0.346, and win 0.324 with the endgame solver making it.
 
+## The parts, measured
+
+Step 2 of [the order](#the-order), 2026-11-16. The `hasty` agent with the
+endgame solver's replies (`deepbot-endgame`, leaf network `v1` generation
+1049, leave inference model `v1` generation 292) against itself with one
+part off: 1,000 mirrored pairs a match on the dev laptop, 28 threads. The
+win rate and spread are the full agent's, with standard errors over pairs.
+
+| Part off | What the variant does instead | Full agent's win rate | Full agent's spread | Games a second |
+|---|---|---|---|---|
+| Leave inference | draws Bob's rack uniformly | 49.98% ± 0.83 | -0.1 ± 1.6 | 0.29 |
+| The screen (`--screen-rollouts 0`) | sims static equity's top 10, or 32 late | 48.70% ± 0.83 | -7.7 ± 1.5 | 0.46 |
+| The race (`--race 0`) | gives every survivor all 1,000 rollouts; the screen still races | 50.75% ± 0.80 | +2.0 ± 1.5 | 0.17 |
+
+A match's games a second count both seats, so they mix the two agents.
+
+- **Mirrored pairs pay between two DeepBots.** A pair's two games correlate
+  at -0.44 to -0.48 in the win and -0.57 to -0.63 in the spread, so the
+  win rate's standard error is 0.8 points where 2,000 unpaired games give
+  1.1.
+- **Leave inference shows no effect.** The model is the standalone tag's,
+  trained on HastyBot's games, and here it reads DeepBot's moves. The loop
+  retrains it on DeepBot's, so the match is read again on a release.
+- **The screen shows no gain in wins, and costs 7.7 points of spread.** It
+  is also most of a turn's GPU time: from the two rates, a seat's turns
+  cost about 1.7 s a game with the screen and 0.45 s without. At the
+  [blind spots](deep_bot.md#the-screen-at-the-root) the screen is what
+  finds the moves outside equity's top 10; in games those finds have not
+  turned into wins. That fits the reading that hasty sims overvalue what
+  the screen brings in, a setup or a fish that an opponent who searches
+  answers, and it fits a win-probability pick giving up points when its
+  candidates are not all high scorers. Neither is established. The match
+  is read again under the `policy` reply (step 5), where Bob blocks.
+- **The race is a saving and nothing else:** the same strength at 0.29
+  games a second against 0.17.
+
+The screen stays in the generating agent for now. It is where the
+[policy's pools](deep_bot_generations.md#self-play-writes-the-pools) come
+from, and the pools must hold the moves equity ranks low for the policy to
+learn one: by the pools' labels, equity's top 8 miss the best move a
+quarter of the time late in the game ([Candidates](deep_bot.md#candidates)).
+What the match prices is the alternative: without the screen the same GPU
+plays between three and four times the games.
+
+**Wins against HastyBot without spread.** Over the 300 games of 2026-11-14
+the agent won 186, by 66 points on average, and lost 114, by 106. Of the 79
+games decided by 30 points or fewer it won 63. That is the shape a pick by
+win probability gives: the smaller, surer lead when ahead, and when behind
+the line with a chance, which loses by more when it fails.
+
 ## The order
 
 Each step names what it measures.
@@ -67,12 +117,11 @@ Each step names what it measures.
    seconds a turn. *Measure:* the picks at the 149 positions against the
    pre-endgame solver's ranks (`blind_spot_picks.py --peg-ranks`), and the
    seconds a turn.
-2. **The parts, one at a time, with today's switches.** The agent against
+2. **The parts, one at a time, with today's switches.** Measured
+   2026-11-16: [The parts, measured](#the-parts-measured). The agent against
    itself with one part off: the leave inference model, the screen, the
-   race. A game costs 3.3 seconds of the GPU, so 2,000 mirrored games, a
-   standard error near 1.1 points, are under two hours a match. Also here:
-   why the agent wins 62% of its games against HastyBot at a mean spread
-   near zero. *Measure:* each match's win rate and spread.
+   race. Also here: why the agent wins 62% of its games against HastyBot at
+   a mean spread near zero. *Measure:* each match's win rate and spread.
 3. **Generations under the `hasty` reply:**
    [deep_bot_generations.md](deep_bot_generations.md), its seven steps.
    *Measure:* as that plan lists, the matches against HastyBot and release 0
@@ -112,6 +161,31 @@ step 11), the store input (step 12), steering and the learned budget (step
 13), and the `alice-subtree` reply. The subtree stays in the agent as it is,
 and reads the known positions beside the agent being matured.
 
+### The continuation heads while the store waits
+
+The ownership, points, going-out and end-of-game heads
+([The search network](deep_bot.md#the-search-network)) predict what a sim's
+maps will show, so that the store can hold what the sims found beyond the
+prediction. With the store waiting, nothing reads them in play: only Bob's
+subtree asks a sim for its maps.
+
+- **They stay, as auxiliary targets,** which is how KataGo uses its
+  ownership head. The leaf network trains and exports them; the policy
+  trains them (`lambda_continuation`) and does not export them. The loop's
+  releases keep training both, so the prior the store's residuals are taken
+  against exists, at the current release, whenever the store is taken up.
+- **Whether they help the heads the agent reads is unmeasured,** for either
+  network. Step 4 reads it for the policy with an arm at
+  `lambda_continuation = 0`. The leaf network's arm, its four map and
+  end-of-game weights at 0, is run with the leaf's next experiment.
+- **The store as an input to Bob's policy** is deep_bot.md's design as it
+  stands: the search network is the policy with a store-attention block.
+  Under the `policy` reply it would lack evidence about the replies Bob did
+  not make. His reply at each rack is the policy's top move, so the turn's
+  sims can mark that move down and cannot mark another up. Taking the store
+  up there means giving some racks a second reply, a thin form of his
+  subtree.
+
 ## The policy
 
 Today's policy (`policy_set`, form 3) is a convolutional board trunk, 128
@@ -144,11 +218,22 @@ tried under it later:
 - **The opponent-rack input** stays the chooser's belief about the
   opponent's rack, so that after a setup the belief's tell (she kept the F)
   is in front of the model.
-- **The labels** are the pools': `q`, the chance the move is the sim's best.
-  A pool is labeled with the opponent replying by HastyBot, so at a position
-  after a setup the move that blocks it scores well: the rollouts in which
-  it is not blocked have the opponent cash it. Setups are rare in HastyBot's
-  games, and commoner in DeepBot's, which the loop's pools come from.
+- **The labels are the agent's decision at its own turn:** the pool's `q`,
+  the chance the move is the sim's best, with the survivors' labels taken
+  from the turn's sims and not the screen ([Self-play writes the
+  pools](deep_bot_generations.md#self-play-writes-the-pools)). Under the
+  `hasty` reply that is ten times the rollouts on the near-top moves, where
+  the policy is weakest, and the endgame solver's value for a play that
+  empties the bag. Under the `policy` reply it is what makes the loop
+  improve Bob: the survivors' sims have him reply by one release's policy,
+  so the next release's policy learns what wins against an opponent who
+  blocks. With the screen's labels alone, his reply in every label would be
+  HastyBot's in every generation.
+- **Until self-play writes them** (the loop's steps 3 and 4, and the
+  `policy_set` tags), a pool is the pool tool's: the screen's sims and no
+  more. There a block still scores well at a position after a setup, since
+  the rollouts in which it is not blocked have the opponent cash it. Setups
+  are rare in HastyBot's games, and commoner in DeepBot's.
 
 The subtree's reply is not the reference for whether the policy blocks: it
 is too noisy at the racks it runs. The pools are, and the known setups.

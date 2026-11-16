@@ -120,11 +120,24 @@ game's pools are about 1.8 MB and a generation of 2,000 games about 3.5 GB.
 `pool_positions_per_game` keeps a sample of each game's turns where a
 generator's uplink cannot carry that.
 
-Under the `hasty` reply model the agent then gives its 10 or 32 screened
-candidates 1,000 raced rollouts each. Those are sims of the same kind, and
-the pool could carry them as more rollouts for those candidates. Whether the
-labeler's `q` is comparable across the two rollout counts is checked when
-this is built; until then the pool holds the screen's labels alone.
+**The pool carries the turn's sims too.** The agent gives the screen's 10
+or 32 survivors 1,000 raced rollouts each, and values a survivor that empties
+the bag by the endgame solver. Under the `policy` reply
+([roadmap](deep_bot_roadmap.md#the-policy-reply)) those sims are the ones in
+which Bob replies by the policy. They are the agent's decision, and the
+policy's target is the decision, so the record holds both stages: every
+move's screen label, and each survivor's label from the turn's sims, or its
+solved value.
+
+- **The trainer combines them,** so the target can change without new
+  games. The first form is the sims' `q` over the survivors and no mass on a
+  move the screen dropped, which needs no comparison across the two rollout
+  counts. The value head fits the sims' win probability for a survivor and
+  the screen's for the rest.
+- **To settle when built:** the target at a turn where a solved value,
+  which has no `q`, is compared with the race's winner; and whether the
+  survivors' rollout values are kept, which the value head's variance
+  target reads, or their labels alone.
 
 ## The trainer
 
@@ -441,10 +454,11 @@ Each is a pull request.
    first releases' curves.
 4. **Releases to remote slots.** The loop then runs on a fleet. *Measure:*
    the share of games per release as generators are added.
-5. **Self-play writes the pools.** The engine change, the per-game sample,
-   and the belief metric by the played move's rank. *Measure:* pools a
-   second and bytes a game against the table above; the policy's curve
-   against pools trained.
+5. **Self-play writes the pools.** The engine change, with both stages of
+   the turn in the record; the trainer's target from them; the per-game
+   sample; and the belief metric by the played move's rank. *Measure:* pools
+   a second and bytes a game against the table above; the policy's curve
+   against pools trained, under the screen's labels and under the turn's.
 6. **The measure role:** the matches against HastyBot and `A_0` with their
    games kept, the match command, the known positions, the blind spots.
    *Measure:* the GPU time a match takes from a running generator.
