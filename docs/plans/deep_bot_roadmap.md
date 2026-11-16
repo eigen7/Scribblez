@@ -180,11 +180,18 @@ subtree asks a sim for its maps.
   end-of-game weights at 0, is run with the leaf's next experiment.
 - **The store as an input to Bob's policy** is deep_bot.md's design as it
   stands: the search network is the policy with a store-attention block.
-  Under the `policy` reply it would lack evidence about the replies Bob did
-  not make. His reply at each rack is the policy's top move, so the turn's
-  sims can mark that move down and cannot mark another up. Taking the store
-  up there means giving some racks a second reply, a thin form of his
-  subtree.
+  Under the `policy` reply it needs no second reply at a rack. The racks
+  differ, so their top moves do, and what one rack's reply showed informs
+  the policy at the next rack: the race's first round runs on the prior and
+  the later rounds read the store. A reply no rack's prior picks is reached
+  by sampling some racks' replies from the policy, at the same one
+  evaluation a rack.
+- **Its evidence has to be Bob's.** [Each side's items stay on their
+  side](deep_bot.md#the-evidence-store): Alice's sims run with her actual
+  rack, and a Bob who read their outcomes would learn what she holds. With
+  his subtree gone there are no sims from his side, so each rollout would
+  carry a second continuation after his reply, her rack drawn from his
+  belief: a mechanical move and a leaf call more, and no policy call.
 
 ## The policy
 
