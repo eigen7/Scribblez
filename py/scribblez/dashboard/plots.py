@@ -16,6 +16,7 @@ from bokeh.layouts import column, gridplot
 from bokeh.models import (
     ColumnDataSource,
     Div,
+    FixedTicker,
     HoverTool,
     Label,
     Range1d,
@@ -753,20 +754,30 @@ def release_match_grid(conn):
 # it: the reference move, static equity's move, any other.
 PICK_COLORS = {"reference": "#2ca02c", "equity": "#bbbbbb", "other": "#ff7f0e"}
 PICK_REPLY_TITLES = {"hasty": "the generating agent", "subtree": "the subtree reply"}
+# The releases the x axis spans at least, so that a young tag's cells are not
+# stretched across the panel.
+PICK_MIN_RELEASES = 20
 
 
 def _release_pick_figure(reply: str, rows: list[dict]):
     """One reply model's panel: a cell per release and known position,
     colored by how the pick reads, with the count of reference picks per
-    release in the hover."""
-    positions = sorted({r["position"] for r in rows}, reverse=True)
+    release in the hover.
+
+    The positions are rows at integer heights that the y axis labels by
+    name, not a categorical axis: the dashboard's bokehjs failed to embed this
+    figure with one ("could not set initial ranges"), leaving the tab blank."""
+    positions = sorted({r["position"] for r in rows})
+    row_of = {name: len(positions) - 1 - i for i, name in enumerate(positions)}
+    releases = [r["release"] for r in rows]
     found: dict[int, int] = {}
     for r in rows:
         found[r["release"]] = found.get(r["release"], 0) + (r["reading"] == "reference")
     src = ColumnDataSource(
         {
-            "x": [r["release"] for r in rows],
-            "y": [r["position"] for r in rows],
+            "x": releases,
+            "y": [row_of[r["position"]] for r in rows],
+            "position": [r["position"] for r in rows],
             "pick": [r["pick"] for r in rows],
             "reading": [r["reading"] for r in rows],
             "color": [PICK_COLORS.get(r["reading"], PICK_COLORS["other"]) for r in rows],
@@ -781,15 +792,21 @@ def _release_pick_figure(reply: str, rows: list[dict]):
             "green the reference move, grey static equity's, orange another"
         ),
         x_axis_label="release",
-        y_range=positions,
+        x_range=Range1d(min(releases) - 0.5, max(max(releases), PICK_MIN_RELEASES - 1) + 0.5),
+        y_range=Range1d(-0.5, len(positions) - 0.5),
         tools="pan,box_zoom,wheel_zoom,reset,save",
     )
+    fig.xaxis.ticker.mantissas = [1, 2, 5]
+    fig.xaxis.ticker.min_interval = 1
+    fig.yaxis.ticker = FixedTicker(ticks=list(row_of.values()))
+    fig.yaxis.major_label_overrides = {row: name for name, row in row_of.items()}
+    fig.ygrid.grid_line_color = None
     cells = fig.rect(
         x="x", y="y", width=0.9, height=0.9, source=src, fill_color="color", line_color=None
     )
     tooltips = [
         ("release", "@x"),
-        ("position", "@y"),
+        ("position", "@position"),
         ("pick", "@pick (@reading)"),
         ("reference picks", f"@found of {len(positions)}"),
     ]

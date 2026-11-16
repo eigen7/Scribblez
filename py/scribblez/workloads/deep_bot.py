@@ -212,7 +212,7 @@ def progress(spec, paths: TagPaths, params: DeepBotParams) -> list[tuple[str, ob
         out.append(("release", newest))
     state = lifecycle.read_train_state(paths)
     if state:
-        out.append(("games", state.get("rows_trained", 0)))
+        out.append(("games trained on", state.get("rows_trained", 0)))
     return out
 
 
