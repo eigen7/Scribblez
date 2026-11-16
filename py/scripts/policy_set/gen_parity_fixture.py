@@ -33,7 +33,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from scribblez.policy_set import onnx_export, trainer
+from scribblez.policy_set import onnx_export, unit
 from scribblez.policy_set.dataset import OPP_RACK_FLOATS
 from scribblez.policy_set.model import PolicySetEncoder
 from scribblez.policy_set.policy import PolicyModel
@@ -96,7 +96,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     spatial_planes, board_size, scalar_size = shape = input_widths()
-    config = {**asdict(PARAMS), **trainer.versions()}
+    config = {**asdict(PARAMS), **unit.versions()}
     provenance = {"tag": "parity", "generation": 0}
     model_a = build_model(args.seed, spatial_planes, scalar_size)
     model_b = build_model(args.seed + 1, spatial_planes, scalar_size)

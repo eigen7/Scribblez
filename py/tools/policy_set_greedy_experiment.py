@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from cloud.sinks import LocalSink
 from scribblez.generational.optim import build_optim_arm, build_optimizer
 from scribblez.generational.records import TrainRecorder
-from scribblez.policy_set import dataset, forms, greedy, metrics, train_loop, trainer
+from scribblez.policy_set import dataset, forms, greedy, metrics, train_loop, unit
 from scribblez.policy_set.model import to_grid
 from scribblez.workloads.policy_set import PolicySetParams
 from torch import nn
@@ -219,7 +219,7 @@ def arm_form(arm: str) -> forms.Form:
 def train(arm, items, params, epochs, device):
     """The arm's model, trained `epochs` passes over `items`, in eval mode."""
     forms.FORMS[arm] = arm_form(arm)
-    models = nn.ModuleDict({arm: forms.FORMS[arm].build(trainer.build_encoder(params), params)})
+    models = nn.ModuleDict({arm: forms.FORMS[arm].build(unit.build_encoder(params), params)})
     models = models.to(device)
     optimizer = build_optimizer(models, params)
     optim_arm = build_optim_arm(
@@ -240,8 +240,8 @@ def train(arm, items, params, epochs, device):
             f"{time.time() - t0:.0f}s",
             flush=True,
         )
-    recalibration = trainer.recalibration_batches(batcher, items, params, epochs, device)
-    optim_arm.eval_mode(models, recalibration, trainer._trunk_forward)
+    recalibration = unit.recalibration_batches(batcher, items, params, epochs, device)
+    optim_arm.eval_mode(models, recalibration, unit.trunk_forward)
     return models[arm].eval()
 
 

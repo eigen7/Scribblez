@@ -13,6 +13,9 @@ plays the held-out games, both on its own machine. The table's identity, the
 hash of the leave values it was built from, is recorded in the checkpoint
 config with the leave inference format version, and a checkpoint trained
 against other leave values or another format is refused rather than resumed.
+
+The model, its optimizer and its epoch are the unit's (unit.py), which the
+deep_bot trainer drives too; this module is the loop around one.
 """
 
 import functools
@@ -22,42 +25,22 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from scribblez import params as params_mod
-from scribblez.dataset import SlogDataset
-from scribblez.ffi import LeaveValueArrays, format_layout, struct_dtype, task_input_shapes
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
-from scribblez.generational.controls import CpuController, default_controls, progress_line
-from scribblez.generational.optim import build_optim_arm, build_optimizer
+from scribblez.generational.controls import CpuController, default_controls
 from scribblez.generational.records import TrainRecorder, read_controls
-from scribblez.leave_inference import forgone, holdout, loss, win_table
-from scribblez.leave_inference.heads import HEAD_TILTED
-from scribblez.leave_inference.model import LeaveInferenceModel
-from scribblez.leave_inference.onnx_export import FORMAT_KEY, TABLE_KEY, export_onnx
-from scribblez.leave_inference.train_loop import LAYOUT, evaluate, run_epoch
+from scribblez.leave_inference import forgone, holdout, win_table
+from scribblez.leave_inference.onnx_export import FORMAT_KEY, TABLE_KEY
+from scribblez.leave_inference.unit import LeaveInferenceUnit
 from scribblez.paths import TagPaths
-from scribblez.position_eval.trainer import (
-    OutputDeliverer,
-    ensure_window,
-    recalibration_batches,
-    wait_for_generation,
-)
+from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.selfplay_gen import hasty_spec
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
-
-
-def _task(params) -> str:
-    """The rows the run trains and evaluates on (ffi.TASK_CODES)."""
-    return "public_leave_inference" if params.public else "leave_inference"
-
-
-EVAL_BATCH = 1024
-FACE_UP_FLAG = format_layout()["constants"]["slog"]["flag_face_up_leaves"]
 
 
 def _rel(paths: TagPaths, path: Path) -> str:
@@ -79,52 +62,8 @@ def check_resumable(paths: TagPaths, config: dict):
             )
 
 
-class FaceUpGuard:
-    """Refuses face-up-leaves corpora: their leaves are public, so there is
-    nothing to infer. Each file is checked once."""
-
-    def __init__(self):
-        self._checked: set[Path] = set()
-        self._header = struct_dtype("SlogFileHeader")
-
-    def check(self, dirs: list[Path]):
-        for path in (p for d in dirs for p in d.glob("*.slog")):
-            if path in self._checked:
-                continue
-            flags = int(np.fromfile(path, self._header, count=1)[0]["flags"])
-            if flags & FACE_UP_FLAG:
-                raise RuntimeError(
-                    f"{path} is a face-up-leaves corpus; leave inference needs hidden leaves"
-                )
-            self._checked.add(path)
-
-
 def _rows_left(params, state: GenerationalState) -> bool:
     return not params_mod.reached(state.rows_trained, params.max_rows)
-
-
-def _holdout_batches(held: holdout.HoldoutSet, params, cpu, hide_private: bool = False):
-    """The held-out rows, every observer's private history hidden or none."""
-    ds = SlogDataset(
-        held.dir,
-        task=_task(params),
-        post_move=False,
-        apply_symmetry=False,
-        hide_private_fraction=1.0 if hide_private else 0.0,
-        num_workers=cpu.dataloader_workers,
-    )
-    return ds.iter_batches(EVAL_BATCH, seed=0)
-
-
-def hidden_metrics(own: dict[str, float], hidden: dict[str, float]) -> dict[str, float]:
-    """The held-out NLL with every observer's private history hidden, as the
-    model is served for an opponent, and its gap to the observer's own view
-    over the same rows."""
-    return {
-        "eval_hidden_nll": hidden["eval_nll"],
-        "eval_hidden_nll_vs_uniform": hidden["eval_nll_vs_uniform"],
-        "eval_hidden_gap": hidden["eval_nll"] - own["eval_nll"],
-    }
 
 
 def refit_win_table(paths: TagPaths, params, gen: int, window: list[Path], ctx) -> dict:
@@ -147,19 +86,10 @@ def refit_win_table(paths: TagPaths, params, gen: int, window: list[Path], ctx) 
     }
 
 
-def export_generation(paths: TagPaths, params, gen: int, model, ctx):
+def export_generation(paths: TagPaths, params, gen: int, unit: LeaveInferenceUnit, tag: str):
     """Export generation `gen`'s model for the engine, if its head is served."""
-    if params.head != HEAD_TILTED:
-        return
-    export_onnx(
-        model,
-        paths.onnx_path(gen),
-        ctx["spatial_planes"],
-        ctx["scalar_size"],
-        leave_values=ctx["config"][TABLE_KEY],
-        public=params.public,
-        provenance={"tag": ctx["tag"], "generation": gen, "policy": hasty_spec(params)},
-    )
+    provenance = {"tag": tag, "generation": gen, "policy": hasty_spec(params)}
+    unit.export(paths.onnx_path(gen), provenance)
 
 
 def _deliver_generation(sink, paths, gen, checkpoint_snap, state_snap, recorder, staged):
@@ -173,22 +103,7 @@ def _deliver_generation(sink, paths, gen, checkpoint_snap, state_snap, recorder,
     recorder.deliver_staged(staged)
 
 
-def _checkpoint_and_eval(
-    model,
-    optimizer,
-    recorder,
-    paths,
-    device,
-    params,
-    state,
-    gen,
-    result,
-    elapsed,
-    window,
-    optim_arm,
-    cpu,
-    ctx,
-):
+def _checkpoint_and_eval(unit, recorder, paths, params, state, gen, result, elapsed, window, ctx):
     """Evaluate, refit the win table, export the model, checkpoint, publish
     the cursor, and queue the generation's deliveries. Returns the seconds
     spent."""
@@ -201,14 +116,10 @@ def _checkpoint_and_eval(
         "valid_frac": result.valid_frac,
         "grad_norm_mean": result.grad_norm,
         "elapsed_s": elapsed,
-        "lr": optim_arm.current,
-        **optim_arm.metrics(),
+        "lr": unit.optim_arm.current,
+        **unit.optim_arm.metrics(),
     }
-    own = evaluate(model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu), device)
-    hidden = evaluate(
-        model, ctx["table"], _holdout_batches(ctx["holdout"], params, cpu, True), device
-    )
-    record.update(own | hidden_metrics(own, hidden))
+    record.update(unit.evaluate(ctx["holdout"].dir, ctx["cpu"]))
     record.update(refit_win_table(paths, params, gen, window, ctx))
     timed_print(
         f"[gen {gen}] rows={state.rows_trained} loss={result.loss:.4f} "
@@ -217,8 +128,8 @@ def _checkpoint_and_eval(
         f"wintable={record['eval_wintable_logloss']:.4f} "
         f"(macondo {record['eval_wintable_logloss_macondo']:.4f})"
     )
-    export_generation(paths, params, gen, model, ctx)
-    checkpoint.save(paths, model, optimizer, state, ctx["config"])
+    export_generation(paths, params, gen, unit, ctx["tag"])
+    checkpoint.save(paths, unit.model, unit.optimizer, state, ctx["config"])
     lifecycle.write_train_state(paths, asdict(state))
     staged = recorder.stage_generation(gen, state.rows_trained, record)
     ctx["deliverer"].submit(
@@ -237,69 +148,19 @@ def _checkpoint_and_eval(
     return time.time() - t0
 
 
-def train_one_generation(
-    model, train_model, optimizer, recorder, paths, device, params, state, optim_arm, cpu, ctx
-):
+def train_one_generation(unit, recorder, paths, params, state, ctx):
     """Train one epoch over the window ending at the cursor generation, then
     evaluate and checkpoint under that generation's index."""
     gen = state.generation_index
     window = lifecycle.window_dirs(paths, gen, params.window)
-    ctx["face_up_guard"].check(window)
-    ds = SlogDataset(
-        window,
-        task=_task(params),
-        post_move=False,
-        apply_symmetry=True,
-        hide_private_fraction=params.hide_private_fraction,
-        num_workers=cpu.dataloader_workers,
-    )
-    timed_print(
-        f"generation {gen}: window {[d.name for d in window]} "
-        f"({ds.num_games} games, {ds.num_samples} rows)"
-    )
-    # drop_last keeps one static shape for the compiled forward.
-    batches = ds.iter_batches(
-        params.batch_size,
-        seed=gen * 1000003,
-        turns_per_game=params.turns_per_game,
-        epoch_index=gen,
-        drop_last=True,
-    )
-    t0 = time.time()
     rows_before = state.rows_trained
-    optim_arm.train_mode()
-    result = run_epoch(
-        train_model,
-        optimizer,
-        ctx["table"],
-        batches,
-        device,
-        lr_fn=optim_arm.lr_fn,
-        rows_trained=state.rows_trained,
-        grad_clip=params.grad_clip,
-        on_batch=functools.partial(progress_line, gen),
-    )
+    result, elapsed = unit.train(window, gen, state.rows_trained, ctx["cpu"])
     state.rows_trained = result.rows_trained
     state.generation_index = gen + 1
-    elapsed = time.time() - t0
-    optim_arm.eval_mode(model, recalibration_batches(ds, params, gen, device))
     eval_seconds = _checkpoint_and_eval(
-        model,
-        optimizer,
-        recorder,
-        paths,
-        device,
-        params,
-        state,
-        gen,
-        result,
-        elapsed,
-        window,
-        optim_arm,
-        cpu,
-        ctx,
+        unit, recorder, paths, params, state, gen, result, elapsed, window, ctx
     )
-    optim_arm.train_mode()
+    unit.resume_training()
     finished = ctx["deliverer"].collect()
     ctx["stats"].cycle_done(
         {
@@ -312,28 +173,14 @@ def train_one_generation(
     )
 
 
-def run_generational_training(
-    model, train_model, optimizer, recorder, paths, device, params, state, ctx
-):
+def run_generational_training(unit, recorder, paths, params, state, ctx):
     """The wait->train->advance loop, from the resumed cursor onward."""
-    optim_arm = build_optim_arm(recorder, params, optimizer, state.rows_trained)
-    cpu = CpuController(recorder, ctx["read_controls"])
+    unit.start(recorder, state.rows_trained)
+    ctx["cpu"] = CpuController(recorder, ctx["read_controls"])
     while _rows_left(params, state):
-        cpu.refresh(state.rows_trained)
+        ctx["cpu"].refresh(state.rows_trained)
         wait_for_generation(paths, state.generation_index, ctx["sink"], ctx["data_home"])
-        train_one_generation(
-            model,
-            train_model,
-            optimizer,
-            recorder,
-            paths,
-            device,
-            params,
-            state,
-            optim_arm,
-            cpu,
-            ctx,
-        )
+        train_one_generation(unit, recorder, paths, params, state, ctx)
         evicted = lifecycle.evict_beyond_window(
             paths, state.generation_index - 1, params.window, keep_unpulled=ctx["data_home"].remote
         )
@@ -350,53 +197,30 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
-    table = loss.TableTensors(LeaveValueArrays(), device)
+    unit = LeaveInferenceUnit(params, device)
     held = holdout.ensure(paths.holdout_dir, params.holdout_games, holdout.SEED, hasty_spec(params))
     timed_print(
-        f"leave values {table.klv_hash}; held-out set {held.content_hash} ({len(held.slogs)} files)"
+        f"leave values {unit.table.klv_hash}; held-out set {held.content_hash} "
+        f"({len(held.slogs)} files)"
     )
+    print(f"Model: {unit.n_params:,} parameters")
 
-    in_shapes = {s.name: s.dims for s in task_input_shapes(_task(params))}
-    model = LeaveInferenceModel(
-        spatial_planes=in_shapes["input_spatial"][0],
-        scalar_size=in_shapes["input_scalar"][0],
-        trunk_channels=params.trunk_channels,
-        num_blocks=params.num_blocks,
-        head=params.head,
-        normalize_scalar=params.normalize_scalar,
-    ).to(device)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {n_params:,} parameters")
-    optimizer = build_optimizer(model, params)
-    # TF32 for the trunk; the tilted-prior pass pins its own precision.
-    torch.set_float32_matmul_precision("high")
-    train_model = torch.compile(model)
-
-    config = {
-        **asdict(params),
-        FORMAT_KEY: LAYOUT["format_version"],
-        TABLE_KEY: table.klv_hash,
-        "holdout_hash": held.content_hash,
-    }
+    config = {**asdict(params), **unit.versions(), "holdout_hash": held.content_hash}
     recorder = TrainRecorder(ctx.sink)
-    recorder.publish_run(ctx.tag, asdict(params), n_params, {"loss": 1.0}, default_controls())
+    recorder.publish_run(ctx.tag, asdict(params), unit.n_params, {"loss": 1.0}, default_controls())
 
     held_win_samples = win_table.read_samples(held.slogs)
     run_ctx = {
         "tag": ctx.tag,
         "config": config,
-        "spatial_planes": in_shapes["input_spatial"][0],
-        "scalar_size": in_shapes["input_scalar"][0],
         "sink": ctx.sink,
         "read_controls": functools.partial(read_controls, ctx.sink),
-        "table": table,
         "holdout": held,
         "holdout_win_samples": held_win_samples,
         # The fixed reference each generation's table is read against.
         "macondo_logloss": win_table.log_loss(
             win_table.MACONDO_WIN_TABLE, held_win_samples, macondo_format=True
         ),
-        "face_up_guard": FaceUpGuard(),
         "stats": WorkerStats(ctx),
         "deliverer": OutputDeliverer(),
     }
@@ -404,14 +228,12 @@ def run(ctx: WorkerContext) -> int:
     state_pair.install_seed(paths)
     # After the seed, which may be what puts a rolling checkpoint in place.
     check_resumable(paths, config)
-    state = checkpoint.resume(paths, model, optimizer, device)
+    state = checkpoint.resume(paths, unit.model, unit.optimizer, device)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)
     lifecycle.write_train_state(paths, asdict(state))
     run_ctx["data_home"] = data_home.start_for(ctx, paths, params, chunk_sidecars=(forgone.SUFFIX,))
     try:
-        run_generational_training(
-            model, train_model, optimizer, recorder, paths, device, params, state, run_ctx
-        )
+        run_generational_training(unit, recorder, paths, params, state, run_ctx)
     except (KeyboardInterrupt, WorkerStopped):
         timed_print("Stopped; last completed epoch is checkpointed.")
     finally:

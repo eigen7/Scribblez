@@ -27,7 +27,6 @@ from scribblez import params as params_mod  # noqa: E402
 from scribblez.dashboard import plots  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.checkpoint import GenerationalState  # noqa: E402
-from scribblez.generational.optim import build_optim_arm, build_optimizer  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.policy_set import (  # noqa: E402
     continuation,
@@ -42,6 +41,7 @@ from scribblez.policy_set import (  # noqa: E402
     slot,
     train_loop,
     trainer,
+    unit,
 )
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.workloads.policy_set import PolicySetParams  # noqa: E402
@@ -280,7 +280,7 @@ def test_the_slot_form_overfits_a_pool(chunk):
     batch = dataset.PoolBatcher().build(items)
     assert batch["opp_rack"].shape == (len(items), dataset.OPP_RACK_FLOATS)
     torch.manual_seed(0)
-    m = trainer.build_models(only("slot", slots=16))["slot"]
+    m = unit.build_models(only("slot", slots=16))["slot"]
     logits, pad = slot.slot_forward(m, batch)
     assert logits.shape == (len(items), 16, pad.shape[1])
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
@@ -301,7 +301,7 @@ def test_the_policy_form_overfits_a_pool_and_ranks_its_top_n(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     torch.manual_seed(0)
-    m = trainer.build_models(only("policy"))["policy"]
+    m = unit.build_models(only("policy"))["policy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     losses = []
     # As for the slot form: a plateau for the first ~7 steps (5.73 to 5.62),
@@ -326,7 +326,7 @@ def test_the_value_head_fits_the_pools_win_probability(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     torch.manual_seed(0)
-    m = trainer.build_models(only("policy"))["policy"]
+    m = unit.build_models(only("policy"))["policy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = last = None
     for _ in range(60):
@@ -406,7 +406,7 @@ def test_the_policy_form_overfits_the_played_continuation(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     torch.manual_seed(0)
-    m = trainer.build_models(only("policy"))["policy"]
+    m = unit.build_models(only("policy"))["policy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     first = last = None
     for _ in range(80):
@@ -450,7 +450,7 @@ def test_the_stakes_weighted_policy_loss_scales_each_positions_cross_entropy(chu
     batch = dataset.PoolBatcher().build(items)
     assert batch["stakes"].shape == (len(items),) and (batch["stakes"] >= 0).all()
     torch.manual_seed(0)
-    m = trainer.build_models(only("policy"))["policy"]
+    m = unit.build_models(only("policy"))["policy"]
     ce = policy.cross_entropies(policy.policy_forward(m, batch), batch)
     assert policy.policy_loss(m, batch).item() == pytest.approx(ce.mean().item(), rel=1e-5)
     assert policy.policy_loss(m, batch, weighted=True).item() == pytest.approx(
@@ -479,32 +479,26 @@ def _one_generation_setup(chunk, tmp_path, monkeypatch):
             shutil.copy(f, dest / f.name)
     lifecycle.write_manifest(paths.generation_dir(0), {"status": lifecycle.GENERATING})
     lifecycle.mark_complete(paths.generation_dir(0), 1)
-    device = torch.device("cpu")
     torch.manual_seed(0)
-    m = trainer.build_models(TINY)  # every form
-    opt = build_optimizer(m, TINY)
+    small = unit.PolicySetUnit(TINY, torch.device("cpu"))  # every form
     recorder = trainer.TrainRecorder(LocalSink(paths.root))
     staged = []
     monkeypatch.setattr(recorder, "deliver_staged", staged.append)
     ctx = {
-        "config": {**asdict(TINY), **trainer.versions()},
+        "config": small.config(),
         "tag": paths.tag,
         "sink": LocalSink(paths.root),
-        "device": device,
-        "batcher": dataset.PoolBatcher(),
         "stats": type("S", (), {"cycle_done": lambda self, phases, units, nbytes: None})(),
         "deliverer": OutputDeliverer(),
     }
     state = GenerationalState()
-    arm = build_optim_arm(recorder, TINY, opt, 0)
-    return paths, m, opt, arm, recorder, state, ctx, staged
+    small.start(recorder, 0)
+    return paths, small, recorder, state, ctx, staged
 
 
 def test_a_generation_trains_evaluates_and_checkpoints(chunk, tmp_path, monkeypatch):
-    paths, m, opt, arm, recorder, state, ctx, staged = _one_generation_setup(
-        chunk, tmp_path, monkeypatch
-    )
-    trainer.train_one_generation(m, opt, arm, recorder, paths, TINY, state, ctx)
+    paths, small, recorder, state, ctx, staged = _one_generation_setup(chunk, tmp_path, monkeypatch)
+    trainer.train_one_generation(small, recorder, paths, TINY, state, ctx)
     ctx["deliverer"].drain()
     (record,) = [s.record["metrics"] for s in staged]
     assert (state.generation_index, state.rows_trained) == (1, 2)
@@ -574,14 +568,14 @@ def test_the_export_scores_a_pool_as_the_policy_form_does(chunk, tmp_path):
     """PolicyBot's graph, run on a pool's inputs as the engine stages them,
     gives the policy form's own logits."""
     torch.manual_seed(0)
-    m = trainer.build_models(only("policy"))["policy"].eval()
+    m = unit.build_models(only("policy"))["policy"].eval()
     # The cross-check encoder's output starts at zero; perturbed, so its
     # inputs are read.
     with torch.no_grad():
         for p in m.encoder.cross_check_encoder.out.parameters():
             p.add_(0.1 * torch.randn_like(p))
     path = tmp_path / "policy.onnx"
-    config = {**asdict(only("policy")), **trainer.versions()}
+    config = {**asdict(only("policy")), **unit.versions()}
     onnx_export.export_onnx(m, path, config, {"tag": "t", "generation": 0})
     session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     for item in dataset.read_items([chunk]):
@@ -597,10 +591,10 @@ def test_a_checkpoint_exports_its_policy_form(chunk, tmp_path):
     """The script's path: a rolling checkpoint's policy form, rebuilt from its
     config, has the trained weights."""
     torch.manual_seed(0)
-    models = trainer.build_models(only("policy"))
+    models = unit.build_models(only("policy"))
     ckpt = {
         "model_state_dict": models.state_dict(),
-        "config": {**asdict(only("policy")), **trainer.versions()},
+        "config": {**asdict(only("policy")), **unit.versions()},
     }
     rebuilt = onnx_export.policy_model(ckpt)
     for name, value in models["policy"].state_dict().items():
@@ -611,13 +605,11 @@ def test_a_non_finite_step_stops_the_trainer_before_its_checkpoint(chunk, tmp_pa
     """A NaN weight makes the first step's loss non-finite: the trainer stops
     fatally, naming the form and the batch's pools, and writes no checkpoint,
     so the last good one stays the one to resume from."""
-    paths, m, opt, arm, recorder, state, ctx, _ = _one_generation_setup(
-        chunk, tmp_path, monkeypatch
-    )
+    paths, small, recorder, state, ctx, _ = _one_generation_setup(chunk, tmp_path, monkeypatch)
     with torch.no_grad():
-        next(m["greedy"].gain.parameters()).view(-1)[0] = math.nan
+        next(small.models["greedy"].gain.parameters()).view(-1)[0] = math.nan
     with pytest.raises(WorkerFatal, match=r"non-finite greedy loss.*at batch 0 \(chunk game"):
-        trainer.train_one_generation(m, opt, arm, recorder, paths, TINY, state, ctx)
+        trainer.train_one_generation(small, recorder, paths, TINY, state, ctx)
     ctx["deliverer"].drain()
     assert not paths.rolling_checkpoint.exists()
 
@@ -691,7 +683,7 @@ def test_evaluate_scores_each_pool_by_its_own_slots():
 def test_a_checkpoint_from_another_version_is_refused(tmp_path):
     paths = TagPaths("t", "policy_set", tmp_path)
     paths.rolling_checkpoint.parent.mkdir(parents=True)
-    config = trainer.versions()
+    config = unit.versions()
     torch.save({"config": {**config, "policy_set_format_version": -1}}, paths.rolling_checkpoint)
     with pytest.raises(RuntimeError, match="policy_set_format_version"):
         trainer.check_resumable(paths, config)
@@ -706,7 +698,7 @@ def test_the_workload_registers_gpu_generators_and_a_gpu_data_home_trainer():
 
 def test_a_checkpoint_from_this_version_or_none_resumes(tmp_path):
     paths = TagPaths("t", "policy_set", tmp_path)
-    config = trainer.versions()
+    config = unit.versions()
     trainer.check_resumable(paths, config)  # no checkpoint
     paths.rolling_checkpoint.parent.mkdir(parents=True)
     torch.save({"config": dict(config)}, paths.rolling_checkpoint)
@@ -857,7 +849,7 @@ def test_the_greedy_form_overfits_a_pool_and_builds_distinct_sets(chunk):
     items = dataset.read_items([chunk])[:1]
     batch = dataset.PoolBatcher().build(items)
     torch.manual_seed(0)
-    m = trainer.build_models(only("greedy"))["greedy"]
+    m = unit.build_models(only("greedy"))["greedy"]
     opt = torch.optim.Adam(m.parameters(), lr=3e-3)
     form = forms.FORMS["greedy"]
     losses = []
