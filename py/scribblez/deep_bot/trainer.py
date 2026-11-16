@@ -25,18 +25,20 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 
+import numpy as np
 import torch
 from torch import nn
 
 from scribblez import params as params_mod
 from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY, kept_checkpoints, release, units
 from scribblez.deep_bot.seeds import seed_path
+from scribblez.ffi import read_file_header, struct_dtype
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls
 from scribblez.generational.records import TrainRecorder, read_controls
 from scribblez.paths import TagPaths
-from scribblez.policy_set import dataset
+from scribblez.policy_set import POOL_SUFFIX, dataset
 from scribblez.policy_set.onnx_export import LEAVE_GENERATION_KEY, LEAVE_TAG_KEY
 from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
@@ -85,6 +87,22 @@ def unit_rows(state: DeepBotState) -> dict[str, int]:
 
 def prefixed(prefix: str, metrics: dict) -> dict:
     return {f"{prefix}{key}": value for key, value in metrics.items()}
+
+
+def newest_release_share(gen_dir, newest: int) -> float:
+    """The share of `gen_dir`'s games the agent played on release `newest`,
+    the newest while the generation filled. The rest came from generators
+    that had not yet taken it up (the plan's "Pacing"). A chunk's .pool
+    header names the leaf network its games ran on, whose generation is the
+    release's number."""
+    header = struct_dtype("PoolFileHeader")
+    games = on_newest = 0
+    for slog in sorted(gen_dir.glob("*.slog")):
+        count = read_file_header(slog)[0]
+        sources = np.fromfile(slog.with_suffix(POOL_SUFFIX), dtype=header, count=1)[0]
+        games += count
+        on_newest += count if sources["leaf_model"]["generation"] == newest else 0
+    return on_newest / games
 
 
 def evaluate_generation(by_kind: dict, gen_dir, cpu) -> dict:
@@ -200,7 +218,7 @@ def run_one_generation(by_kind, baseline, recorder, paths, params, state, ctx):
     gen = state.generation_index
     gen_dir = paths.generation_dir(gen)
     t0 = time.time()
-    record = {"epoch": gen}
+    record = {"epoch": gen, "newest_release_share": newest_release_share(gen_dir, gen)}
     record |= evaluate_generation(by_kind, gen_dir, ctx["cpu"])
     record |= prefixed(BASELINE, evaluate_generation(baseline, gen_dir, ctx["cpu"]))
     t_train = time.time()

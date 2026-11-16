@@ -464,6 +464,9 @@ DEEP_BOT_QUALITY = [
     ),
     ("Pools in the generation", ["eval_pools"]),
     ("Share of pools whose sim-best is outside the equity top 10", ["eval_tail_share"]),
+    # Below 1 where generators were still on an older release when their
+    # chunks arrived: the price of not parking them while the trainer works.
+    ("Share of the generation's games played on the newest release", ["newest_release_share"]),
     ("Training loss, by model", ["loss_leave", "loss_leaf", "loss_policy"], {"log": True}),
     ("Learning rate, by model", ["leave_lr", "leaf_lr", "policy_lr"], {"log": True}),
     ("Training time (s), by model", ["leave_train_s", "leaf_train_s", "policy_train_s"]),

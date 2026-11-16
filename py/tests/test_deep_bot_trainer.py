@@ -7,6 +7,7 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
@@ -31,10 +32,12 @@ from scribblez.deep_bot import (  # noqa: E402
     trainer,
     units,
 )
+from scribblez.ffi import struct_dtype  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.records import TrainRecorder  # noqa: E402
 from scribblez.leave_inference import forgone  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
+from scribblez.policy_set import POOL_SUFFIX  # noqa: E402
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.workloads.deep_bot import DeepBotParams  # noqa: E402
 from scribblez.workloads.deep_bot_leaf_eval import DeepBotLeafEvalParams  # noqa: E402
@@ -168,6 +171,7 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
         assert record[key] == record[f"r0_{key}"], key
     for kind in KINDS:
         assert record[f"loss_{kind}"] > 0, kind
+    assert 0.0 <= record["newest_release_share"] <= 1.0
     assert tag.checkpoint_path(1).exists()  # keep_checkpoint_every = 1
 
     resumed = units.build_units(tag, PARAMS, CPU)
@@ -189,6 +193,22 @@ def test_a_restored_trainer_republishes_the_release_its_checkpoint_holds(tag, mo
     state = trainer.DeepBotState(generation_index=3, rows_trained=3)
     trainer.ensure_newest_release(by_kind, tag, "t", False, state)
     assert release.newest(tag) == 3
+
+
+def _set_release(pool: Path, number: int):
+    """Rewrite the release a .pool's header says its games were played on."""
+    header = np.fromfile(pool, dtype=struct_dtype("PoolFileHeader"), count=1)
+    header["leaf_model"]["generation"] = number
+    with open(pool, "r+b") as f:
+        f.write(header.tobytes())
+
+
+def test_a_generations_share_of_games_on_the_newest_release(chunk, tmp_path):
+    for name, played_on in (("a", 4), ("b", 4), ("c", 3)):
+        for f in chunk.iterdir():
+            shutil.copy(f, tmp_path / f"{name}{f.suffix}")
+        _set_release(tmp_path / f"{name}{POOL_SUFFIX}", played_on)
+    assert trainer.newest_release_share(tmp_path, 4) == pytest.approx(2 / 3)
 
 
 def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tmp_path):
