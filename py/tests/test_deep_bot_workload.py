@@ -1,5 +1,6 @@
 """The deep_bot workload (scribblez.workloads.deep_bot): a new tag's seeds,
-the generator's cycle on the newest release, and the tag's end condition."""
+the generator's cycle on the newest release, what the controller carries to
+slots on other machines, and the tag's end condition."""
 
 from dataclasses import replace
 
@@ -10,7 +11,7 @@ from scribblez.deep_bot import KINDS, LEAF, LEAVE, release, seeds
 from scribblez.generational import lifecycle
 from scribblez.params import ParamsError
 from scribblez.paths import TagPaths
-from scribblez.workloads import deep_bot, selfplay_gen
+from scribblez.workloads import base, deep_bot, selfplay_gen
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot import DeepBotParams
 
@@ -54,7 +55,7 @@ def _publish(paths: TagPaths, number: int):
     release.write_manifest(paths, number, "t", {})
 
 
-def _ctx(tmp_path, max_cycles: int) -> WorkerContext:
+def _ctx(tmp_path, max_cycles: int = 1, kind: str = "local") -> WorkerContext:
     return WorkerContext(
         spec=SPEC,
         role=SPEC.role("generate"),
@@ -65,6 +66,7 @@ def _ctx(tmp_path, max_cycles: int) -> WorkerContext:
         max_cycles=max_cycles,
         sink=LocalSink(SPEC.data_dir("t", tmp_path)),
         mount_root=tmp_path,
+        kind=kind,
     )
 
 
@@ -103,8 +105,33 @@ def test_each_cycle_plays_and_labels_on_the_newest_release(tmp_path, monkeypatch
 
 
 def test_a_generator_without_a_release_fails(tmp_path):
-    with pytest.raises(RuntimeError, match="no release"):
-        deep_bot.release_cycle(SPEC.paths("t", tmp_path), PARAMS)
+    with pytest.raises(FileNotFoundError, match="no release"):
+        deep_bot.release_cycle(_ctx(tmp_path))
+
+
+def test_a_remote_generator_waits_for_the_controllers_first_release(tmp_path, monkeypatch):
+    paths = SPEC.paths("t", tmp_path)
+    # The push lands while the generator sleeps.
+    monkeypatch.setattr(base.time, "sleep", lambda seconds: _publish(paths, 4))
+    assert deep_bot.newest_release(_ctx(tmp_path, kind="ssh")) == 4
+
+
+def test_the_controller_carries_seeds_to_a_trainer_and_the_newest_release_to_generators(tmp_path):
+    paths = SPEC.paths("t", tmp_path)
+    tag_files = {role.name: workloads.resolve(role.tag_files) for role in SPEC.roles}
+    assert tag_files["train"](paths, PARAMS) == [f"seeds/{kind}.pt" for kind in KINDS]
+    assert tag_files["generate"](paths, PARAMS) == []  # before release 0
+    _publish(paths, 0)
+    _publish(paths, 1)
+    # The manifest goes last: a release exists once it does.
+    assert tag_files["generate"](paths, PARAMS) == [
+        *(f"releases/release_000001/{kind}.onnx" for kind in KINDS),
+        "releases/release_000001/manifest.json",
+    ]
+
+
+def test_the_controller_keeps_generations_for_the_longest_window():
+    assert replace(PARAMS, leave_window=2, leaf_window=5, policy_window=3).window == 5
 
 
 def test_the_tag_is_complete_at_max_generations(tmp_path):

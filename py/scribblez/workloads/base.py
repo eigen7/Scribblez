@@ -18,8 +18,10 @@ importable in processes without torch or a GPU: the dashboard, and CPU-only
 worker containers.
 """
 
+import functools
 import importlib
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -46,6 +48,23 @@ class StatsSpec:
     # Phases that run on a background thread, overlapping the next cycle's
     # work. They are shown, but a cycle's wall time does not include them.
     background: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class DeliveredSet:
+    """Files a role delivers together, where one arriving without the others
+    would be wrong: a subdirectory of `outbox` per set, complete once its
+    `marker` file exists, as a trainer's state pair is
+    (generational/state_pair.py).
+
+    The controller moves each complete set out of an ssh slot's container and
+    hands it to `install`, which puts it where the tag keeps it. A local slot
+    writes that place directly and delivers nothing.
+    """
+
+    outbox: str  # a directory directly under the tag root
+    marker: str  # the file a set's writer makes last
+    install: str  # dotted path to install(set_dir: Path, paths: TagPaths)
 
 
 @dataclass(frozen=True)
@@ -92,6 +111,19 @@ class RoleSpec:
     # it. "" when every input is in the bundle, the runtime deps, or the tag
     # itself.
     inputs: str = ""
+    # Dotted path to tag_files(paths, params) -> list[str]: files of the
+    # role's own tag that it reads and does not write, tag-relative, in the
+    # order a slot must receive them (a set's marker last). A file never
+    # changes under its name, and the list may grow: deep_bot's seeds for its
+    # trainer, its newest release for a generator. A local slot reads them in
+    # place. Every reconcile pass the controller pushes into each running ssh
+    # slot's container the ones it lacks, and a runner that starts before
+    # they arrive waits (await_tag_file below). A slot beside a trainer on an
+    # ssh machine shares the trainer's tree and is pushed nothing. "" when
+    # the role reads nothing of its tag that it did not write.
+    tag_files: str = ""
+    # The sets of files the role delivers whole (DeliveredSet).
+    delivered_sets: tuple[DeliveredSet, ...] = ()
     stats: StatsSpec | None = None
 
 
@@ -323,11 +355,28 @@ class WorkerContext:
         return self.spec.paths(self.tag, self.mount_root)
 
 
-# How long resolve_input waits for a staged copy. The controller pushes a
-# container's inputs right after creating it, so a wait this long means the
-# staging failed, not that it is slow.
+# How long a remote worker waits for something the controller pushes into its
+# container. The controller pushes on the reconcile pass after the container
+# starts, so a wait this long means the push failed, not that it is slow.
 INPUT_WAIT_SECONDS = 600
 INPUT_POLL_SECONDS = 5
+
+
+def await_push(ctx: WorkerContext, look: Callable[[], object], why: str):
+    """What `look()` finds, polled until it is not None. A local worker,
+    which reads the controller's own tree and is pushed nothing, looks once;
+    a remote one for up to INPUT_WAIT_SECONDS. Raises FileNotFoundError(why)
+    when nothing turns up."""
+    deadline = time.monotonic() + (0 if ctx.kind == "local" else INPUT_WAIT_SECONDS)
+    while (found := look()) is None:
+        if time.monotonic() >= deadline:
+            raise FileNotFoundError(why)
+        time.sleep(INPUT_POLL_SECONDS)
+    return found
+
+
+def _file_or_none(path: Path) -> Path | None:
+    return path if path.is_file() else None
 
 
 def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
@@ -335,20 +384,16 @@ def resolve_input(ctx: WorkerContext, rel: str, source: Path) -> Path:
 
     `source` itself when it exists, as it does for a local worker sharing the
     controller's mount. Otherwise the copy the controller pushed to `rel`
-    under the container's tag root. A remote slot polls until the copy
-    arrives; a local worker, for which nothing is staged, checks once. Raises
-    FileNotFoundError when no copy turns up."""
+    under the container's tag root, awaited as await_push says."""
     if source.is_file():
         return source
     staged = ctx.tag_paths().root / rel
-    missing = FileNotFoundError(f"input {rel} was neither at {source} nor staged at {staged}")
-    if ctx.kind == "local":
-        if staged.is_file():
-            return staged
-        raise missing
-    deadline = time.monotonic() + INPUT_WAIT_SECONDS
-    while not staged.is_file():
-        if time.monotonic() >= deadline:
-            raise missing
-        time.sleep(INPUT_POLL_SECONDS)
-    return staged
+    why = f"input {rel} was neither at {source} nor staged at {staged}"
+    return await_push(ctx, functools.partial(_file_or_none, staged), why)
+
+
+def await_tag_file(ctx: WorkerContext, path: Path) -> Path:
+    """`path`, a file of the worker's own tag that its role names in
+    RoleSpec.tag_files, once it is there (await_push)."""
+    why = f"{path} is missing: the tag does not hold it, or the controller's push failed"
+    return await_push(ctx, functools.partial(_file_or_none, path), why)

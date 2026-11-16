@@ -1,6 +1,6 @@
 # Plan: one workload that advances DeepBot's generations
 
-**Status: proposed 2026-11-13; steps 1 to 3 of its
+**Status: proposed 2026-11-13; steps 1 to 4 of its
 [build order](#build-order) are built.** This is step 11 of DeepBot's
 [build order](deep_bot.md#build-order) as a dashboard workload, and step 3
 of [the order of the remaining work](deep_bot_roadmap.md). Its
@@ -81,8 +81,8 @@ trainer works on the last.
 The chunk's `.pool` header already names the leaf network and leave
 inference model its labels came from, by hash, tag and generation
 (`PoolSources`, data/pool_log.h). That is the chunk's release stamp. The
-scheduler copies each generation's game count per release into its manifest,
-so the mix is on record.
+trainer reads it for each generation's share of games played on the newest
+release, so the mix is on record.
 
 ### Self-play writes the pools
 
@@ -179,7 +179,10 @@ same units, so they still run, and their results stay bit-identical. The
    does, so a generator never reads two models of different releases. Every
    release's exports are kept, about 23 MB, so that any release can be
    played later. Every `keep_checkpoint_every`th release's checkpoint is
-   kept as well, as a seed for a later tag.
+   kept as well, as a seed for a later tag. A trainer on an ssh machine
+   hands each release and each kept checkpoint to the controller as a
+   complete set, as it does its state pair, and keeps its own copy of the
+   releases for the generators beside it.
 4. **Evict** generations older than the longest window.
 
 A series of scores, each on a different generation's games, mixes the
@@ -191,8 +194,8 @@ its seeds on today's games.
 **Seeds and warm start.** `seed_leave_tag`, `seed_leaf_tag` and
 `seed_policy_tag` name tags of the three standalone workloads. Each seed's
 rolling checkpoint is copied into the new tag when it is created, so the tag
-does not depend on its sources afterwards, and reaches a remote trainer as a
-role input. A seed's architecture params must equal the tag's; the trainer
+does not depend on its sources afterwards, and the controller pushes the
+copies to a trainer on an ssh machine. A seed's architecture params must equal the tag's; the trainer
 refuses a mismatch as `check_resumable` does. The models start from the
 seeds' weights with fresh optimizers. No trainer warm-starts from another tag
 today.
@@ -258,7 +261,7 @@ has, and a chunk goes into whichever generation is open when it arrives.
   release `g − 1` played while the trainer worked. The share is about the
   training time over the generation time: small on one GPU, larger as
   generators are added. `games_per_generation` is the knob that restores it,
-  and the manifests' per-release counts chart it.
+  and the record's share of games on the newest release charts it.
 - `open_ahead = 1` lets the next generation fill during training and still
   parks the generators if the trainer falls a whole generation behind. A
   stopped trainer parks them at once, as today.
@@ -288,7 +291,7 @@ Per generation, from the trainer, each also under release 0:
 - **Leaf network:** held-out loss per head.
 - **Policy:** how often its top move is the pool's best, against static
   equity's, and the regret of its top `N`.
-- **The share of each generation's games per release.**
+- **The share of each generation's games played on the newest release.**
 
 Per release, from the measure role (every `match_every_generations`):
 
@@ -376,7 +379,8 @@ included.
 | Staging, relay to a remote home, pulls, the gate | built | none |
 | Adding and removing generator slots on machines | built, by hand | none |
 | A role's out-of-tag inputs (the seeds) | built, pushed when a container is created | none |
-| A new release reaching a running remote slot | not built: inputs are pushed once | push the newest release to every running generator and measure slot each reconcile pass, as `_push_controls` pushes the controls file |
+| A new release reaching a running remote slot | built (step 4): a role names the files of its tag it reads, and each reconcile pass pushes the ones a running slot lacks | the measure role names the same files |
+| A remote trainer's releases reaching the controller | built (step 4): each is moved home as a complete set, like the state pair | none |
 | Work dispatched per export, results ingested and charted | built for match eval, on one export series and a neural player | a runner that builds a DeepBot player from a release; dispatch reads the release series; a row and a `.slog` kept per game |
 | A match on demand against a kept release | not built | a command that plays the match anywhere and files its games under the release |
 | Charts | one model's metrics per tag | a grid per model from one record |
@@ -474,8 +478,16 @@ Each is a pull request.
      better on the two generations of DeepBot's. Forty games a generation
      settle nothing, but it is the direction the [parts'
      match](deep_bot_roadmap.md#the-parts-measured) pointed.
-4. **Releases to remote slots.** The loop then runs on a fleet. *Measure:*
-   the share of games per release as generators are added.
+4. **Releases to remote slots.** Built 2026-11-16: both roles run on ssh
+   machines. The controller pushes the newest release to each generator
+   that does not share the trainer's tree, and the seeds to a trainer
+   elsewhere; a remote trainer hands its releases and kept checkpoints home
+   (`RoleSpec.tag_files`, `DeliveredSet`). *Measure:* the share of games
+   per release as generators are added, which each generation's record now
+   carries. Checked live only in part, on a 20-game chunk: a generator on a
+   second laptop received release 0 once it started, played it,
+   and its chunk filled generation 0 here. Not yet seen live: a second
+   release reaching a running generator, and a trainer on an ssh machine.
 5. **Self-play writes the pools.** The engine change, with both stages of
    the turn in the record; the trainer's target from them; the per-game
    sample; and the belief metric by the played move's rank. *Measure:* pools

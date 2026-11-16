@@ -32,6 +32,7 @@ from scribblez.dashboard.workers import (
     _container_name,
     _key,
 )
+from scribblez.deep_bot import release, seeds
 from scribblez.generational import lifecycle
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
@@ -2246,6 +2247,149 @@ def test_an_ssh_trainers_controls_go_into_its_container_once_per_change(
     assert pushed == [("scz-position_eval-t-tr", "controls.json")]
 
 
+def _deep_bot_fleet(manager, monkeypatch, tmp_path, trainer_kind: str):
+    """A deep_bot task with a trainer of `trainer_kind` on machine "u@home", a
+    generator beside it and one on "u@far", all running; and what is pushed
+    into which container, with each container's files as a listing shows
+    them."""
+    spec = workloads.get("deep_bot")
+    task = tasks.TaskRecord(workload="deep_bot", tag="t", params={}, created_at=0.0)
+    for wid, role, kind, host in (
+        ("tr", "train", trainer_kind, "u@home"),
+        ("near", "generate", "ssh", "u@home"),
+        ("far", "generate", "ssh", "u@far"),
+    ):
+        task.workers.append(
+            tasks.WorkerRecord(
+                worker_id=wid,
+                role=role,
+                kind=kind,
+                desired_state="running",
+                host=host if kind == "ssh" else None,
+            )
+        )
+    held: dict[str, set[str]] = {}
+    pushed = []
+
+    def push_file(machine, container, *, remote_root, rel_dest, src):
+        assert src.is_file(), src
+        pushed.append((container.rsplit("-", 1)[-1], rel_dest))
+        held.setdefault(container, set()).add(rel_dest)
+
+    def list_dir(machine, container, *, remote_root, rel):
+        return sorted(Path(f).name for f in held.get(container, ()) if str(Path(f).parent) == rel)
+
+    monkeypatch.setattr(workers_mod, "SshMachine", _FakeSshMachine)
+    monkeypatch.setattr(workers_mod, "push_file", push_file)
+    monkeypatch.setattr(workers_mod, "list_dir", list_dir)
+    status = [{"worker_id": w.worker_id, "ssh_probe": "running"} for w in task.workers]
+    return spec, task, status, pushed, held
+
+
+def _write_release(paths, number: int):
+    for rel in release.files(number):
+        (paths.root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (paths.root / rel).write_text("x")
+
+
+RELEASE_1 = [f"releases/release_000001/{name}" for name in (
+    "leave.onnx", "leaf.onnx", "policy.onnx", "manifest.json"
+)]  # fmt: skip
+
+
+def test_a_new_release_is_pushed_once_to_each_generator_on_another_machine(
+    manager, monkeypatch, tmp_path
+):
+    """With the trainer here, every ssh generator reads a pushed copy."""
+    spec, task, status, pushed, held = _deep_bot_fleet(manager, monkeypatch, tmp_path, "local")
+    paths = manager.tasks.paths(spec, "t")
+    manager._push_tag_files(spec, task, status)
+    assert pushed == []  # no release yet
+
+    _write_release(paths, 1)
+    manager._push_tag_files(spec, task, status)
+    manager._push_tag_files(spec, task, status)  # nothing new: no second push
+    assert pushed == [(wid, rel) for wid in ("near", "far") for rel in RELEASE_1]
+
+    # A new dashboard process asks each container what it holds before pushing.
+    fresh = WorkerManager(manager.mount_root)
+    del pushed[:]
+    fresh._push_tag_files(spec, task, status)
+    assert pushed == []
+
+    # A container made anew holds nothing, whatever the old one did.
+    del held["scz-deep_bot-t-far"]
+    manager._tag_files_held.pop(_key(spec, "t", "far"))  # as _run_ssh_container does
+    manager._push_tag_files(spec, task, status)
+    assert pushed == [("far", rel) for rel in RELEASE_1]
+
+
+def test_a_remote_trainer_gets_the_seeds_and_the_generator_beside_it_nothing(
+    manager, monkeypatch, tmp_path
+):
+    """A generator on the trainer's machine reads the releases the trainer
+    writes into the tree they share; the one elsewhere gets the copy the
+    controller pulled."""
+    spec, task, status, pushed, _ = _deep_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
+    paths = manager.tasks.paths(spec, "t")
+    for kind in ("leave", "leaf", "policy"):
+        seeds.seed_path(paths, kind).parent.mkdir(parents=True, exist_ok=True)
+        seeds.seed_path(paths, kind).write_text(kind)
+    _write_release(paths, 1)
+    manager._push_tag_files(spec, task, status)
+    assert pushed == [
+        *(("tr", f"seeds/{kind}.pt") for kind in ("leave", "leaf", "policy")),
+        *(("far", rel) for rel in RELEASE_1),
+    ]
+
+
+def test_a_push_that_fails_is_retried_from_the_file_it_stopped_at(manager, monkeypatch, tmp_path):
+    spec, task, status, pushed, held = _deep_bot_fleet(manager, monkeypatch, tmp_path, "local")
+    _write_release(manager.tasks.paths(spec, "t"), 1)
+    push = workers_mod.push_file
+
+    def failing(machine, container, **kw):
+        if container.endswith("near") and kw["rel_dest"].endswith("policy.onnx"):
+            raise workers_mod.SshMachineError("link dropped")
+        push(machine, container, **kw)
+
+    monkeypatch.setattr(workers_mod, "push_file", failing)
+    manager._push_tag_files(spec, task, status)
+    # The other slot got its release, and no manifest went ahead of its exports.
+    assert [rel for wid, rel in pushed if wid == "far"] == RELEASE_1
+    assert [rel for wid, rel in pushed if wid == "near"] == RELEASE_1[:2]
+
+    monkeypatch.setattr(workers_mod, "push_file", push)
+    del pushed[:]
+    manager._push_tag_files(spec, task, status)
+    assert pushed == [("near", rel) for rel in RELEASE_1[2:]]
+
+
+def test_a_deep_bot_trainers_collection_installs_its_releases_and_kept_checkpoints(
+    manager, monkeypatch, tmp_path
+):
+    spec, task, _, _, _ = _deep_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
+    assert manager._transfer_target(spec, task, task.worker("tr"))["pair_dirs"] == {
+        "state": "train_state.json",
+        "release_outbox": "manifest.json",
+        "checkpoint_outbox": "model.pt",
+    }
+    paths = manager.tasks.paths(spec, "t")
+    pulled = []
+    for rel, text in (
+        ("release_outbox/release_000003/manifest.json", "{}"),
+        ("release_outbox/release_000003/leaf.onnx", "leaf 3"),
+        ("checkpoint_outbox/gen_000003/model.pt", "state 3"),
+    ):
+        (paths.root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (paths.root / rel).write_text(text)
+        pulled.append(rel)
+    manager._install_pulled_sets(spec, task, task.worker("tr"), pulled)
+    assert release.newest(paths) == 3
+    assert release.export_path(paths, 3, "leaf").read_text() == "leaf 3"
+    assert paths.checkpoint_path(3).read_text() == "state 3"
+
+
 def test_an_ssh_trainers_container_runs_the_torch_image_with_local_records(
     manager, tmp_path, monkeypatch
 ):
@@ -2635,8 +2779,8 @@ def test_a_failed_relay_neither_fails_its_pull_nor_loses_the_pulls_state_pair(ma
     installed = []
     monkeypatch.setattr(
         WorkerManager,
-        "_install_pulled_pairs",
-        lambda self, spec, task, pulled: installed.append(pulled),
+        "_install_pulled_sets",
+        lambda self, spec, task, w, pulled: installed.append(pulled),
     )
     assert manager._transfer_ssh(spec, task, task.worker("tr")) is result
     assert installed == [result.pulled]

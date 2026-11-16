@@ -15,9 +15,10 @@ the chunk's .forgone sidecar and labels `pool_positions_per_game` turns of
 each game with policy_set_pool_tool on the same two models, into the chunk's
 .pool. The tool stands in until self-play writes the pools of its own turns.
 
-Both roles run on the controller's machine for now: a generator reads the
-releases from the tag in place, and nothing carries one to a remote slot yet.
-The measure role is not built.
+Either role runs on the controller's machine or on one reached over ssh. A
+generator beside the trainer reads the releases from the tag in place; the
+controller pushes the newest to the others, and the seeds to a trainer
+elsewhere (RoleSpec.tag_files). The measure role is not built.
 """
 
 import functools
@@ -27,14 +28,21 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import LEAF, LEAVE, release, seeds
+from scribblez.deep_bot import LEAF, LEAVE, kept_checkpoints, release, seeds
 from scribblez.generational import lifecycle
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import ParamsError, param
 from scribblez.paths import TagPaths
 from scribblez.policy_set import POOL_SUFFIX
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import (
+    DeliveredSet,
+    RoleSpec,
+    StatsSpec,
+    WorkerContext,
+    WorkloadSpec,
+    await_push,
+)
 from scribblez.workloads.policy_set import PoolLabelParams, write_pools
 from scribblez.workloads.selfplay_gen import (
     GENERATOR_STATS,
@@ -107,6 +115,13 @@ class DeepBotParams:
             if getattr(self, name) < 1:
                 raise ParamsError(f"{name} must be >= 1, got {getattr(self, name)}")
 
+    @property
+    def window(self) -> int:
+        """The generations behind the cursor the tag keeps: the longest of
+        the models' windows. The controller reads it for its copy of a
+        remote trainer's generations."""
+        return max(self.leave_window, self.leaf_window, self.policy_window)
+
 
 def player_spec(params: DeepBotParams, leaf: Path, leave: Path) -> str:
     """The --player spec of the generating agent on a release's leaf network
@@ -127,13 +142,21 @@ def pool_params(params: DeepBotParams) -> PoolLabelParams:
     )
 
 
-def release_cycle(paths: TagPaths, params: DeepBotParams) -> Cycle:
-    """A cycle on the tag's newest release. Raises RuntimeError before
-    release 0, which the trainer publishes before its data home's first
-    heartbeat releases the generators."""
-    number = release.newest(paths)
-    if number is None:
-        raise RuntimeError(f"no release under {release.releases_dir(paths)}; start the trainer")
+def newest_release(ctx: WorkerContext) -> int:
+    """The newest release the worker holds. The trainer publishes release 0
+    before its data home's first heartbeat releases the generators, so a
+    local generator that finds none raises FileNotFoundError. A remote one
+    may have started before the controller's first push and waits for it
+    (await_push)."""
+    paths = ctx.tag_paths()
+    why = f"no release under {release.releases_dir(paths)}; start the trainer"
+    return await_push(ctx, functools.partial(release.newest, paths), why)
+
+
+def release_cycle(ctx: WorkerContext) -> Cycle:
+    """A cycle on the newest release the worker holds."""
+    paths, params = ctx.tag_paths(), ctx.params
+    number = newest_release(ctx)
     leaf = release.export_path(paths, number, LEAF)
     leave = release.export_path(paths, number, LEAVE)
     print(f"playing release {number}")
@@ -147,7 +170,7 @@ def run_generate(ctx: WorkerContext) -> int:
     """The generate-role runner."""
     return generate_cycles(
         ctx,
-        functools.partial(release_cycle, ctx.tag_paths(), ctx.params),
+        functools.partial(release_cycle, ctx),
         CHUNK_SIDECARS,
         face_up_leaves=False,
         random_opening_mean=0.0,
@@ -191,8 +214,7 @@ SPEC = WorkloadSpec(
             title="Generator (GPU)",
             runner="scribblez.workloads.deep_bot:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            # Local until a release reaches a remote slot.
-            kinds=("local",),
+            tag_files="scribblez.deep_bot.release:newest_files",
             gpu=True,
             stats=GENERATOR_STATS,
         ),
@@ -204,8 +226,19 @@ SPEC = WorkloadSpec(
             runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            # Local until the seeds reach a remote trainer as role inputs.
-            kinds=("local",),
+            tag_files="scribblez.deep_bot.seeds:tag_files",
+            delivered_sets=(
+                DeliveredSet(
+                    outbox=release.OUTBOX,
+                    marker=release.MANIFEST,
+                    install="scribblez.deep_bot.release:install",
+                ),
+                DeliveredSet(
+                    outbox=kept_checkpoints.OUTBOX,
+                    marker=kept_checkpoints.NAME,
+                    install="scribblez.deep_bot.kept_checkpoints:install",
+                ),
+            ),
             gpu=True,
             stats=StatsSpec(
                 unit="games",

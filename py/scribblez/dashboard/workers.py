@@ -50,6 +50,7 @@ from cloud.providers.aws import AwsProvider
 from cloud.providers.base import Instance, LaunchRequest, Provider, ProviderError
 from cloud.ssh_machine import SshMachine, SshMachineError
 from cloud.ssh_transfer import (
+    list_dir,
     pull_ready_dirs,
     pull_results,
     push_file,
@@ -81,7 +82,7 @@ from scribblez.paths import (
     SCHEDULER_STATE_REL,
     TRAINER_OUTPUT_DIRS,
 )
-from scribblez.workloads.base import SchedulerHooks, uses_gpu
+from scribblez.workloads.base import DeliveredSet, SchedulerHooks, uses_gpu
 from scribblez.workloads.worker import stats_rel_path
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
@@ -164,6 +165,30 @@ def _role_inputs(spec, role, params, mount_root: Path) -> dict[str, Path]:
     """The files a slot of `role` reads from outside its tag (RoleSpec.inputs),
     resolved against the controller's mount; empty for a role with none."""
     return workloads.resolve(role.inputs)(params, mount_root) if role.inputs else {}
+
+
+# A trainer's checkpoint and cursor, which every role that ingests delivers
+# as a pair (generational/state_pair.py).
+STATE_PAIR = DeliveredSet(
+    outbox=state_pair.STATE_DIR,
+    marker=state_pair.CURSOR_NAME,
+    install="scribblez.generational.state_pair:install",
+)
+
+
+def _delivered_sets(role) -> tuple[DeliveredSet, ...]:
+    """The sets the controller moves whole out of an ssh slot of `role`."""
+    return ((STATE_PAIR,) if role.ingest else ()) + role.delivered_sets
+
+
+def _held_files(files: list[str], *, machine, container: str, remote_root: str) -> set[str]:
+    """Those of the tag-relative `files` the container holds, from a listing
+    of each directory they are in."""
+    held = set()
+    for parent in sorted({str(Path(rel).parent) for rel in files}):
+        names = list_dir(machine, container, remote_root=remote_root, rel=parent)
+        held |= {f"{parent}/{name}" for name in names}
+    return held.intersection(files)
 
 
 def _require_inputs(inputs: dict[str, Path]):
@@ -563,6 +588,9 @@ class WorkerManager:
         self._local: dict[str, subprocess.Popen] = {}  # slot key -> live process
         # slot key -> controls.json mtime as last pushed into its container.
         self._controls_pushed: dict[str, int] = {}
+        # Slot key -> the tag files (RoleSpec.tag_files) its container is
+        # known to hold; no entry until this process has looked.
+        self._tag_files_held: dict[str, set[str]] = {}
         self._creds_cache: CloudCredentials | None = None
         self._ssh_down: dict[str, float] = {}  # host -> time of last failed probe
         # Slot key -> (probe state, when observed). Written by the reconcile
@@ -808,6 +836,53 @@ class WorkerManager:
             )
             self._controls_pushed[key] = stamp
 
+    def _push_tag_files(self, spec, task: tasks.TaskRecord, status: list[dict]):
+        """Push into each running ssh slot's container the files of the tag
+        its role reads (RoleSpec.tag_files) and the container lacks, in the
+        role's order. One slot's failure is reported and retried next pass;
+        it must not keep the others' files from them."""
+        paths = self.tasks.paths(spec, task.tag)
+        params = params_mod.validate(spec.params_cls, task.params)
+        for info in status:
+            w = task.find(info["worker_id"])
+            if w is None or w.kind != "ssh" or info.get("ssh_probe") != "running":
+                continue
+            role = spec.role(w.role)
+            if not role.tag_files or self._beside_remote_trainer(spec, task, w):
+                continue
+            files = workloads.resolve(role.tag_files)(paths, params)
+            try:
+                self._push_missing(spec, task, w, files)
+            except SshMachineError as e:
+                print(f"tag files {spec.name}/{task.tag}/{w.worker_id}: {e}")
+
+    def _beside_remote_trainer(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord) -> bool:
+        """Whether slot `w` shares the tree of a trainer on an ssh machine
+        without being that trainer: what it reads of the tag, the trainer
+        beside it wrote."""
+        return self._on_remote_data_home(spec, task, w) and not spec.role(w.role).ingest
+
+    def _push_missing(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, files: list[str]):
+        """Push those of `files` slot `w`'s container lacks. What it holds is
+        listed once per container and process and remembered after, so a pass
+        with nothing new costs no ssh call."""
+        key = _key(spec, task.tag, w.worker_id)
+        held = self._tag_files_held.get(key)
+        if held is not None and held.issuperset(files):
+            return
+        root = self.tasks.paths(spec, task.tag).root
+        target = {
+            "machine": self._ssh_machine(task, w),
+            "container": _container_name(spec, task.tag, w.worker_id),
+            "remote_root": str(root),
+        }
+        if held is None:
+            held = self._tag_files_held[key] = _held_files(files, **target)
+        for rel in files:
+            if rel not in held:
+                push_file(**target, rel_dest=rel, src=root / rel)
+                held.add(rel)
+
     def _log_file(self, spec: workloads.WorkloadSpec, tag: str, name: str):
         log_dir = self.tasks.paths(spec, tag).logs_dir
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -1036,6 +1111,7 @@ class WorkerManager:
         if seed:
             env["SCZ_STATE_SEED"] = "1"
         self._controls_pushed.pop(_key(spec, task.tag, w.worker_id), None)
+        self._tag_files_held.pop(_key(spec, task.tag, w.worker_id), None)
         # The whole tag tree, where the worker's default mount root puts it,
         # so every rename stays within one filesystem.
         volume = (
@@ -2261,10 +2337,11 @@ class WorkerManager:
                         )
                     except Exception as e:  # noqa: BLE001 -- one role must not stop the pass
                         print(f"ingest {spec.name}/{task.tag}/{role.name}: {e}")
-            try:
-                await self.offload(self._push_controls, spec, task, status)
-            except Exception as e:  # noqa: BLE001 -- one task must not stop the pass
-                print(f"controls push {spec.name}/{task.tag}: {e}")
+            for push in (self._push_controls, self._push_tag_files):
+                try:
+                    await self.offload(push, spec, task, status)
+                except Exception as e:  # noqa: BLE001 -- one task must not stop the pass
+                    print(f"{push.__name__} {spec.name}/{task.tag}: {e}")
 
     def _collect_step(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """The pass's collection for slot `w` (blocking thread): record the
@@ -2339,7 +2416,7 @@ class WorkerManager:
             if machine.container_state(name) not in ("stopped", "missing"):
                 raise
             return None
-        self._install_pulled_pairs(spec, task, result.pulled)
+        self._install_pulled_sets(spec, task, w, result.pulled)
         return result
 
     def _relay_staging(self, machine, spec, task: tasks.TaskRecord, home: tasks.WorkerRecord):
@@ -2447,15 +2524,17 @@ class WorkerManager:
             data_dirs=[str(paths.staging_dir.relative_to(paths.root)), _ledger_rel(paths)],
         )
 
-    def _install_pulled_pairs(self, spec, task: tasks.TaskRecord, pulled: list[str]):
-        """Install the state pairs a pull brought in, oldest first, each under
-        the cursor rule; a pair that loses (or arrived torn) is discarded."""
+    def _install_pulled_sets(self, spec, task: tasks.TaskRecord, w, pulled: list[str]):
+        """Install the sets a pull from slot `w` brought in (its role's
+        _delivered_sets), each kind oldest first. The installer discards a
+        set that loses to what is installed, as a state pair may under the
+        cursor rule, or that arrived torn."""
         paths = self.tasks.paths(spec, task.tag)
-        pairs = sorted(
-            {"/".join(n.split("/")[:2]) for n in pulled if n.startswith(f"{state_pair.STATE_DIR}/")}
-        )
-        for rel in pairs:
-            state_pair.install(paths.root / rel, paths)
+        for delivered in _delivered_sets(spec.role(w.role)):
+            install = workloads.resolve(delivered.install)
+            prefix = f"{delivered.outbox}/"
+            for rel in sorted({"/".join(n.split("/")[:2]) for n in pulled if n.startswith(prefix)}):
+                install(paths.root / rel, paths)
 
     def _pull_scheduler_state(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord):
         """Copy a remote data home's scheduler record (its gate and heartbeat)
@@ -2626,7 +2705,7 @@ class WorkerManager:
         flushed on the way down, a trainer's final state pair included, which
         is installed under the cursor rule."""
         pulled = sweep_stopped(machine, **self._transfer_target(spec, task, w))
-        self._install_pulled_pairs(spec, task, pulled)
+        self._install_pulled_sets(spec, task, w, pulled)
 
     def shutdown(self):
         """SIGTERM this process's local workers (they flush and exit) and sync
@@ -2705,9 +2784,11 @@ class WorkerManager:
             if self._on_remote_data_home(spec, task, w)
             else [f"data/{sub}" for sub in spec.collected_dirs],
         }
-        if spec.role(w.role).ingest:
+        role = spec.role(w.role)
+        if role.ingest:
             target["data_dirs"] += list(TRAINER_OUTPUT_DIRS)
-            target["pair_dirs"] = {state_pair.STATE_DIR: state_pair.CURSOR_NAME}
+        if sets := _delivered_sets(role):
+            target["pair_dirs"] = {s.outbox: s.marker for s in sets}
         return target
 
     def _copy_payload(self, machine, container: str, role, bundle_id: str, arch: str):

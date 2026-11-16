@@ -1,7 +1,8 @@
 """A deep_bot tag's seeds (docs/plans/deep_bot_generations.md, "Seeds and
 warm start"): the rolling checkpoints of three tags of the standalone
 workloads, copied under the new tag at seeds/<kind>.pt when it is created, so
-that the tag does not depend on its sources afterwards.
+that the tag does not depend on its sources afterwards. A trainer on an ssh
+machine gets them from the controller (`tag_files`).
 
 Importable without torch: the dashboard installs the seeds at task creation.
 """
@@ -19,6 +20,11 @@ WORKLOADS = {LEAVE: "leave_inference", LEAF: "deep_bot_leaf_eval", POLICY: "poli
 
 def seed_path(paths: TagPaths, kind: str) -> Path:
     return paths.root / "seeds" / f"{kind}.pt"
+
+
+def tag_files(paths: TagPaths, params) -> list[str]:
+    """The train role's RoleSpec.tag_files: the three seeds."""
+    return [str(seed_path(paths, kind).relative_to(paths.root)) for kind in KINDS]
 
 
 def source(params, kind: str, mount_root: Path) -> Path:
