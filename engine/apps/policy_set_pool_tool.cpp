@@ -85,7 +85,6 @@ namespace {
 namespace fs = std::filesystem;
 using namespace scribblez;
 
-constexpr const char* kPoolExt = ".pool";
 // Positions the producer prepares per batch, ahead of the labeler.
 constexpr int kPrepBatch = 16;
 // Keeps the groups' parents a sample of their own.
@@ -108,7 +107,7 @@ struct Options {
   int limit_games = 0;
 
   bool groups() const { return group_positions_per_game > 0; }
-  const char* done_ext() const { return groups() ? kGroupExtension : kPoolExt; }
+  const char* done_ext() const { return groups() ? kGroupExtension : kPoolExtension; }
 };
 
 void validate(Options& opt) {
@@ -141,7 +140,7 @@ PoolSources pool_sources(const Options& opt, const LeaveModel* leave_model) {
 void check_finished_pools(const std::vector<fs::path>& slogs, const PoolSources& want,
                           const Options& opt) {
   for (const fs::path& slog : slogs) {
-    const fs::path pool = fs::path(slog).replace_extension(kPoolExt);
+    const fs::path pool = fs::path(slog).replace_extension(kPoolExtension);
     const char* field = nullptr;
     std::string which;
     if (fs::exists(pool)) {
@@ -493,7 +492,7 @@ void pool_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Op
   }
   FileWork work = sample_work(slog.bytes, opt);
   util::ProgressMeter meter(work.size(), "positions");
-  PoolWriter writer(slog.sidecar(kPoolExt).string(), sources);
+  PoolWriter writer(slog.sidecar(kPoolExtension).string(), sources);
   PoolLabeler labeler(values, opt.labeler);
   FileReport report;
   const auto t0 = std::chrono::steady_clock::now();

@@ -6,6 +6,7 @@
 #include "data/probe_log.h"
 #include "data/probe_replay.h"
 #include "data/sim_observation_log.h"
+#include "data/survivor_log.h"
 #include "encoding/input_encoder.h"
 #include "encoding/leaf_eval_input_encoder.h"
 #include "game/glyph.h"
@@ -148,6 +149,9 @@ json::object build_structs() {
   s["PoolOppRack"] = struct_json<PoolOppRack>();
   s["PoolCandidate"] = struct_json<PoolCandidate>();
   s["PoolModelRecord"] = struct_json<PoolModelRecord>();
+  s["SurvivorFileHeader"] = struct_json<SurvivorFileHeader>();
+  s["SurvivorPositionHeader"] = struct_json<SurvivorPositionHeader>();
+  s["SurvivorRecord"] = struct_json<SurvivorRecord>();
   s["GroupFileHeader"] = struct_json<GroupFileHeader>();
   s["GroupHeader"] = struct_json<GroupHeader>();
   s["GroupRack"] = struct_json<GroupRack>();
@@ -191,6 +195,10 @@ json::object build_constants() {
   c["pool"] = {{"magic", kPoolMagic},
                {"version", kPoolFormatVersion},
                {"flag_leave_inference", kPoolFlagLeaveInference}};
+  c["survivors"] = {{"magic", kSurvivorMagic},
+                    {"version", kSurvivorFormatVersion},
+                    {"source_sims", static_cast<uint8_t>(SurvivorSource::SIMS)},
+                    {"source_solved", static_cast<uint8_t>(SurvivorSource::SOLVED)}};
   {
     // SimMaps' layout, [name, rows, cols] per field in order.
     json::array fields;

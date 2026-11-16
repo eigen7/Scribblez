@@ -50,10 +50,16 @@ class GameRunner : public GameSink {
     bool paired = false;               // games 2k and 2k+1 share one game seed with the
                                        // seats swapped, so per-seed tile luck cancels
                                        // out of paired comparisons; needs an even --games
-    std::string results_file;          // if non-empty, one JSON line per finished game
-    int progress_secs = 10;            // games-done/rate/ETA line interval; 0 disables,
-                                       // and only the parallel batch loop prints one
-    bool verbose = false;              // per-game + batch summaries to stderr
+    // If > 0, have the agents record each turn's search
+    // (Game::set_record_pools) and write those of this many turns of each
+    // game beside its .slog as the .pool and .survivors
+    // (binlog::BinaryLogWriter); needs binary_log_dir. Self-play
+    // generation's policy data.
+    int pool_positions_per_game = 0;
+    std::string results_file;  // if non-empty, one JSON line per finished game
+    int progress_secs = 10;    // games-done/rate/ETA line interval; 0 disables,
+                               // and only the parallel batch loop prints one
+    bool verbose = false;      // per-game + batch summaries to stderr
 
     void add_options(boost::program_options::options_description& desc);
   };

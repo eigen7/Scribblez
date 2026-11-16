@@ -5,6 +5,7 @@
 #include "game/rack.h"
 
 #include <array>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@ namespace scribblez {
 
 class Game;
 class Dictionary;
+struct TurnPool;  // data/turn_pool.h
 
 // Outcome of Agent::end_game(). NONE means the agent has no opinion (the
 // default for bots); PLAY_AGAIN / QUIT come from the human agent.
@@ -35,6 +37,9 @@ struct MoveRequest {
   int my_score;
   int opp_score;
   int bag_size;
+  // Whether the game keeps a record of the turn's search
+  // (MoveDecision::pool), which an agent that has one to give then fills.
+  bool record_pool = false;
 };
 
 // What an agent is told at the start of a game, before any make_move(). A
@@ -64,6 +69,9 @@ std::vector<Move> generate_legal_exchanges(const MoveRequest& req);
 struct MoveDecision {
   Move move;
   std::vector<Move> projected_remaining_moves;
+  // The turn's search, where the request asked for it and the agent searched;
+  // null otherwise.
+  std::shared_ptr<TurnPool> pool;
 
   // Implicit, so an agent without proof machinery can return a plain Move.
   MoveDecision(const Move& m) : move(m) {}

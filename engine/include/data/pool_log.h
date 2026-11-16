@@ -31,6 +31,8 @@
 
 namespace scribblez {
 
+inline constexpr const char* kPoolExtension = ".pool";
+
 // "POOL" in little-endian (bytes 'P','O','O','L' on disk).
 inline constexpr uint32_t kPoolMagic = 0x4C4F4F50u;
 // The format version (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever

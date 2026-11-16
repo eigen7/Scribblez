@@ -69,6 +69,7 @@ std::pair<EndGameAction, EndGameAction> GameEngine::play(int thread_idx,
   game.set_random_opening(pick_random_opening_plies(game_seed, params_.random_opening_mean));
   game.set_respect_projections(params_.respect_projections);
   game.set_face_up_leaves(params_.face_up_leaves);
+  game.set_record_pools(params_.record_pools);
   game.play();
 
   // The Game stays valid for end_game, which reads only live game state.
