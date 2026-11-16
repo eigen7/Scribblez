@@ -145,6 +145,12 @@ def _leaf_eval_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
+def _deep_bot_metrics(conn, params, mount_root):
+    """deep_bot's Training tab: each generation scored under the newest
+    release and under release 0, and the three models' training curves."""
+    return plots.series_grid(conn, plots.DEEP_BOT_QUALITY) if _row_count(conn, "metrics") else None
+
+
 def _match_eval(conn, params, mount_root):
     return plots.match_eval_grid(conn)
 
@@ -167,6 +173,7 @@ FIGURES = {
     "policy_set_metrics": _policy_set_metrics,
     "policy_set_loss": _policy_set_loss,
     "leaf_eval_metrics": _leaf_eval_metrics,
+    "deep_bot_metrics": _deep_bot_metrics,
     "match_eval": _match_eval,
     "match_arms": _match_arms,
 }
