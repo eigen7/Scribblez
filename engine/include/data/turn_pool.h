@@ -16,6 +16,7 @@ struct TurnPool {
   TurnSurvivors survivors;
   PoolSources sources;        // of `pool`'s labels
   int survivor_rollouts = 0;  // the survivors' sims' budget
+  int solved_racks = 0;       // the racks a solved survivor's value is the mean over
 };
 
 }  // namespace scribblez

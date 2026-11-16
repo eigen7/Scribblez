@@ -5419,7 +5419,7 @@ TEST(SurvivorLog, RoundTripAndVersionGate) {
                   .label = {.win_prob = 0.25, .paired_se = 0.125, .q = 0.25, .rollouts = 1}}};
   p.values = {1.0f, 0.5f, 0.0f, 0.25f};
   {
-    SurvivorWriter w(path, SurvivorReply::HASTY, 1000);
+    SurvivorWriter w(path, SurvivorReply::HASTY, 1000, 100);
     w.add_position(p);
     w.add_position({.at = {2, 11}, .survivors = {}, .values = {}});  // no second stage
     w.close();
@@ -5427,6 +5427,7 @@ TEST(SurvivorLog, RoundTripAndVersionGate) {
   const SurvivorReader r(path);
   EXPECT_EQ(r.header().version, kSurvivorFormatVersion);
   EXPECT_EQ(r.header().rollouts, 1000u);
+  EXPECT_EQ(r.header().solved_racks, 100u);
   ASSERT_EQ(r.num_positions(), 2);
   const SurvivorReader::Position pos = r.position(0);
   EXPECT_EQ(pos.header->game_index, 2u);
@@ -5461,6 +5462,7 @@ SearchedTurn searched_turn(int turn, int rollouts) {
   auto t = std::make_shared<TurnPool>();
   t->sources.rollouts = rollouts;
   t->survivor_rollouts = 8;
+  t->solved_racks = 3;
   t->pool.moves = {Move::pass()};
   t->pool.equity_ranks = {-1};
   t->pool.labels = {{.win_prob = 0.5, .paired_se = 0.0, .q = 1.0, .rollouts = 1}};
@@ -5509,6 +5511,7 @@ TEST(BinaryLog, RecordedSearchesBecomeTheFilesPoolSidecars) {
   const SurvivorReader survivors(fs::path(slog).replace_extension(kSurvivorExtension).string());
   EXPECT_EQ(pools.header().rollouts, 100u);
   EXPECT_EQ(survivors.header().rollouts, 8u);
+  EXPECT_EQ(survivors.header().solved_racks, 3u);
   ASSERT_EQ(pools.num_positions(), 3);  // two of the first game's four, and the second's one
   ASSERT_EQ(survivors.num_positions(), 3);
   std::vector<uint32_t> first_turns;

@@ -383,6 +383,7 @@ std::vector<Move> DeepBot::recorded_candidates(const MoveRequest& req,
                                                TurnPool* record) const {
   record->sources = backend_.sources;
   record->survivor_rollouts = params_.rollouts;
+  record->solved_racks = params_.bob_racks;
   record->pool = screened_pool(req, belief);
   std::vector<Move> moves;
   std::vector<PoolLabel> labels;

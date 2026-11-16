@@ -293,6 +293,15 @@ std::vector<SearchedTurn> pool_sample(const std::vector<SearchedTurn>& searched,
   return kept;
 }
 
+// The name of the first field of the sidecars' headers in which the records
+// `a` and `b` differ; nullptr if they agree.
+const char* header_difference(const TurnPool& a, const TurnPool& b) {
+  if (const char* field = a.sources.first_difference(b.sources)) return field;
+  if (a.survivor_rollouts != b.survivor_rollouts) return "survivors' rollout budget";
+  if (a.solved_racks != b.solved_racks) return "solved survivors' racks";
+  return nullptr;
+}
+
 // The searches the batch keeps, `per_game` of each game's, each addressed by
 // its game's index in the file and its turn. Throws util::Exception if two
 // came from different sources, which one sidecar's header cannot say.
@@ -302,10 +311,7 @@ std::vector<TurnPool*> addressed_pools(const PreparedBatch& p, size_t per_game) 
     for (const SearchedTurn& searched : pool_sample(*p.pools[g], per_game, p.games[g].seed)) {
       TurnPool& t = *searched.pool;
       t.pool.at = t.survivors.at = {uint32_t(g), uint32_t(searched.turn)};
-      const char* differs = out.empty() ? nullptr : out[0]->sources.first_difference(t.sources);
-      if (differs == nullptr && !out.empty() && out[0]->survivor_rollouts != t.survivor_rollouts)
-        differs = "survivors' rollout budget";
-      if (differs != nullptr) {
+      if (const char* differs = out.empty() ? nullptr : header_difference(*out[0], t)) {
         throw util::Exception(
           "BinaryLogWriter: the games of one file recorded pools that differ in their {}; both "
           "players must search on the same models and budgets",
@@ -328,7 +334,8 @@ void write_pool_sidecars(std::filesystem::path path, const PreparedBatch& p, siz
   }
   PoolWriter pool_writer(path.replace_extension(kPoolExtension).string(), pools[0]->sources);
   SurvivorWriter survivor_writer(path.replace_extension(kSurvivorExtension).string(),
-                                 SurvivorReply::HASTY, pools[0]->survivor_rollouts);
+                                 SurvivorReply::HASTY, pools[0]->survivor_rollouts,
+                                 pools[0]->solved_racks);
   for (const TurnPool* t : pools) {
     pool_writer.add_position(t->pool);
     survivor_writer.add_position(t->survivors);

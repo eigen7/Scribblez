@@ -22,10 +22,11 @@ SurvivorRecord record_of(const Survivor& s) {
 
 }  // namespace
 
-SurvivorWriter::SurvivorWriter(const std::string& path, SurvivorReply reply, int rollouts)
+SurvivorWriter::SurvivorWriter(const std::string& path, SurvivorReply reply, int rollouts,
+                               int solved_racks)
     : path_(path) {
-  const SurvivorFileHeader h{kSurvivorMagic, kSurvivorFormatVersion, uint16_t(reply), 0,
-                             uint32_t(rollouts)};
+  const SurvivorFileHeader h{kSurvivorMagic,     kSurvivorFormatVersion, uint16_t(reply), 0,
+                             uint32_t(rollouts), uint32_t(solved_racks)};
   append_bytes(&buffer_, &h, sizeof(h));
 }
 

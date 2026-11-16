@@ -11,7 +11,7 @@
 //
 // Layout (all integers little-endian, the game code's native byte order):
 //
-//   [SurvivorFileHeader                                     16 B]
+//   [SurvivorFileHeader                                     20 B]
 //   per position, in the .pool's order:
 //     [SurvivorPositionHeader                               16 B]
 //     [SurvivorRecord x num_survivors                       20 B each]
@@ -62,8 +62,12 @@ struct SurvivorFileHeader {
   uint16_t reply;    // SurvivorReply
   uint32_t num_positions;
   uint32_t rollouts;  // the sims' budget per survivor; racing stops some early
+  // The racks sampled for the opponent that a solved survivor's value is the
+  // mean over, each an endgame worth 1, 1/2 or 0: what its standard error is
+  // read from, beside a simmed survivor's rollout values.
+  uint32_t solved_racks;
 };
-static_assert(sizeof(SurvivorFileHeader) == 16, "SurvivorFileHeader must be 16 bytes");
+static_assert(sizeof(SurvivorFileHeader) == 20, "SurvivorFileHeader must be 20 bytes");
 
 struct SurvivorPositionHeader {
   uint32_t game_index;  // game within the companion .slog file
@@ -106,7 +110,7 @@ struct TurnSurvivors {
 // on close().
 class SurvivorWriter {
  public:
-  SurvivorWriter(const std::string& path, SurvivorReply reply, int rollouts);
+  SurvivorWriter(const std::string& path, SurvivorReply reply, int rollouts, int solved_racks);
   // Closes if close() was not called, unless an exception is unwinding: a
   // partial file would pass for a finished one, so it is dropped instead.
   ~SurvivorWriter();
