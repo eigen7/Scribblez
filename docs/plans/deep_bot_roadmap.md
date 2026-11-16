@@ -126,13 +126,15 @@ Each step names what it measures.
    [deep_bot_generations.md](deep_bot_generations.md), its seven steps.
    *Measure:* as that plan lists, the matches against HastyBot and release 0
    among them.
-4. **The policy as a transformer.** Offline, on the `policy_set` workload,
-   so it can overlap step 3. See [The policy](#the-policy). *Measure:* its
+4. **The policy as a transformer.** Its form is chosen offline, on the
+   `policy_set` workload and a `deep_bot` tag's self-played pools, so it can
+   overlap step 3; the chosen form then seeds a tag and trains every
+   generation. See [The policy](#the-policy). *Measure:* its
    cross-entropy on its own training pools against the floor; held out, how
    often its top move is the pool's best and its regret, against static
    equity's, overall and on the turns where the pool's best is not equity's
-   top move; its replies at known setups with Bob to move; and PolicyBot
-   against HastyBot.
+   top move; how it splits its mass between near-twin moves; its replies at
+   known setups with Bob to move; and PolicyBot against HastyBot.
 5. **The policy as Bob's reply:** a `policy` reply model, in the sims of the
    screen's survivors. See [The policy reply](#the-policy-reply). *Measure:*
    policy evaluations a second on the device and the seconds a turn; the
@@ -220,8 +222,9 @@ tried under it later:
   tile-supply tokens, behind the `policy_set` workload's trunk param.
 - **The candidates are tokens** that attend to the board and supply tokens
   through several layers, in place of one cross-attention. How a candidate
-  is presented is the open design question; the afterstate, the board with
-  the move played, is the first form to try.
+  is presented, and whether candidates see each other, are the open design
+  questions: [Presenting a candidate](#presenting-a-candidate) and
+  [Candidates that see each other](#candidates-that-see-each-other).
 - **The opponent-rack input** stays the chooser's belief about the
   opponent's rack, so that after a setup the belief's tell (she kept the F)
   is in front of the model.
@@ -245,6 +248,102 @@ tried under it later:
 
 The subtree's reply is not the reference for whether the policy blocks: it
 is too noisy at the racks it runs. The pools are, and the known setups.
+
+**Offline is for choosing the form only.** A tag's policy has its seed's
+architecture, so a new form needs a seed, which the `policy_set` workload
+trains; and comparing forms needs the same pools for every arm. Until the
+generating agent replies by the policy (step 6), the policy does not affect
+the games, so nothing waits on this. The arms train on a tag's self-played
+pools where there are enough, for the turn's labels: `policy_set` tag `v1`
+has the screen's alone, on HastyBot's games. A seed is trained far enough to
+choose the form, not to convergence.
+
+### Presenting a candidate
+
+The pools are long-tailed. Over 445 self-played pools (2026-11-16) the median
+holds 500 candidates, the 99th percentile 2,650 and the largest 3,710, from
+23,075 legal moves before the blank prune. So what is computed for every
+candidate has to cost the same however long the pool is.
+
+- **The full afterstate,** the board with the move played and its
+  cross-checks, through the trunk: nothing for the network to unpack, and a
+  trunk pass per candidate. As Bob's reply the policy scores about 10,000
+  racks a turn, each over his top `K` moves; at `K` = 8 and the 62,000
+  positions a second of the small trunk timed
+  [below](#the-policy-reply), that is over a second a turn where the whole
+  turn takes about a fifth of one today. It is trained as one offline arm,
+  for the ceiling the cheaper forms are read against.
+- **A compact code** (start square, direction, tiles, the cross-checks'
+  delta as one vector) is about what today's policy has, and it leaves the
+  network to unpack the code. That form ties static equity.
+- **The delta in the board's own vocabulary** is the form to build. The
+  trunk runs once per position. A candidate is a token per square it
+  changes, the squares it covers and those whose cross-checks change,
+  typically 10 to 25: each the square's position embedding plus its new
+  content, from the board encoder's own embedding tables. They attend to
+  the board and supply tokens through a few layers and pool to a logit. A
+  changed square reads as a board square with new contents, at a few layers
+  over about 20 tokens a candidate in place of the trunk's depth over about
+  250.
+
+### Candidates that see each other
+
+The target is a property of the set. A move's chance of being the best
+depends on whether a slightly better twin is in the pool, and a scorer that
+sees one candidate at a time can say so only through the size of its logit:
+to split two twins 98 to 2 it needs a gap of about 4 from a 2-point feature,
+and only where the twin exists.
+
+The labels do make the distinction, since the rollouts are paired. Over the
+same pools, at turns the race alone decided, for pairs of survivors 1 to 4
+points apart:
+
+| | Same tiles played | Other pairs |
+|---|---|---|
+| Pairs | 2,510 | 25,070 |
+| Per-rollout sd of the paired difference (median) | 0.074 | 0.138 |
+| Mean win-probability difference | +0.008 | +0.007 |
+| Higher-scoring move's share of the pair's mass, median | 1.00 | 0.92 |
+| The same, mean | 0.72 | 0.59 |
+| Lower-scoring move holds the larger share | 18% | 36% |
+
+The share rows are over the pairs holding more than 5% of their turn's
+mass. "Same tiles" includes the same tiles on other squares, where the
+lower-scoring move can be the better one, so part of the 18% is right. The
+reading for a model is how it splits these pairs against the labels' 72%.
+
+The arms, in the order they are tried:
+
+1. **Group features as inputs,** computed by the engine for every candidate
+   at almost no cost: its score gap to the best-scoring move that keeps the
+   same leave, its rank among those, and the same among the moves that
+   cover the same squares. They state the dominance outright.
+2. **A second stage in which the top `N` compare.** Every candidate is
+   scored alone, at a fixed cost each; the best `N` by that score, 16 to
+   32, then attend to each other for a few layers and get refined logits.
+   That is at most about 1,000 pairs whatever the pool's size.
+   - It is the agent's own shape, and the data's: the first stage trains
+     on the screen's labels over the whole pool (the `.pool`), the second
+     on the turn's labels over the survivors (the `.survivors`), with the
+     agent's survivors as the set in training.
+   - A turn's labels put their mass on about 20 moves.
+   - As Bob's reply the policy scores only his top `K` by equity, so all of
+     them compare.
+3. **Group summaries,** if near-twins are still unresolved: each candidate
+   reads a pooled summary of its group, such as the best first-stage score
+   among the moves with its leave, at one pass over the pool.
+
+Full attention among all of a pool's candidates is not an arm: 250,000
+pairs a layer at the median pool and 13.8 million at the largest.
+
+**The attention is steered, not restricted.** Within the top `N`, each pair
+gets a few exact features added to its attention score: the same leave, the
+squares the two share, the same row or column, the score difference. Moves
+that keep the same leave share their future draws and differ only on the
+board; moves on overlapping squares compete for one spot. Hard groups would
+be ragged, one word slid along a row is hundreds of moves, and a mask would
+shut out the comparison that matters whenever the dominating move sits in
+another group.
 
 ## The policy reply
 
