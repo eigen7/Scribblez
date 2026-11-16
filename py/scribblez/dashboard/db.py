@@ -19,6 +19,7 @@ Tables:
   lane_pred       max_move_per_lane's per-checkpoint lane-analysis predictions
   match_eval      per-generation match result vs a fixed opponent
   release_match   per-release match result vs each of deep_bot's opponents
+  release_pick    per-release pick at each known position, per reply model
   match_arm       per-arm match result of a match_arms experiment
   control         live operator controls and their current values
   control_event   when each control change took effect, on the rows clock
@@ -97,6 +98,15 @@ CREATE TABLE IF NOT EXISTS release_match (
   ci_half_width REAL,           -- pointwise CI half-width around score
   elapsed_s REAL,
   PRIMARY KEY (release, opponent)
+);
+CREATE TABLE IF NOT EXISTS release_pick (
+  release INTEGER,              -- the deep_bot release asked
+  reply TEXT,                   -- the reply model it was asked under
+  position TEXT,                -- a known position's id
+  pick TEXT,                    -- its move there, as the pick tool writes it
+  reading TEXT,                 -- reference, equity or other (deep_bot/known_positions.py)
+  seconds REAL,
+  PRIMARY KEY (release, reply, position)
 );
 CREATE TABLE IF NOT EXISTS match_arm (
   arm TEXT PRIMARY KEY,         -- arm name from the task's frozen arms param
@@ -394,6 +404,29 @@ def read_release_matches(conn: sqlite3.Connection) -> list[dict]:
     for r in rows:
         r["pair_counts"] = json.loads(r["pair_counts"])
     return rows
+
+
+def write_release_picks(conn: sqlite3.Connection, release: int, picks: dict[str, list[dict]]):
+    """Store a release's picks at the known positions, per reply model.
+    Asking a release again replaces its rows."""
+    conn.executemany(
+        "INSERT OR REPLACE INTO release_pick (release, reply, position, pick, reading, seconds) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (release, reply, r["id"], r["pick"], r["reading"], float(r["seconds"]))
+            for reply, rows in picks.items()
+            for r in rows
+        ],
+    )
+    conn.commit()
+
+
+def read_release_picks(conn: sqlite3.Connection) -> list[dict]:
+    """Every release's picks, oldest release first."""
+    return [
+        dict(r)
+        for r in conn.execute("SELECT * FROM release_pick ORDER BY release, reply, position")
+    ]
 
 
 def write_match_arm(conn: sqlite3.Connection, arm: str, record: dict):

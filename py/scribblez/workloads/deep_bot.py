@@ -21,10 +21,10 @@ generator beside the trainer reads the releases from the tag in place; the
 controller pushes the newest to the others, and the seeds to a trainer
 elsewhere (RoleSpec.tag_files).
 
-The measure role's one slot plays each release, as the generating agent,
-against HastyBot and against release 0 (scribblez/deep_bot/measure.py), on
-the controller's assignment (measure_dispatch.py). Every game is kept under
-the tag.
+The measure role's one slot takes each release's picks at the known
+positions and plays it, as the generating agent, against HastyBot and
+against release 0 (scribblez/deep_bot/measure.py), on the controller's
+assignment (measure_dispatch.py). Every game is kept under the tag.
 """
 
 import functools
@@ -142,11 +142,12 @@ class DeepBotParams:
         return max(self.leave_window, self.leaf_window, self.policy_window)
 
 
-def player_spec(params: DeepBotParams, leaf: Path, leave: Path) -> str:
+def player_spec(params: DeepBotParams, leaf: Path, leave: Path, reply: str = "hasty") -> str:
     """The --player spec of the generating agent on a release's leaf network
-    and leave inference model."""
+    and leave inference model, or of the same agent under another `reply`
+    model."""
     return (
-        f"--type=deepbot-endgame --reply hasty --leaf-model {leaf} --leave-inference {leave} "
+        f"--type=deepbot-endgame --reply {reply} --leaf-model {leaf} --leave-inference {leave} "
         f"--screen-rollouts {params.screen_rollouts} --rollouts {params.rollouts} "
         f"--blank-prune-points {params.blank_prune_points}"
     )
@@ -265,7 +266,7 @@ SPEC = WorkloadSpec(
             dispatch="scribblez.deep_bot.measure_dispatch:tick",
             singleton=True,
             gpu=True,
-            stats=StatsSpec(unit="games", phases={"match_s": "match"}),
+            stats=StatsSpec(unit="games", phases={"picks_s": "picks", "match_s": "match"}),
         ),
     ),
     scheduler=TICK_FOR_TASK,

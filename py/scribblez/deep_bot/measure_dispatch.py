@@ -5,15 +5,17 @@ tick; measure.py is the worker's half).
 It follows match eval's exchange (match_eval/dispatch.py), whose reasoning it
 does not repeat: the slot's inbox is the ledger of assignments, an assignment
 stays until its results are recorded, and ingest is idempotent. What differs
-is what is assigned, a release and release 0 beside it in place of one model,
-and what comes back: every game of each match, kept under the tag
+is what is assigned, a release with release 0 and the known positions beside
+it in place of one model, and what comes back: the release's picks at those
+positions, and every game of each match, kept under the tag
 (matches.kept_dir), with the estimate the chart draws in the database.
 """
 
+import json
 from pathlib import Path
 
 from scribblez.dashboard import db
-from scribblez.deep_bot import matches, measure, release
+from scribblez.deep_bot import known_positions, matches, measure, release
 from scribblez.generational import lifecycle
 from scribblez.paths import DONE_SUFFIX, TagPaths
 
@@ -23,11 +25,12 @@ def _rel(paths: TagPaths, path: Path) -> str:
 
 
 def measured(conn) -> set[int]:
-    """The releases every one of whose matches is recorded."""
+    """The releases whose picks and every one of whose matches are recorded."""
     played: dict[int, set[str]] = {}
     for row in db.read_release_matches(conn):
         played.setdefault(row["release"], set()).add(row["opponent"])
-    return {r for r, done in played.items() if done >= set(matches.opponents_of(r))}
+    asked = {row["release"] for row in db.read_release_picks(conn)}
+    return {r for r in asked if played.get(r, set()) >= set(matches.opponents_of(r))}
 
 
 def pending_release(paths: TagPaths, done: set[int], every: int) -> int | None:
@@ -49,6 +52,25 @@ def _keep(paths: TagPaths, record: dict, delivered: Path):
     if games.exists():
         games.replace(kept / f"{opponent}.slog")
     delivered.replace(kept / f"{opponent}.json")
+
+
+def ingest_picks(paths: TagPaths, conn) -> list[int]:
+    """Record every delivered set of picks and keep it under its release.
+    Returns the releases recorded; a malformed file is quarantined."""
+    recorded = []
+    for path in sorted(paths.match_results_dir.glob("picks_release_*.json")):
+        try:
+            record = json.loads(path.read_text())
+            db.write_release_picks(conn, int(record["release"]), record["picks"])
+        except (ValueError, KeyError, TypeError) as e:
+            print(f"measure: quarantining unreadable picks {path.name}: {e}")
+            path.replace(path.with_suffix(".bad"))
+            continue
+        kept = matches.kept_dir(paths, int(record["release"]))
+        kept.mkdir(parents=True, exist_ok=True)
+        path.replace(kept / "picks.json")
+        recorded.append(int(record["release"]))
+    return recorded
 
 
 def ingest(paths: TagPaths, conn) -> list[tuple[int, str]]:
@@ -92,6 +114,16 @@ def _clear_spent(slot, inbox: str, held: list[str], done: set[int]) -> list[str]
     return left
 
 
+def _put_known_positions(slot, inbox: str):
+    """Give the slot the known positions, once: the manifest last."""
+    held = f"{inbox}/{matches.KNOWN_POSITIONS_DIR}"
+    files = known_positions.files()
+    if files[-1].name in slot.list(held):
+        return
+    for path in files:
+        slot.put(path, f"{held}/{path.name}")
+
+
 def _put_release(paths: TagPaths, slot, inbox: str, number: int):
     """Give the slot release `number`, its manifest last."""
     for rel in release.files(number):
@@ -108,7 +140,8 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     held = slot.list(f"{inbox}/{measure.ASSIGNED_DIR}")
     if _clear_spent(slot, inbox, held, done):
         return  # busy: an assignment unplayed, or its results still in transit
-    # The opponent first; it stays for every later assignment.
+    # The positions and the opponent first; they stay for every assignment.
+    _put_known_positions(slot, inbox)
     if release.MANIFEST not in slot.list(f"{inbox}/{Path(release.files(0)[-1]).parent}"):
         _put_release(paths, slot, inbox, 0)
     if number > 0:
@@ -124,10 +157,11 @@ def tick(spec, paths: TagPaths, params, slots) -> bool:
     come before opening the database, as in match eval's tick."""
     if not paths.dashboard_db.is_file():
         return True  # the trainer has not started
-    if not slots and not any(paths.match_results_dir.glob("release_*.json")):
+    if not slots and not any(paths.match_results_dir.glob("*release_*.json")):
         return True
     conn = db.connect(paths.dashboard_db)
     try:
+        ingest_picks(paths, conn)
         ingest(paths, conn)
         if params.match_every_generations <= 0:
             return False  # measuring is off for this tag

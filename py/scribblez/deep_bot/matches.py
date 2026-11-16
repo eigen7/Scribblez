@@ -53,6 +53,28 @@ def games_rel(release: int, opponent: str) -> str:
     return f"{MATCH_GAMES_DIR}/{match_stem(release, opponent)}.slog"
 
 
+# The reply models a release's picks at the known positions are taken
+# under: the generating agent's, and the opponent's own search, which costs
+# seconds a turn and so is not played in the matches.
+PICK_REPLIES = ("hasty", "subtree")
+
+# Where the known positions sit in a measure slot's inbox.
+KNOWN_POSITIONS_DIR = "known-positions"
+
+
+def picks_rel(release: int) -> str:
+    """Where a release's picks at the known positions are delivered, under
+    data/."""
+    return f"{MATCH_RESULTS_DIR}/picks_release_{release:06d}.json"
+
+
+def picks_record(release: int, picks: dict[str, list[dict]]) -> dict:
+    """A release's picks as they are delivered and kept: per reply model, a
+    row a position with its "id", the "pick", its "reading"
+    (known_positions.Position.read) and the "seconds" it took."""
+    return {"release": release, "picks": picks}
+
+
 def kept_dir(paths: TagPaths, release: int) -> Path:
     """Where the controller keeps release `release`'s matches:
     <opponent>.json, its rows, and <opponent>.slog, its games."""

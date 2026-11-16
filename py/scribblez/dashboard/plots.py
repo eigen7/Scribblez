@@ -749,6 +749,69 @@ def release_match_grid(conn):
     )
 
 
+# A pick's reading (deep_bot/known_positions.py) as the Positions tab colors
+# it: the reference move, static equity's move, any other.
+PICK_COLORS = {"reference": "#2ca02c", "equity": "#bbbbbb", "other": "#ff7f0e"}
+PICK_REPLY_TITLES = {"hasty": "the generating agent", "subtree": "the subtree reply"}
+
+
+def _release_pick_figure(reply: str, rows: list[dict]):
+    """One reply model's panel: a cell per release and known position,
+    colored by how the pick reads, with the count of reference picks per
+    release in the hover."""
+    positions = sorted({r["position"] for r in rows}, reverse=True)
+    found: dict[int, int] = {}
+    for r in rows:
+        found[r["release"]] = found.get(r["release"], 0) + (r["reading"] == "reference")
+    src = ColumnDataSource(
+        {
+            "x": [r["release"] for r in rows],
+            "y": [r["position"] for r in rows],
+            "pick": [r["pick"] for r in rows],
+            "reading": [r["reading"] for r in rows],
+            "color": [PICK_COLORS.get(r["reading"], PICK_COLORS["other"]) for r in rows],
+            "found": [found[r["release"]] for r in rows],
+        }
+    )
+    fig = figure(
+        sizing_mode="scale_width",
+        aspect_ratio=WIDE,
+        title=(
+            f"Picks at the known positions under {PICK_REPLY_TITLES.get(reply, reply)}: "
+            "green the reference move, grey static equity's, orange another"
+        ),
+        x_axis_label="release",
+        y_range=positions,
+        tools="pan,box_zoom,wheel_zoom,reset,save",
+    )
+    cells = fig.rect(
+        x="x", y="y", width=0.9, height=0.9, source=src, fill_color="color", line_color=None
+    )
+    tooltips = [
+        ("release", "@x"),
+        ("position", "@y"),
+        ("pick", "@pick (@reading)"),
+        ("reference picks", f"@found of {len(positions)}"),
+    ]
+    fig.add_tools(HoverTool(tooltips=tooltips, renderers=[cells]))
+    return fig
+
+
+def release_pick_grid(conn):
+    """deep_bot's Positions tab: a panel per reply model. None when no
+    release has been asked."""
+    rows = db.read_release_picks(conn)
+    if not rows:
+        return None
+    by_reply: dict[str, list[dict]] = {}
+    for r in rows:
+        by_reply.setdefault(r["reply"], []).append(r)
+    return column(
+        [_release_pick_figure(reply, by_reply[reply]) for reply in sorted(by_reply)],
+        sizing_mode="scale_width",
+    )
+
+
 def match_arms_grid(conn):
     """The Arms tab: each arm's mean pair score against the fixed opponent, with
     its CI whisker, and under it the arm's throughput, in declared arm order.

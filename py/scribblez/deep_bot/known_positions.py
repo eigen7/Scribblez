@@ -8,6 +8,7 @@ move, as the agent would have lived it, and asks.
 """
 
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,12 @@ def load(directory: Path = DIRECTORY) -> list[Position]:
     ]
 
 
+def files(directory: Path = DIRECTORY) -> list[Path]:
+    """The directory's files a reader of the positions needs, the manifest
+    last."""
+    return [*(p.gcg for p in load(directory)), directory / "positions.json"]
+
+
 def write_slog(positions: list[Position], work: Path) -> Path:
     """The positions' games as one .slog under `work`, game i the i-th
     position's. Raises subprocess.CalledProcessError if a GCG does not
@@ -77,6 +84,7 @@ def write_slog(positions: list[Position], work: Path) -> Path:
 def ask(positions: list[Position], player: str, work: Path, threads: int) -> list[dict]:
     """`player`'s (a --player spec's) pick at each position: the pick tool's
     record of it (its "pick", "rack", "bag" and "seconds"), in order."""
+    shutil.rmtree(work, ignore_errors=True)
     slog = write_slog(positions, work)
     listed = work / "positions.txt"
     listed.write_text("".join(f"{slog} {i} {p.turn}\n" for i, p in enumerate(positions)))
