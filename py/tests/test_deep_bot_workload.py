@@ -149,4 +149,4 @@ def test_the_tag_is_complete_at_max_generations(tmp_path):
 
     assert SPEC.is_complete(paths, bounded)
     assert not SPEC.is_complete(paths, PARAMS)  # unbounded
-    assert deep_bot.progress(SPEC, paths, PARAMS) == [("release", 3), ("games", 6000)]
+    assert deep_bot.progress(SPEC, paths, PARAMS) == [("release", 3), ("games trained on", 6000)]
