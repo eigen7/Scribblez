@@ -15,7 +15,8 @@ as release 0. Per generation `g`, once self-play has completed it:
 
 Record keys carry their model's name (`leave_`, `leaf_`; the policy's
 metrics already name their form and the equity baseline), and release 0's
-scores the further prefix `r0_`.
+scores the further prefix `r0_`. The three training losses are `loss_<model>`,
+the names the dashboard's Loss tab stacks.
 """
 
 import functools
@@ -34,19 +35,17 @@ from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls
 from scribblez.generational.records import TrainRecorder, read_controls
-from scribblez.leave_inference import forgone
 from scribblez.paths import TagPaths
-from scribblez.policy_set import dataset, pools
+from scribblez.policy_set import dataset
+from scribblez.policy_set.onnx_export import LEAVE_GENERATION_KEY, LEAVE_TAG_KEY
 from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
 from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.deep_bot import CHUNK_SIDECARS
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 # Release 0's record key prefix.
 BASELINE = "r0_"
-# The sidecars every chunk carries beside its .slog: the forgone plays the
-# leave inference rows read, and the pools the policy trains on.
-CHUNK_SIDECARS = (forgone.SUFFIX, pools.SUFFIX)
 
 
 @dataclass
@@ -120,13 +119,25 @@ def train_generation(by_kind: dict, paths: TagPaths, params, state: DeepBotState
         result, elapsed = train_unit(kind, unit, window, gen, getattr(state, f"{kind}_rows"), cpu)
         setattr(state, f"{kind}_rows", result.rows_trained)
         record |= {
-            f"{kind}_loss": epoch_loss(kind, result),
+            f"loss_{kind}": epoch_loss(kind, result),
             f"{kind}_lr": unit.optim_arm.current,
             f"{kind}_train_s": elapsed,
             f"{kind}_rows": result.rows_trained,
         }
     by_kind[POLICY].check_finite(f"after generation {gen}")
     return record
+
+
+def export_provenance(kind: str, tag: str, number: int) -> dict:
+    """What release `number`'s export of `kind` records: the tag, and the
+    release as its generation, the entry the engine reads a model's identity
+    from (nn/onnx_metadata.h), so a chunk's pool header names the release
+    that labeled it. The policy also names the leave inference model it is
+    served beside, its own release's, in place of its seed tag's."""
+    out = {"tag": tag, "generation": number}
+    if kind == POLICY:
+        out |= {LEAVE_TAG_KEY: tag, LEAVE_GENERATION_KEY: number}
+    return out
 
 
 def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows: dict) -> list:
@@ -136,7 +147,7 @@ def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows:
     files = []
     for kind, unit in by_kind.items():
         path = release.export_path(paths, number, kind)
-        if unit.export(path, {"tag": tag, "release": number}) is False:
+        if unit.export(path, export_provenance(kind, tag, number)) is False:
             raise RuntimeError(f"the {kind} seed trains nothing a release can serve")
         files.append(path)
     files.append(release.write_manifest(paths, number, tag, rows))
@@ -280,7 +291,7 @@ def run(ctx: WorkerContext) -> int:
         ctx.tag,
         asdict(params),
         n_params,
-        {f"{kind}_loss": 1.0 for kind in KINDS},
+        {f"loss_{kind}": 1.0 for kind in KINDS},
         default_controls(),
     )
     run_ctx = {

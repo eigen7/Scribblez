@@ -2,7 +2,7 @@
 (docs/plans/deep_bot_generations.md, "Seeds and warm start").
 
 A seed is the rolling checkpoint of a tag of a standalone workload, copied to
-seeds/<kind>.pt under the deep_bot tag. Its recorded config gives the unit's
+seeds/<kind>.pt under the deep_bot tag (seeds.py). Its recorded config gives the unit's
 params, so the unit's architecture is the seed's by construction, with the
 windows and the rows-clocks re-sized from the deep_bot tag's params. The
 models start from the seeds' weights with fresh optimizers.
@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 
 from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY
+from scribblez.deep_bot.seeds import seed_path
 from scribblez.deep_bot_leaf_eval.unit import LeafEvalUnit
 from scribblez.leave_inference.unit import LeaveInferenceUnit
 from scribblez.paths import TagPaths
@@ -31,10 +32,6 @@ PARAMS_CLASSES = {
     LEAF: DeepBotLeafEvalParams,
     POLICY: PolicySetParams,
 }
-
-
-def seed_path(paths: TagPaths, kind: str) -> Path:
-    return paths.root / "seeds" / f"{kind}.pt"
 
 
 def window(params, kind: str) -> int:
@@ -75,11 +72,18 @@ def unit_versions(kind: str, unit) -> dict:
     return versions() if kind == POLICY else unit.versions()
 
 
-def check_seed(kind: str, unit, seed_config: dict, path: Path):
+def check_seed(kind: str, unit, seed_config: dict, path: Path, params):
     """Refuse a seed written under other formats or leave values than this
-    code's and this machine's."""
+    code's and this machine's, and a policy whose pools pruned blank moves
+    at another margin than this tag's pools will."""
     keys = VERSION_KEYS if kind == POLICY else tuple(unit.versions())
     current = unit_versions(kind, unit)
+    if kind == POLICY and seed_config["blank_prune_points"] != params.blank_prune_points:
+        raise RuntimeError(
+            f"{path} was trained on pools with blank_prune_points="
+            f"{seed_config['blank_prune_points']}, but this tag labels its pools with "
+            f"{params.blank_prune_points}"
+        )
     for key in keys:
         if seed_config.get(key) != current[key]:
             raise RuntimeError(
@@ -93,7 +97,7 @@ def build_unit(kind: str, paths: TagPaths, params, device):
     path = seed_path(paths, kind)
     seed = torch.load(path, map_location=device, weights_only=False)
     unit = UNIT_CLASSES[kind](unit_params(kind, seed["config"], params), device)
-    check_seed(kind, unit, seed["config"], path)
+    check_seed(kind, unit, seed["config"], path, params)
     unit.model.load_state_dict(seed["model_state_dict"])
     return unit
 
