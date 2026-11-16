@@ -1,0 +1,28 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note hidden-leaves blind spot: turn 22; hasty1 to move with CEINOR?
+#note M14 O(I) (#114) beats the hasty top 10's best, O9 CRONIEs (#1), by 15.2 +- 0.5 points of win%
+>hasty0: EEHINNW H4 WHINE +30 30
+>hasty1: AEEIPSU G3 EAU +14 14
+>hasty0: ADENUVY 9E NAVY +29 59
+>hasty1: EILPSTW 10C PLEW +32 46
+>hasty0: DEELNOU 11E ELUDE +24 83
+>hasty1: DEISST? C7 DES.ITeS +76 122
+>hasty0: DINOTYZ 8A OY.Z +78 161
+>hasty1: EHIMOOS D12 OHO +22 144
+>hasty0: BDFINRT H11 .RIFT +30 191
+>hasty1: EILMOSS J9 LISSOME +74 218
+>hasty0: BDEIMNU 2E IMBUED +27 218
+>hasty1: ACIJRRV B6 JA. +32 250
+>hasty0: ADNOOQU F2 .ONDO +25 243
+>hasty1: CILRRRV 15J .RVIL +12 262
+>hasty0: AKNNQTU 1A QUANT +47 290
+>hasty1: BCRRTT? A7 B.RT +12 274
+>hasty0: AAEEIKN G13 KEA +30 320
+>hasty1: CCERRT? C1 .RC +10 284
+>hasty0: AEGIINX 3I XENIA +60 380
+>hasty1: CEGRRT? L1 GR.T +14 298
+>hasty0: AEGIOPT 1L .IGA +18 398
+>hasty1: CEINOR? O9 COINERs +101 399

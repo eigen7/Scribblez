@@ -1,0 +1,24 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note hidden-leaves blind spot: turn 18; hasty1 to move with AGMOPT?
+#note K10 A(I)M (#594) beats the hasty top 10's best, A1 GAP (#3), by 9.2 +- 0.7 points of win%
+>hasty0: ADFILOO H4 FOLIO +24 24
+>hasty1: AEGINVW G8 WEAVING +71 71
+>hasty0: ADEIIRS 15A DAIRIES +92 116
+>hasty1: AFKLNOU 14B FLAK +42 113
+>hasty0: BCENPT? 5B BENChT.P +76 192
+>hasty1: HMNOORU F9 OH +28 141
+>hasty0: EHIIJRU D4 I.JURE +28 220
+>hasty1: DGMNORU 10B MUD +27 168
+>hasty0: EHINOQU 8A QUI.E +42 262
+>hasty1: ABGNORZ 12C BRAZ.NG +40 208
+>hasty0: AEHNORU E3 UN.O +17 279
+>hasty1: AEOORWX 6H .OX +30 238
+>hasty0: AEHRRTY B2 HER.Y +42 321
+>hasty1: AEEIORW C2 AWE. +33 271
+>hasty0: AAEIRTT 11I ARIETTA +67 388
+>hasty1: CDEIORS O6 IDOCR.SE +86 357
+>hasty0: AELOSTV N1 SOLVATE +81 469
+>hasty1: AGMOPT? L4 POsTGAM. +78 435

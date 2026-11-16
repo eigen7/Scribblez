@@ -1,0 +1,29 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note hidden-leaves blind spot: turn 23; hasty0 to move with AEIILOQ
+#note L10 Q(I) (#75) beats the hasty top 10's best, 3A O(R)E (#3), by 73.6 +- 0.6 points of win%
+>hasty0: ADFNUWZ H7 WUZ +30 30
+>hasty1: AEGORSS I9 AG +16 16
+>hasty0: ADFLNNT 8G F.ND +12 42
+>hasty1: ELORSSY J6 YO.S +28 44
+>hasty0: AILNNTT 11H LATTIN +17 59
+>hasty1: EILORSU N8 LOUSIER +75 119
+>hasty0: ABDFINT O7 DAFT +37 96
+>hasty1: EGHOOU? H11 .OUGH +30 149
+>hasty0: ABIINPS K5 BANI +28 124
+>hasty1: EEOOOR? G6 OO. +13 162
+>hasty0: IIIPSTY L4 YIP +28 152
+>hasty1: EEEMOR? 14F ER.OMEtE. +69 231
+>hasty0: EIIIRST -II +0 152
+>hasty1: BCHRTTV 13M B.T +18 249
+>hasty0: EEINRST 5C ENTIRES +71 223
+>hasty1: CHIRRTV H1 CHIV. +51 300
+>hasty0: AAEEMNW 4A WAME +34 257
+>hasty1: DENRRT? F4 R.ND +18 318
+>hasty0: AADENSX 2H .ANDAXES +92 349
+>hasty1: EJRRTU? B1 JUR. +22 340
+>hasty0: EIKLOPQ 1L KEPI +75 424
+>hasty1: AEGRTV? 3G V.G +18 358
+>hasty0: AEIILOQ 1A A.I +30 454

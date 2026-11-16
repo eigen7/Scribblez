@@ -1,0 +1,254 @@
+[
+  {
+    "id": "richards-eellt",
+    "title": "Nigel Richards's EELLT exchange",
+    "gcg": "richards-eellt.gcg",
+    "source": "docs/analysis/richards-johnson-exchange/README.md",
+    "origin": "Richards vs. Johnson, 2025 World Cup, round 11, move 22",
+    "reference": [
+      "-EELLT"
+    ],
+    "reference_from": "the play made, as the commentary in the source explains it",
+    "static_equity_best": "8K ..NTE",
+    "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's.",
+    "sim_artifact": []
+  },
+  {
+    "id": "aceta",
+    "title": "ACETA: a double-Z setup",
+    "gcg": "aceta.gcg",
+    "source": "positions/NWL23/interesting-positions/README.md",
+    "origin": "Joshua vs. Will, move 2",
+    "reference": [
+      "K6 AC.TA"
+    ],
+    "reference_from": "the play made",
+    "static_equity_best": "L3 ATTAC.",
+    "note": "",
+    "sim_artifact": []
+  },
+  {
+    "id": "clinker",
+    "title": "CLINKER: an S hook on the triple-word square",
+    "gcg": "clinker.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#clinker-an-s-hook-on-the-triple-word-square",
+    "origin": "hidden_blind_spots v1 1792935124661189568-local-0-g125-turn14",
+    "reference": [
+      "8H .....ER"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "F6 JILTE.",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "oi-fish",
+    "title": "O(I): fish one tile to bingo out",
+    "gcg": "oi-fish.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#oi-fish-one-tile-to-bingo-out",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g166-turn22",
+    "reference": [
+      "M14 O."
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "O9 COINERs",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "aim-fish",
+    "title": "A(I)M: the same fish",
+    "gcg": "aim-fish.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#aim-the-same-fish",
+    "origin": "hidden_blind_spots v1 1792939480730359398-local-0-g4-turn18",
+    "reference": [
+      "K10 A.M"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "L4 POsTGAM.",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "nim",
+    "title": "NIM: a private lane",
+    "gcg": "nim.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#nim-a-private-lane",
+    "origin": "hidden_blind_spots v1 1792939586653428488-local-0-g26-turn18",
+    "reference": [
+      "K12 NIM"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "M12 FIN",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "given",
+    "title": "GIVEN: a spot for the X",
+    "gcg": "given.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#given-a-spot-for-the-x",
+    "origin": "hidden_blind_spots v1 1792939885730522277-local-0-g116-turn17",
+    "reference": [
+      "15E GIV.N"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "C12 .AX",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "oil",
+    "title": "OIL: a Y hook on the triple-word square",
+    "gcg": "oil.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#oil-a-y-hook-on-the-triple-word-square",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g55-turn16",
+    "reference": [
+      "H12 .IL"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "11A LAYIN",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "ad",
+    "title": "AD: two hook squares on the triple-word row",
+    "gcg": "ad.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#ad-two-hook-squares-on-the-triple-word-row",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g81-turn17",
+    "reference": [
+      "14A AD"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "15A DHA.",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "pitch",
+    "title": "PITCH: the last Y",
+    "gcg": "pitch.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#pitch-the-last-y",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g111-turn16",
+    "reference": [
+      "H10 .ITCH"
+    ],
+    "reference_from": "David's reading, confirmed by the sim",
+    "static_equity_best": "H10 .ITCHY",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "rouche",
+    "title": "ROUCHE: both ends of a triple-triple",
+    "gcg": "rouche.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#rouche-both-ends-of-a-triple-triple",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g51-turn16",
+    "reference": [
+      "1B .OUCHE"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "2L .OU",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "than",
+    "title": "THAN: declining a 76-point bingo",
+    "gcg": "than.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#than-declining-a-76-point-bingo",
+    "origin": "hidden_blind_spots v1 1792942025771220660-local-0-g37-turn12",
+    "reference": [
+      "L1 THAN"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "13H THeA.INe",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "tori",
+    "title": "TORI: a square where the Q counts twice",
+    "gcg": "tori.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#tori-a-square-where-the-q-counts-twice",
+    "origin": "hidden_blind_spots v1 1792942635811056326-local-0-g133-turn17",
+    "reference": [
+      "G11 TORI"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "15D .ROTIC",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "vig",
+    "title": "VIG: the same Q setup, and why the G matters",
+    "gcg": "vig.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#vig-the-same-q-setup-and-why-the-g-matters",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g44-turn15",
+    "reference": [
+      "11A .IG"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "B12 G.T",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "chord-pass",
+    "title": "CHORD: a pass that keeps the bag closed",
+    "gcg": "chord-pass.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#chord-a-pass-that-keeps-the-bag-closed",
+    "origin": "hidden_blind_spots v1 1792941188977491622-local-0-g53-turn21",
+    "reference": [
+      "-"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "4H .HORD",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "qi",
+    "title": "Q(I): play one tile, leave one in the bag",
+    "gcg": "qi.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#qi-play-one-tile-leave-one-in-the-bag",
+    "origin": "hidden_blind_spots v1 1792943897352376103-local-0-g167-turn23",
+    "reference": [
+      "L10 Q."
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "1A A.I",
+    "sim_artifact": [],
+    "note": ""
+  },
+  {
+    "id": "indigene-pass",
+    "title": "INDIGENE: a pass that works only against HastyBot",
+    "gcg": "indigene-pass.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#indigene-a-pass-that-works-only-against-hastybot",
+    "origin": "hidden_blind_spots v1 1792940705497667449-ssh-0-g186-turn28",
+    "reference": [],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "B5 INDIGEN.",
+    "sim_artifact": [
+      "-"
+    ],
+    "note": "The sim's best is the pass, which wins only against an opponent who never passes back. An agent that models a searching opponent should not make it."
+  },
+  {
+    "id": "exchange-seven",
+    "title": "Exchange seven, with seven in the bag",
+    "gcg": "exchange-seven.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#exchange-seven-with-seven-in-the-bag",
+    "origin": "hidden_blind_spots v1 1792940249407138500-local-0-g161-turn17",
+    "reference": [
+      "-ADFGQTV"
+    ],
+    "reference_from": "the confirming sim, against HastyBot's replies",
+    "static_equity_best": "11C D.V",
+    "sim_artifact": [],
+    "note": ""
+  }
+]

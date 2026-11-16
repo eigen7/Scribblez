@@ -344,8 +344,9 @@ Per release, from the measure role (every `match_every_generations`):
 - **A match against HastyBot** (`hastybot-endgame`) and **a match against
   `A_0`**, each `match_games` games, mirrored in pairs. See [the
   matches](#the-matches).
-- **The picks at the known positions** (`positions/NWL23/interesting-positions`,
-  [docs/analysis](../analysis)) on the release's models, under the
+- **The picks at the known positions**
+  ([positions/NWL23/known-positions](../../positions/NWL23/known-positions/README.md))
+  on the release's models, under the
   generating agent and under `--reply subtree`: a handful of turns. These
   are the positions the project is judged on.
 - **The picks at the blind spots**
@@ -557,7 +558,11 @@ Each is a pull request.
    rows and its mean over the last 10 releases. The match command is
    `python3 -m scripts.deep_bot.match --tag T --release K --opponent NAME
    --player SPEC`, whose match is recorded like the role's and gets its own
-   panel. Still to build: the known positions and the blind spots.
+   panel. The known positions are collected, with their answers, in
+   `positions/NWL23/known-positions`, and `python3 -m
+   scripts.deep_bot.known_position_picks --player SPEC` reads any agent's
+   picks at them. Still to build: those picks and the blind spots' taken for
+   each release by the measure role, and their table on the dashboard.
 7. **Queue placement:** the roles' measured GPU memory and the layout.
 
 Not scheduled: the [luck correction](#the-matches), over the games step 6
