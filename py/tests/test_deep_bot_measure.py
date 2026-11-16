@@ -16,6 +16,7 @@ from scribblez.generational import lifecycle
 from scribblez.match_eval import harness
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot import DeepBotParams
+from scripts.deep_bot import match as match_script
 
 SPEC = workloads.get("deep_bot")
 PARAMS = DeepBotParams(match_games=4, match_seed=7)
@@ -209,3 +210,39 @@ def test_the_chart_draws_a_panel_per_opponent_with_a_trailing_mean(paths):
     assert [f.title.text for f in grid.children] == [
         "Win rate vs HastyBot", "Win rate vs release 0"
     ]  # fmt: skip
+
+
+def test_a_match_on_demand_is_filed_under_its_release(paths, monkeypatch, capsys):
+    """scripts.deep_bot.match: a release against a named opponent, delivered
+    as a measure slot's match is and recorded by the controller's next pass."""
+    _publish(paths, 0)
+    _publish(paths, 2)
+    (paths.root / "task.json").write_text(json.dumps({"params": {"match_games": 4}}))
+    played = []
+
+    def play_round(player0, player1, num_pairs, threads, seed, results_file, slog_dir):
+        played.append((player1, num_pairs, seed))
+        results_file.write_text("\n".join(json.dumps(g) for g in _games(3, num_pairs, seed)))
+        slog_dir.mkdir(parents=True)
+        (slog_dir / "1.slog").write_text("games")
+
+    monkeypatch.setattr(harness, "play_round", play_round)
+    argv = ["--tag", "t", "--release", "2", "--mount-root", str(paths.mount_root)]
+    spec = "--type=bestbot-endgame"
+    assert match_script.main([*argv, "--opponent", "bestbot", "--player", spec]) == 0
+    assert played == [(spec, 2, 1)]  # the tag's match_games, and its default seed
+    assert "vs bestbot: 3/0/1" in capsys.readouterr().out
+
+    _tick(paths, slots=[])
+    kept = sorted(p.name for p in matches.kept_dir(paths, 2).iterdir())
+    assert kept == ["bestbot.json", "bestbot.slog"]
+    conn = db.connect(paths.dashboard_db)
+    assert [(r["release"], r["opponent"]) for r in db.read_release_matches(conn)] == [
+        (2, "bestbot")
+    ]
+    conn.close()
+
+    # The loop's own opponents and a missing release are refused.
+    with pytest.raises(SystemExit):
+        match_script.main([*argv, "--opponent", "hastybot", "--player", spec])
+    assert match_script.main([*argv[:3], "9", *argv[4:], "--opponent", "x", "--player", spec]) == 1

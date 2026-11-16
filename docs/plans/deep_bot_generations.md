@@ -554,8 +554,10 @@ Each is a pull request.
    (`deep_bot/measure.py`, `measure_dispatch.py`). Every game comes home and
    is kept under the tag at `matches/release_<k>/<opponent>.json` (a row per
    game) and `.slog`; the Matches tab draws each release's win rate from the
-   rows and its mean over the last 10 releases. Still to build: the match
-   command, the known positions and the blind spots.
+   rows and its mean over the last 10 releases. The match command is
+   `python3 -m scripts.deep_bot.match --tag T --release K --opponent NAME
+   --player SPEC`, whose match is recorded like the role's and gets its own
+   panel. Still to build: the known positions and the blind spots.
 7. **Queue placement:** the roles' measured GPU memory and the layout.
 
 Not scheduled: the [luck correction](#the-matches), over the games step 6
