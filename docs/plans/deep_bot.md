@@ -143,11 +143,19 @@ goes out or the game stalls, and the outcome is her value. A candidate that
 empties the bag is valued this way only if the hasty first pass keeps it
 among its best ([Budget](#budget)), like any other.
 
-Under the `hasty` and `alice-subtree` reply models Bob's empty-bag move is
-the mechanical rule's, as his other moves are: the candidate keeps its hasty
+Under the `hasty` reply model the solver makes Bob's empty-bag move as
+well. The candidates that empty the bag leave the race, since their hasty
+values would stop a rival the endgames then favour; the best
+`--subtree-candidates` of them by a first pass of hasty sims are valued by
+the endgames at `--bob-racks` racks; the rest race among themselves; and
+Alice plays the best value, a solved candidate's or the race's winner's.
+
+Under `alice-subtree`, whose Bob is HastyBot, his empty-bag move is the
+mechanical rule's, as his other moves are: the candidate keeps its hasty
 sims' value, the play-to-the-end rule of [the sims](#sims) started one move
-earlier. Under `subtree` that value used to sit beside values earned against
-a searching Bob, and it read too well. Measured 2026-11-13 at the 794
+earlier. Under `subtree`, and under `hasty` until 2026-11-15, that value
+read too well beside the others. Measured 2026-11-13 and 2026-11-15 at the
+794
 positions of the `hidden_blind_spots` tag `v1` with 7 or fewer tiles in the
 bag whose best outside move is not a pass
 (`py/scripts/deep_bot/blind_spot_picks.py`, [the screen's
@@ -155,7 +163,8 @@ measurement](#the-screen-at-the-root)):
 
 | Reply model, and Bob's empty-bag move | Pick empties the bag, 2 to 7 in the bag | Picks the outside move: 1 / 2–3 / 4–7 in the bag | Seconds a turn: 1 / 2–3 / 4–7 |
 |---|---|---|---|
-| `hasty` | 0.281 | 0.953 / 0.921 / 0.842 | |
+| `hasty`, HastyBot's | 0.281 | 0.953 / 0.921 / 0.842 | 0.30 / 0.31 / 0.40 |
+| `hasty`, the endgame solver's | 0.121 | 0.423 / 0.611 / 0.778 | 0.27 / 0.67 / 0.53 |
 | `subtree`, HastyBot's from the first pass | 0.504 | 0.913 / 0.509 / 0.407 | |
 | `subtree`, the endgame solver's | 0.219 | 0.423 / 0.373 / 0.435 | 0.30 / 1.00 / 1.28 |
 
@@ -165,6 +174,29 @@ solver's it does so at 22%. With one tile in the bag every play empties it,
 so there the solver's reply is the whole evaluation, and it turns down more
 than half of the outside moves the hasty sims favour: a Bob who sees Alice's
 rack answers the fish or the setup that HastyBot walks past.
+
+The outside move is the hasty sims' verdict, so agreeing with it is not the
+measure. The pre-endgame solver ranks every play of the 149 positions with
+one tile in the bag exactly, by the share of the bag's draws it wins
+([blind_spots.md](../blind_spots.md)); the best play averages 0.346, the
+report's outside move 0.253, and the picks:
+
+| Reply model, and Bob's empty-bag move | Share of the bag's draws the pick wins |
+|---|---|
+| `hasty`, HastyBot's | 0.255 |
+| `hasty`, the endgame solver's | 0.324 (0.329 with every candidate solved) |
+| `subtree`, the endgame solver's | 0.324 |
+
+The solves run on the CPU. DeepBot's self-play under `hasty` on the dev
+laptop (28 threads, 168 games) spends 18 core-seconds a game with them
+against 4 without, at the same games a second (0.28 and 0.27), the GPU
+being what bounds it. Solving all 32 late candidates is 42 core-seconds a
+game, which is why the first pass keeps 8.
+
+`deepbot-endgame --peg 1` hands the turn with one tile in the bag to the
+pre-endgame solver, which is exact and single-threaded: on the first 11 of
+the 149 positions it took 8 to 892 seconds a turn, 86 at the median. That
+is a referee's cost, not a player's.
 
 Measured 2026-10-24 on the first empty-bag position of 200 HastyBot games,
 against a reference solve at budget 51,200 (which proved 131 of them):

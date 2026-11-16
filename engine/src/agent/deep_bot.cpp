@@ -66,8 +66,8 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "subtrees: racks Alice samples for Bob, each with its own subtree")  //
     ("subtree-candidates",
      po::value<int>(&p.subtree_candidates)->default_value(p.subtree_candidates),
-     "subtrees: how many candidates, the best by a first pass of hasty sims, get the subtree; "
-     "0 = all")  //
+     "how many candidates, the best by a first pass of hasty sims, get the subtree; under "
+     "hasty, how many of those that empty the bag get the endgame solver's reply; 0 = all")  //
     ("sims-per-rack", po::value<int>(&p.sims_per_rack)->default_value(p.sims_per_rack),
      "subtrees: Alice's sims at each rack after the reply, each drawing the replenishment; under "
      "subtree, apportioned among Bob's moves by their chance of being his best")  //
@@ -98,8 +98,8 @@ boost::program_options::options_description deepbot_options(DeepBot::Params& p) 
      "alice-subtree: stop her second turn's clearly beaten candidates between rounds")  //
     ("endgame-reply-budget",
      po::value<uint64_t>(&p.endgame_reply_budget)->default_value(p.endgame_reply_budget),
-     "subtree: after a candidate that empties the bag the endgame solver makes Bob's reply, "
-     "within this many nodes an endgame; 0 = the candidate keeps its hasty sims' value")  //
+     "subtree, hasty: after a candidate that empties the bag the endgame solver makes Bob's "
+     "reply, within this many nodes an endgame; 0 = the candidate keeps its hasty sims' value")  //
     ("subtree-dump", po::value<std::string>(&p.subtree_dump),
      "subtree: append a JSON line per turn comparing Bob's subtree replies with HastyBot's "
      "(runs the hasty sims and the subtrees a second time)")  //
@@ -151,6 +151,42 @@ std::vector<Move> screen_pool(const MoveRequest& req, int blank_prune_points) {
 // A candidate after which Alice's draw empties the bag.
 bool empties_bag(const Move& m, int bag) {
   return m.type() == MoveType::PLAY && m.num_glyphs() >= bag;
+}
+
+// The indices of `moves` that empty the bag (`emptying`), or of the rest.
+std::vector<size_t> split_by_emptying(const std::vector<Move>& moves, int bag, bool emptying) {
+  std::vector<size_t> out;
+  for (size_t c = 0; c < moves.size(); ++c)
+    if (empties_bag(moves[c], bag) == emptying) out.push_back(c);
+  return out;
+}
+
+// The moves of `moves` at `which`.
+std::vector<Move> moves_at(const std::vector<Move>& moves, const std::vector<size_t>& which) {
+  std::vector<Move> out;
+  out.reserve(which.size());
+  for (const size_t c : which) out.push_back(moves[c]);
+  return out;
+}
+
+// The index of the label most likely the best.
+size_t likeliest(const std::vector<PoolLabel>& labels) {
+  const auto best = std::max_element(
+    labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
+  return size_t(best - labels.begin());
+}
+
+// The `keep` of `which` with the best first-pass values (`hasty`, parallel to
+// the candidates), in candidate order; all of them when `keep` is 0 or they
+// are no more.
+std::vector<size_t> best_of_first_pass(std::vector<size_t> which,
+                                       const std::vector<PoolLabel>& hasty, size_t keep) {
+  if (keep == 0 || which.size() <= keep) return which;
+  std::stable_sort(which.begin(), which.end(),
+                   [&](size_t a, size_t b) { return hasty[a].win_prob > hasty[b].win_prob; });
+  which.resize(keep);
+  std::sort(which.begin(), which.end());
+  return which;
 }
 
 // `values` with each candidate `emptying` values (its entry is not kPruned)
@@ -281,11 +317,54 @@ MoveDecision DeepBot::make_move(const MoveRequest& req) {
   const std::shared_ptr<const belief::LeaveSampler> belief = root_belief(q);
   const std::vector<Move> moves = candidates(req, std::move(pool), belief.get());
   if (params_.reply != "hasty") return subtree_move(req, moves, belief.get());
-  const std::vector<PoolLabel> labels =
-    hasty_labels(req, moves, belief.get(), params_.rollouts, params_.race, turn_seed()).labels;
-  const auto best = std::max_element(
-    labels.begin(), labels.end(), [](const PoolLabel& a, const PoolLabel& b) { return a.q < b.q; });
-  return moves[size_t(best - labels.begin())];
+  return hasty_move(req, moves, belief.get());
+}
+
+Move DeepBot::hasty_move(const MoveRequest& req, const std::vector<Move>& moves,
+                         const belief::LeaveSampler* belief) const {
+  const std::vector<size_t> emptying =
+    solves_endgame_replies() ? split_by_emptying(moves, req.bag_size, true) : std::vector<size_t>{};
+  if (emptying.empty()) {
+    return moves[likeliest(
+      hasty_labels(req, moves, belief, params_.rollouts, params_.race, turn_seed()).labels)];
+  }
+  // The candidates that empty the bag stay out of the race: their hasty
+  // values read too well, and would stop a rival the endgames then favour.
+  std::vector<double> values =
+    endgame_values(req, moves, first_pass_best(req, moves, emptying, belief), belief);
+  const std::vector<size_t> rest = split_by_emptying(moves, req.bag_size, false);
+  if (!rest.empty()) {
+    const std::vector<PoolLabel> labels =
+      hasty_labels(req, moves_at(moves, rest), belief, params_.rollouts, params_.race, turn_seed())
+        .labels;
+    // The race's other candidates stopped early, on fewer rollouts than a
+    // value beside the solved ones' needs.
+    const size_t best = likeliest(labels);
+    values[rest[best]] = labels[best].win_prob;
+  }
+  return moves[best_candidate(values)];
+}
+
+std::vector<size_t> DeepBot::first_pass_best(const MoveRequest& req, const std::vector<Move>& moves,
+                                             const std::vector<size_t>& which,
+                                             const belief::LeaveSampler* belief) const {
+  const size_t keep = size_t(params_.subtree_candidates);
+  if (keep == 0 || which.size() <= keep) return which;
+  const std::vector<PoolLabel> labels = hasty_labels(req, moves_at(moves, which), belief,
+                                                     params_.bob_racks, /*race=*/false, turn_seed())
+                                          .labels;
+  std::vector<PoolLabel> hasty(moves.size());
+  for (size_t j = 0; j < which.size(); ++j) hasty[which[j]] = labels[j];
+  return best_of_first_pass(which, hasty, keep);
+}
+
+std::vector<double> DeepBot::endgame_values(const MoveRequest& req, const std::vector<Move>& moves,
+                                            const std::vector<size_t>& which,
+                                            const belief::LeaveSampler* belief) const {
+  const PoolJob root =
+    position_job(sim_position_from(req), moves, turn_seed(), belief, req.dict, params_.bob_racks);
+  const std::vector<Rack> racks = other_racks(root.group, root.starts[0], params_.bob_racks);
+  return endgame_reply_values(root.starts, racks, which, params_.endgame_reply_budget, req.dict);
 }
 
 DeepBot::HastySims DeepBot::hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
@@ -327,7 +406,7 @@ Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& move
 }
 
 bool DeepBot::solves_endgame_replies() const {
-  return params_.reply == "subtree" && params_.endgame_reply_budget > 0;
+  return params_.reply != "alice-subtree" && params_.endgame_reply_budget > 0;
 }
 
 std::vector<double> DeepBot::emptying_values(const MoveRequest& req, const AliceTurn& turn,
@@ -337,7 +416,8 @@ std::vector<double> DeepBot::emptying_values(const MoveRequest& req, const Alice
     std::vector<size_t> which;
     for (const size_t c : kept)
       if (empties_bag(turn.candidates[c], req.bag_size)) which.push_back(c);
-    return endgame_reply_values(turn, which, params_.endgame_reply_budget, req.dict);
+    return endgame_reply_values(turn.applied, turn.bob_racks, which, params_.endgame_reply_budget,
+                                req.dict);
   }
   std::vector<double> out(turn.candidates.size(), kPruned);
   for (size_t c = 0; c < out.size(); ++c)
@@ -350,14 +430,7 @@ std::vector<size_t> DeepBot::survivors(const std::vector<Move>& moves,
   std::vector<size_t> out;
   for (size_t c = 0; c < moves.size(); ++c)
     if (solves_endgame_replies() || !empties_bag(moves[c], bag)) out.push_back(c);
-  const size_t keep =
-    params_.subtree_candidates == 0 ? out.size() : size_t(params_.subtree_candidates);
-  if (out.size() <= keep) return out;
-  std::stable_sort(out.begin(), out.end(),
-                   [&](size_t a, size_t b) { return hasty[a].win_prob > hasty[b].win_prob; });
-  out.resize(keep);
-  std::sort(out.begin(), out.end());
-  return out;
+  return best_of_first_pass(std::move(out), hasty, size_t(params_.subtree_candidates));
 }
 
 std::vector<double> DeepBot::bob_subtree_values(const MoveRequest& req, const AliceTurn& turn,
