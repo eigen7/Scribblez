@@ -298,3 +298,7 @@ def test_the_positions_tab_draws_a_panel_per_reply_model(paths):
     assert hasty.renderers[0].data_source.data["color"] == [
         plots.PICK_COLORS["equity"], plots.PICK_COLORS["reference"]
     ]  # fmt: skip
+    # Named rows on a numeric axis: the dashboard's bokehjs does not embed
+    # this figure with a categorical one.
+    assert hasty.y_range.start == -0.5
+    assert hasty.yaxis[0].major_label_overrides == {0: "clinker"}
