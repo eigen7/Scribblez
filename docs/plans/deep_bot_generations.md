@@ -1,6 +1,7 @@
 # Plan: one workload that advances DeepBot's generations
 
-**Status: proposed 2026-11-13, not built.** This is step 11 of DeepBot's
+**Status: proposed 2026-11-13; steps 1 to 3 of its
+[build order](#build-order) are built.** This is step 11 of DeepBot's
 [build order](deep_bot.md#build-order) as a dashboard workload, and step 3
 of [the order of the remaining work](deep_bot_roadmap.md). Its
 measurements inform the next step; no pass or kill thresholds are fixed in
@@ -458,9 +459,21 @@ Each is a pull request.
    the workload (step 3).
 3. **The generator and the workload,** on the trainer's machine: DeepBot
    self-play on the newest release, pools from the pool tool at
-   `positions_per_game` for now, the charts. The loop then runs end to end
-   on the laptop. *Measure:* seconds a chunk spends loading models; the
-   first releases' curves.
+   `pool_positions_per_game` for now, the charts. Built 2026-11-16
+   (`workloads/deep_bot.py`): a tag can be created, and the loop runs end to
+   end on the laptop. *Measure:* seconds a chunk spends loading models; the
+   first releases' curves. On a two-generation tag of 40 games a generation:
+   - a new release cost no TensorRT plan build, and its first 20-game chunk
+     took 100 s where the chunk before took 102 s, so the load is within
+     the noise of a chunk;
+   - the pool tool labeled 7 to 9 pools a second beside the trainer, which
+     at 20 pools a game is over 2 s a game on top of the 4 s or so the
+     game takes, until self-play writes the pools (step 5);
+   - release 0's leave inference model, which scores 0.94 nats better than
+     the uniform draw on HastyBot's games, scored 0.85 worse and 0.09
+     better on the two generations of DeepBot's. Forty games a generation
+     settle nothing, but it is the direction the [parts'
+     match](deep_bot_roadmap.md#the-parts-measured) pointed.
 4. **Releases to remote slots.** The loop then runs on a fleet. *Measure:*
    the share of games per release as generators are added.
 5. **Self-play writes the pools.** The engine change, with both stages of
