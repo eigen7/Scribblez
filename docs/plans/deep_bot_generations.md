@@ -427,7 +427,7 @@ included.
 | A role's out-of-tag inputs (the seeds) | built, pushed when a container is created | none |
 | A new release reaching a running remote slot | built (step 4): a role names the files of its tag it reads, and each reconcile pass pushes the ones a running slot lacks | the measure role names the same files |
 | A remote trainer's releases reaching the controller | built (step 4): each is moved home as a complete set, like the state pair | none |
-| Work dispatched per export, results ingested and charted | built for match eval, on one export series and a neural player | a runner that builds a DeepBot player from a release; dispatch reads the release series; a row and a `.slog` kept per game |
+| Work dispatched per export, results ingested and charted | built (step 6): a release and release 0 are assigned to the measure slot, and each match's games come back with a row a game | none |
 | A match on demand against a kept release | not built | a command that plays the match anywhere and files its games under the release |
 | Charts | one model's metrics per tag | a grid per model from one record |
 | Queue placement | `layout` and `gpu_need` hooks | measure the generator's and the trainer's GPU memory |
@@ -548,6 +548,14 @@ Each is a pull request.
 6. **The measure role:** the matches against HastyBot and `A_0` with their
    games kept, the match command, the known positions, the blind spots.
    *Measure:* the GPU time a match takes from a running generator.
+   Built 2026-11-16, the matches: one measure slot plays each release as the
+   generating agent against HastyBot and against release 0, on the
+   controller's assignment, newest release first
+   (`deep_bot/measure.py`, `measure_dispatch.py`). Every game comes home and
+   is kept under the tag at `matches/release_<k>/<opponent>.json` (a row per
+   game) and `.slog`; the Matches tab draws each release's win rate from the
+   rows and its mean over the last 10 releases. Still to build: the match
+   command, the known positions and the blind spots.
 7. **Queue placement:** the roles' measured GPU memory and the layout.
 
 Not scheduled: the [luck correction](#the-matches), over the games step 6
