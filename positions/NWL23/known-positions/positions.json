@@ -1,0 +1,226 @@
+[
+  {
+    "id": "richards-eellt",
+    "title": "Nigel Richards's EELLT exchange",
+    "gcg": "richards-eellt.gcg",
+    "source": "docs/analysis/richards-johnson-exchange/README.md",
+    "origin": "Richards vs. Johnson, 2025 World Cup, round 11, move 22",
+    "reference": [
+      "-EELLT"
+    ],
+    "reference_equity_rank": 158,
+    "evidence": "the play made, as the commentary in the source explains it",
+    "static_equity_best": "8K ..NTE",
+    "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's."
+  },
+  {
+    "id": "aceta",
+    "title": "ACETA: a double-Z setup",
+    "gcg": "aceta.gcg",
+    "source": "positions/NWL23/interesting-positions/README.md",
+    "origin": "Joshua vs. Will, move 2",
+    "reference": [
+      "K6 AC.TA"
+    ],
+    "reference_equity_rank": 62,
+    "evidence": "the play made",
+    "static_equity_best": "L3 ATTAC.",
+    "note": ""
+  },
+  {
+    "id": "clinker",
+    "title": "CLINKER: an S hook on the triple-word square",
+    "gcg": "clinker.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#clinker-an-s-hook-on-the-triple-word-square",
+    "origin": "hidden_blind_spots v1 1792935124661189568-local-0-g125-turn14",
+    "reference": [
+      "8H .....ER"
+    ],
+    "reference_equity_rank": 46,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 17.9 +- 0.4 points of win %",
+    "static_equity_best": "F6 JILTE.",
+    "note": ""
+  },
+  {
+    "id": "oi-fish",
+    "title": "O(I): fish one tile to bingo out",
+    "gcg": "oi-fish.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#oi-fish-one-tile-to-bingo-out",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g166-turn22",
+    "reference": [
+      "M14 O."
+    ],
+    "reference_equity_rank": 114,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.2 +- 0.5 points of win %",
+    "static_equity_best": "O9 COINERs",
+    "note": ""
+  },
+  {
+    "id": "aim-fish",
+    "title": "A(I)M: the same fish",
+    "gcg": "aim-fish.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#aim-the-same-fish",
+    "origin": "hidden_blind_spots v1 1792939480730359398-local-0-g4-turn18",
+    "reference": [
+      "K10 A.M"
+    ],
+    "reference_equity_rank": 594,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 9.2 +- 0.7 points of win %",
+    "static_equity_best": "L4 POsTGAM.",
+    "note": ""
+  },
+  {
+    "id": "nim",
+    "title": "NIM: a private lane",
+    "gcg": "nim.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#nim-a-private-lane",
+    "origin": "hidden_blind_spots v1 1792939586653428488-local-0-g26-turn18",
+    "reference": [
+      "K12 NIM"
+    ],
+    "reference_equity_rank": 124,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 5.5 +- 0.4 points of win %",
+    "static_equity_best": "M12 FIN",
+    "note": ""
+  },
+  {
+    "id": "given",
+    "title": "GIVEN: a spot for the X",
+    "gcg": "given.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#given-a-spot-for-the-x",
+    "origin": "hidden_blind_spots v1 1792939885730522277-local-0-g116-turn17",
+    "reference": [
+      "15E GIV.N"
+    ],
+    "reference_equity_rank": 50,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 19.2 +- 0.5 points of win %",
+    "static_equity_best": "C12 .AX",
+    "note": ""
+  },
+  {
+    "id": "oil",
+    "title": "OIL: a Y hook on the triple-word square",
+    "gcg": "oil.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#oil-a-y-hook-on-the-triple-word-square",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g55-turn16",
+    "reference": [
+      "H12 .IL"
+    ],
+    "reference_equity_rank": 123,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 7.6 +- 0.4 points of win %",
+    "static_equity_best": "11A LAYIN",
+    "note": ""
+  },
+  {
+    "id": "ad",
+    "title": "AD: two hook squares on the triple-word row",
+    "gcg": "ad.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#ad-two-hook-squares-on-the-triple-word-row",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g81-turn17",
+    "reference": [
+      "14A AD"
+    ],
+    "reference_equity_rank": 31,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 6.4 +- 0.5 points of win %",
+    "static_equity_best": "15A DHA.",
+    "note": ""
+  },
+  {
+    "id": "pitch",
+    "title": "PITCH: the last Y",
+    "gcg": "pitch.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#pitch-the-last-y",
+    "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g111-turn16",
+    "reference": [
+      "H10 .ITCH"
+    ],
+    "reference_equity_rank": 167,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 10.3 +- 0.3 points of win %",
+    "static_equity_best": "H10 .ITCHY",
+    "note": ""
+  },
+  {
+    "id": "rouche",
+    "title": "ROUCHE: both ends of a triple-triple",
+    "gcg": "rouche.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#rouche-both-ends-of-a-triple-triple",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g51-turn16",
+    "reference": [
+      "1B .OUCHE"
+    ],
+    "reference_equity_rank": 83,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 21.7 +- 0.4 points of win %",
+    "static_equity_best": "2L .OU",
+    "note": ""
+  },
+  {
+    "id": "than",
+    "title": "THAN: declining a 76-point bingo",
+    "gcg": "than.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#than-declining-a-76-point-bingo",
+    "origin": "hidden_blind_spots v1 1792942025771220660-local-0-g37-turn12",
+    "reference": [
+      "L1 THAN"
+    ],
+    "reference_equity_rank": 32,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 12.0 +- 0.4 points of win %",
+    "static_equity_best": "13H THeA.INe",
+    "note": ""
+  },
+  {
+    "id": "tori",
+    "title": "TORI: a square where the Q counts twice",
+    "gcg": "tori.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#tori-a-square-where-the-q-counts-twice",
+    "origin": "hidden_blind_spots v1 1792942635811056326-local-0-g133-turn17",
+    "reference": [
+      "G11 TORI"
+    ],
+    "reference_equity_rank": 31,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.2 +- 0.5 points of win %",
+    "static_equity_best": "15D .ROTIC",
+    "note": ""
+  },
+  {
+    "id": "vig",
+    "title": "VIG: the same Q setup, and why the G matters",
+    "gcg": "vig.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#vig-the-same-q-setup-and-why-the-g-matters",
+    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g44-turn15",
+    "reference": [
+      "11A .IG"
+    ],
+    "reference_equity_rank": 12,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.9 +- 0.4 points of win %",
+    "static_equity_best": "B12 G.T",
+    "note": ""
+  },
+  {
+    "id": "qi",
+    "title": "Q(I): play one tile, leave one in the bag",
+    "gcg": "qi.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#qi-play-one-tile-leave-one-in-the-bag",
+    "origin": "hidden_blind_spots v1 1792943897352376103-local-0-g167-turn23",
+    "reference": [
+      "L10 Q."
+    ],
+    "reference_equity_rank": 75,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 73.6 +- 0.6 points of win %",
+    "static_equity_best": "1A A.I",
+    "note": ""
+  },
+  {
+    "id": "exchange-seven",
+    "title": "Exchange seven, with seven in the bag",
+    "gcg": "exchange-seven.gcg",
+    "source": "docs/analysis/hidden_blind_spots.md#exchange-seven-with-seven-in-the-bag",
+    "origin": "hidden_blind_spots v1 1792940249407138500-local-0-g161-turn17",
+    "reference": [
+      "-ADFGQTV"
+    ],
+    "reference_equity_rank": 20,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 26.3 +- 0.7 points of win %",
+    "static_equity_best": "11C D.V",
+    "note": ""
+  }
+]

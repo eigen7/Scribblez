@@ -15,7 +15,9 @@ network `leaf-conv-join-32-4b` generation 730 and leave inference model
 `tilted2` generation 1188. The tag lives on the mount, not in the repo
 (`/workspace/mount/tags/hidden_blind_spots/v1/data/gcg/<id>.gcg`), so every
 entry here carries its own board. With the tag present,
-`./py/scripts/blind_spots_viewer.py --tag v1` shows any of them.
+`./py/scripts/blind_spots_viewer.py --tag v1` shows any of them. The worked
+entries' games are also in the repo, with their answers, among the
+[known positions](../../positions/NWL23/known-positions/README.md).
 
 ## Reading an entry
 
