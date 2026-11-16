@@ -4,14 +4,17 @@ evaluation of Alice's candidates (docs/blind_spots.md, "Hidden-leaves blind
 spots on the GPU"): hidden leaves, the opponent's leave from the leave
 inference model, two HastyBot replies, then the leaf network.
 
-Its one role, a GPU generator, runs on local or ssh workers. A cycle plays a chunk of
-hidden-leaves HastyBot self-play, labels `positions_per_game` turns of each
-game into pools as policy_set's generators do (policy_set.write_pools: the
-.forgone sidecar, then policy_set_pool_tool), and confirms every pool whose
-leader sits outside the cut with blind_spot_confirm_tool. Under inferred
+Its one role, a GPU generator, runs on local or ssh workers
+(scribblez/hidden_blind_spots_generator.py has its runner). A cycle plays a
+chunk of hidden-leaves HastyBot self-play, labels `positions_per_game` turns
+of each game into pools as policy_set's generators do (policy_set.write_pools:
+the .forgone sidecar, then policy_set_pool_tool), and confirms every pool
+whose leader sits outside the cut with blind_spot_confirm_tool. Under inferred
 beliefs it then writes the viewer's opponent-rack panel for the kept positions
-(blind_spots_beliefs.py). The worker delivers what the step-4 tools and the
-viewer read and drops the pools, megabytes per chunk:
+(blind_spots_beliefs.py), which runs the leave inference model under
+onnxruntime; so the role runs on the torch worker image, the one that has it.
+The worker delivers what the step-4 tools and the viewer read and drops the
+pools, megabytes per chunk:
 
     data/found/<stem>.slog              the chunk's games
     data/found/<stem>.forgone           their forgone plays (inferred beliefs)
@@ -23,28 +26,22 @@ The controller counts the .gcg files and finishes the generators once the tag
 holds target_positions, as blind_spots does (its tick and complete).
 """
 
-import shutil
 import subprocess
-import sys
-import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
 
-from scribblez import params as params_mod
-from scribblez.blind_spots_beliefs import BeliefWriter
+from cloud.runtime_abi import RUNTIME_TORCH
+
 from scribblez.blind_spots_viewer import BELIEFS_SUFFIX
-from scribblez.leave_inference.beliefs import LeaveBeliefs
 from scribblez.params import param
 from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import run_games
 from scribblez.workloads import policy_set
-from scribblez.workloads.base import RoleSpec, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import RoleSpec, StatsSpec, WorkloadSpec
 from scribblez.workloads.blind_spots import GCG_DIR, positions_found
 from scribblez.workloads.policy_set import LEAF_SYNTHETIC, PoolLabelParams
 from scribblez.workloads.selfplay_gen import hasty_spec
-from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
 CONFIRM_TOOL = ENGINE_DIR / "blind_spot_confirm_tool"
 FOUND_SUFFIX = ".blindspots.json"
@@ -148,75 +145,6 @@ def deliver_chunk(sink, chunk_dir: Path) -> tuple[int, int]:
     return len(kept), nbytes
 
 
-class CycleResult(NamedTuple):
-    phases: dict[str, float]  # seconds, keyed as the role's StatsSpec phases
-    found: int  # positions kept
-    nbytes: int  # delivered
-
-
-def write_beliefs(writer: BeliefWriter, chunk_dir: Path):
-    """The viewer's beliefs for the confirmed chunk in `chunk_dir`."""
-    (slog,) = chunk_dir.glob("*.slog")
-    writer.write(slog.with_name(slog.stem + FOUND_SUFFIX), chunk_dir / GCG_DIR)
-
-
-def run_cycle(
-    ctx: WorkerContext,
-    leaf: Path,
-    model: Path | None,
-    writer: BeliefWriter | None,
-    chunk_dir: Path,
-) -> CycleResult:
-    """One cycle: play, pool, confirm and deliver a chunk in `chunk_dir`, with
-    `writer`'s beliefs where the pools use `model`."""
-    p = ctx.params
-    t0 = time.monotonic()
-    play_chunk(chunk_dir, ctx.worker_id, p, ctx.threads)
-    t1 = time.monotonic()
-    confirm_chunk(p, leaf, model, chunk_dir, ctx.threads)
-    if writer is not None:
-        write_beliefs(writer, chunk_dir)
-    t2 = time.monotonic()
-    found, nbytes = deliver_chunk(ctx.sink, chunk_dir)
-    phases = {"gen_s": t1 - t0, "sim_s": t2 - t1, "upload_s": time.monotonic() - t2}
-    return CycleResult(phases, found, nbytes)
-
-
-def run_generate(ctx: WorkerContext) -> int:
-    """The generate-role runner: one chunk per cycle until max_cycles or
-    SIGTERM. The work dir is wiped on start, since a stopped cycle's chunk is
-    redone rather than resumed."""
-    try:
-        leaf, model = policy_set.resolve_sources(ctx)
-    except (FileNotFoundError, params_mod.ParamsError) as e:
-        print(f"error: hidden_blind_spots source: {e}", file=sys.stderr)
-        return 1
-    writer = None
-    if model is not None:
-        p = ctx.params
-        writer = BeliefWriter(
-            LeaveBeliefs(model), p.leave_inference_tag, p.leave_inference_generation
-        )
-    work_dir = ctx.tag_paths().work_dir(ctx.worker_id)
-    shutil.rmtree(work_dir, ignore_errors=True)
-    work_dir.mkdir(parents=True)
-    stats = WorkerStats(ctx)
-    print(f"worker {ctx.worker_id} ({ctx.sink.kind}): collecting tag '{ctx.tag}' with {ctx.params}")
-    cycle = 0
-    try:
-        while ctx.max_cycles == 0 or cycle < ctx.max_cycles:
-            cycle += 1
-            chunk_dir = work_dir / f"cycle-{cycle}"
-            chunk_dir.mkdir()
-            r = run_cycle(ctx, leaf, model, writer, chunk_dir)
-            shutil.rmtree(chunk_dir)
-            stats.cycle_done(r.phases, units=r.found, nbytes=r.nbytes)
-            print(f"cycle {cycle}: {r.found} position(s) kept")
-    except WorkerStopped:
-        print("SIGTERM: the chunk in progress is discarded")
-    return 0
-
-
 def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, object]]:
     data_dir = paths.data_dir
     return [
@@ -233,8 +161,9 @@ SPEC = WorkloadSpec(
         RoleSpec(
             name="generate",
             title="Generator (GPU)",
-            runner="scribblez.workloads.hidden_blind_spots:run_generate",
+            runner="scribblez.hidden_blind_spots_generator:run",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            runtime=RUNTIME_TORCH,
             inputs="scribblez.workloads.policy_set:inputs",
             gpu=True,
             stats=StatsSpec(
