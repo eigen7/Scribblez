@@ -350,9 +350,9 @@ Per release, from the measure role (every `match_every_generations`):
   generating agent and under `--reply subtree`: a handful of turns. These
   are the positions the project is judged on.
 - **The picks at the blind spots**
-  ([blind_spots.md](../blind_spots.md)), as a regression read under one
-  reply model. Their verdicts come from hasty sims under the seeds' leaf
-  network, so they do not rank releases finely.
+  ([blind_spots.md](../blind_spots.md)) are read on demand, not per release
+  (`scripts.deep_bot.blind_spot_picks`). Their verdicts come from hasty sims
+  under the seeds' leaf network, so they do not rank releases finely.
 
 ### The matches
 
@@ -561,8 +561,12 @@ Each is a pull request.
    panel. The known positions are collected, with their answers, in
    `positions/NWL23/known-positions`, and `python3 -m
    scripts.deep_bot.known_position_picks --player SPEC` reads any agent's
-   picks at them. Still to build: those picks and the blind spots' taken for
-   each release by the measure role, and their table on the dashboard.
+   picks at them. The measure slot takes those picks for each release it
+   is assigned, under the generating agent and under `--reply subtree`, and
+   the Positions tab draws a cell per release and position: the reference
+   move, static equity's, or another. The blind spots' picks stay on demand
+   (`scripts.deep_bot.blind_spot_picks`): the worked ones are among the
+   known positions, and the tag's thousand live on the controller's mount.
 7. **Queue placement:** the roles' measured GPU memory and the layout.
 
 Not scheduled: the [luck correction](#the-matches), over the games step 6

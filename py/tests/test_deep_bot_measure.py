@@ -11,7 +11,7 @@ from cloud.sinks import LocalSink
 from scribblez import workloads
 from scribblez.dashboard import db, plots
 from scribblez.dashboard.slot_files import LocalSlotFiles
-from scribblez.deep_bot import matches, measure, measure_dispatch, release
+from scribblez.deep_bot import known_positions, matches, measure, measure_dispatch, release
 from scribblez.generational import lifecycle
 from scribblez.match_eval import harness
 from scribblez.workloads.base import WorkerContext
@@ -52,6 +52,15 @@ def _deliver(paths, number: int, opponent: str, wins: int):
     ):
         (paths.data_dir / rel).parent.mkdir(parents=True, exist_ok=True)
         (paths.data_dir / rel).write_text(text)
+
+
+def _deliver_picks(paths, number: int, reading: str = "equity"):
+    """A release's picks in the tag's data dir, as a worker delivers them."""
+    rows = [{"id": "clinker", "pick": "F6 JILTE.", "reading": reading, "seconds": 0.5}]
+    record = matches.picks_record(number, dict.fromkeys(matches.PICK_REPLIES, rows))
+    path = paths.data_dir / matches.picks_rel(number)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record))
 
 
 @pytest.fixture
@@ -95,6 +104,10 @@ def test_the_newest_release_is_assigned_with_release_0_beside_it(paths):
     for number in (0, 2):
         assert all((inbox / rel).read_text() == f"{number}" for rel in release.files(number))
     assert measure.assigned_release(inbox) == 2
+    # The known positions come along, as the worker's loader reads them.
+    held = known_positions.load(inbox / matches.KNOWN_POSITIONS_DIR)
+    assert [p.id for p in held] == [p.id for p in known_positions.load()]
+    assert all(p.gcg.is_file() for p in held)
 
     # Busy until its results are recorded: nothing more is assigned.
     _tick(paths)
@@ -109,13 +122,14 @@ def test_delivered_matches_are_recorded_kept_and_cleared_from_the_inbox(paths):
     token = inbox / measure.ASSIGNED_DIR / "release_000001.json"
     token.rename(token.with_name(token.name + ".done"))  # the worker finished it
     _deliver(paths, 1, matches.HASTYBOT, wins=3)
+    _deliver(paths, 1, matches.RELEASE_0, wins=2)
 
     _tick(paths)
-    # One of release 1's two matches is in: it is not yet measured, so its
-    # assignment stays and release 0 waits its turn.
+    # Both matches are in but the picks are not: release 1 is not yet
+    # measured, so its assignment stays and release 0 waits its turn.
     assert token.with_name(token.name + ".done").exists()
-    _deliver(paths, 1, matches.RELEASE_0, wins=2)
-    assert _tick(paths)  # release 0 is still owed its match
+    _deliver_picks(paths, 1, reading="reference")
+    assert _tick(paths)  # release 0 is still owed its measuring
 
     conn = db.connect(paths.dashboard_db)
     rows = {(r["release"], r["opponent"]): r for r in db.read_release_matches(conn)}
@@ -124,9 +138,15 @@ def test_delivered_matches_are_recorded_kept_and_cleared_from_the_inbox(paths):
     assert rows[(1, "release_0")]["wins"] == 2
     kept = matches.kept_dir(paths, 1)
     assert sorted(p.name for p in kept.iterdir()) == [
-        "hastybot.json", "hastybot.slog", "release_0.json", "release_0.slog"
+        "hastybot.json", "hastybot.slog", "picks.json", "release_0.json", "release_0.slog"
     ]  # fmt: skip
     assert len(matches.read_result(kept / "hastybot.json")["games"]) == 4
+    conn = db.connect(paths.dashboard_db)
+    picks = db.read_release_picks(conn)
+    conn.close()
+    assert [(r["release"], r["reply"], r["position"], r["reading"]) for r in picks] == [
+        (1, reply, "clinker", "reference") for reply in sorted(matches.PICK_REPLIES)
+    ]
     assert not any(paths.match_results_dir.iterdir())
     # Release 1's files left the inbox with its assignment; release 0's stay,
     # and release 0 is now assigned.
@@ -139,6 +159,7 @@ def test_nothing_is_owed_once_every_due_release_is_measured(paths):
     _publish(paths, 0)
     lifecycle.write_train_state(paths, {"generation_index": 0, "rows_trained": 0})
     _deliver(paths, 0, matches.HASTYBOT, wins=2)
+    _deliver_picks(paths, 0)
     assert not _tick(paths, slots=[])
     # A trainer ahead of the releases here means one is still on its way.
     lifecycle.write_train_state(paths, {"generation_index": 1, "rows_trained": 40})
@@ -171,7 +192,14 @@ def test_the_worker_plays_each_opponent_and_delivers_every_game(paths, monkeypat
         (slog_dir / "1.slog").write_text("games")
         return harness.round_result(_games(3, num_pairs, seed))
 
+    asked = []
+
+    def ask(positions, player, work, threads):
+        asked.append(player)
+        return [{"pick": p.static_equity_best, "seconds": 0.1} for p in positions]
+
     monkeypatch.setattr(harness, "play_round", play_round)
+    monkeypatch.setattr(known_positions, "ask", ask)
     ctx = WorkerContext(
         spec=SPEC,
         role=SPEC.role("measure"),
@@ -190,10 +218,18 @@ def test_the_worker_plays_each_opponent_and_delivers_every_game(paths, monkeypat
     assert f"--leaf-model {inbox / release.export_rel(3, 'leaf')}" in hasty[0]
     assert hasty[1:] == (matches.HASTYBOT_SPEC, 2, 7)
     assert f"--leaf-model {inbox / release.export_rel(0, 'leaf')}" in own[1]
+    # The picks are asked of release 3 under each reply model.
+    assert ["--reply hasty" in a for a in asked] == [True, False]
+    assert "--reply subtree" in asked[1] and str(release.export_rel(3, "leaf")) in asked[1]
     assert measure.assigned_release(inbox) is None  # marked done, awaiting the controller
     _tick(paths)
     kept = sorted(p.name for p in matches.kept_dir(paths, 3).iterdir())
-    assert kept == ["hastybot.json", "hastybot.slog", "release_0.json", "release_0.slog"]
+    assert kept == [
+        "hastybot.json", "hastybot.slog", "picks.json", "release_0.json", "release_0.slog"
+    ]  # fmt: skip
+    picks = json.loads((matches.kept_dir(paths, 3) / "picks.json").read_text())["picks"]
+    assert {r["reading"] for r in picks["hasty"]} == {"equity"}
+    assert len(picks["subtree"]) == len(known_positions.load())
 
 
 def test_the_chart_draws_a_panel_per_opponent_with_a_trailing_mean(paths):
@@ -246,3 +282,19 @@ def test_a_match_on_demand_is_filed_under_its_release(paths, monkeypatch, capsys
     with pytest.raises(SystemExit):
         match_script.main([*argv, "--opponent", "hastybot", "--player", spec])
     assert match_script.main([*argv[:3], "9", *argv[4:], "--opponent", "x", "--player", spec]) == 1
+
+
+def test_the_positions_tab_draws_a_panel_per_reply_model(paths):
+    conn = db.connect(paths.dashboard_db)
+    assert plots.release_pick_grid(conn) is None
+    for number, reading in ((1, "equity"), (2, "reference")):
+        rows = [{"id": "clinker", "pick": "x", "reading": reading, "seconds": 1.0}]
+        db.write_release_picks(conn, number, dict.fromkeys(matches.PICK_REPLIES, rows))
+    grid = plots.release_pick_grid(conn)
+    conn.close()
+    hasty, subtree = grid.children
+    assert "the generating agent" in hasty.title.text
+    assert "the subtree reply" in subtree.title.text
+    assert hasty.renderers[0].data_source.data["color"] == [
+        plots.PICK_COLORS["equity"], plots.PICK_COLORS["reference"]
+    ]  # fmt: skip
