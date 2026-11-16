@@ -6,9 +6,9 @@ every pick against the position's answer.
     python3 -m scripts.deep_bot.known_position_picks \\
         --player "--type=deepbot-endgame --leaf-model leaf.onnx --reply hasty"
 
-A pick is the position's reference move, a sim artifact (a move only a sim
-with HastyBot's replies prefers), static equity's move, or another. --out
-keeps the picks as JSON lines, one per position, with how each was read.
+A pick is the position's reference move, static equity's move, or another.
+--out keeps the picks as JSON lines, one per position, with how each was
+read.
 """
 
 import argparse
@@ -23,16 +23,14 @@ from scribblez.hardware import default_thread_count
 
 def table(positions, picks) -> str:
     """The picks as lines, then the count of each reading."""
-    lines, counts = [], dict.fromkeys(
-        (known_positions.REFERENCE, known_positions.ARTIFACT, known_positions.EQUITY,
-         known_positions.OTHER), 0
-    )  # fmt: skip
+    readings = (known_positions.REFERENCE, known_positions.EQUITY, known_positions.OTHER)
+    lines, counts = [], dict.fromkeys(readings, 0)
     for p, pick in zip(positions, picks, strict=True):
         reading = p.read(pick["pick"])
         counts[reading] += 1
-        wanted = " or ".join(p.reference) or "none"
+        wanted = f"{' or '.join(p.reference)} (#{p.reference_equity_rank})"
         lines.append(
-            f"{p.id:16} {pick['pick']:18} {reading:10} reference {wanted:14} "
+            f"{p.id:16} {pick['pick']:18} {reading:10} reference {wanted:20} "
             f"{pick['seconds']:6.1f} s"
         )
     summary = ", ".join(f"{n} {name}" for name, n in counts.items())

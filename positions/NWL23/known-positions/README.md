@@ -1,8 +1,14 @@
 # Known positions
 
-The positions the project is judged on: each one has an answer that a strong
-player, or a careful reading of a long sim, arrives at and that static equity
-does not. The aim is an agent that is not outplayed at any of them.
+The positions the project is judged on. A position belongs here when there
+is good reason to believe that its best move is not among HastyBot's ten best
+by static equity: a strong player made it and can say why, or a reading of
+the position and a long sim agree on it. The aim is an agent that is not
+outplayed at any of them.
+
+Positions whose sim-best move is a pass are left out. A pass sims well
+against an opponent who never passes back, which is the sim's opponent and
+not a real one.
 
 `positions.json` lists them. Each entry names:
 
@@ -12,10 +18,10 @@ does not. The aim is an agent that is not outplayed at any of them.
   writes a move and as the pick tool reports one (`8H .....ER` plays ER
   through five tiles on the board, `-EELLT` exchanges, `-` passes); empty
   where it favours none.
-- `reference_from`: whose judgement that is.
+- `reference_equity_rank`: where static equity ranks that move among the
+  legal moves, HastyBot's own being 1. Every one is past 10.
+- `evidence`: the reason to believe it.
 - `static_equity_best`: HastyBot's move there.
-- `sim_artifact`: moves a HastyBot-reply sim prefers for a reason that does
-  not survive a thinking opponent. An agent that picks one has been fooled.
 - `source`: where the position is worked through, and `origin`: the game it
   came from.
 
@@ -39,6 +45,4 @@ one another, leaving the moves, the scores and the position untouched.
 - The rest: the worked entries of
   [docs/analysis/hidden_blind_spots.md](../../../docs/analysis/hidden_blind_spots.md),
   copied from the `hidden_blind_spots` tag `v1`, which lives on the mount.
-  Its opening-move pass (ACDEINT) is left out: it is that page's least
-  certain entry, and a record in which one player has not yet moved does not
-  convert.
+  That page's three passes (CHORD, INDIGENE, ACDEINT) are the ones left out.

@@ -18,7 +18,6 @@ DIRECTORY = REPO_ROOT / "positions" / "NWL23" / "known-positions"
 
 # How a pick reads against its position's manifest entry.
 REFERENCE = "reference"  # the move the analysis favours
-ARTIFACT = "artifact"  # a move only a HastyBot-reply sim prefers
 EQUITY = "equity"  # HastyBot's move
 OTHER = "other"
 
@@ -31,7 +30,7 @@ class Position:
     title: str
     gcg: Path
     reference: tuple[str, ...]
-    sim_artifact: tuple[str, ...]
+    reference_equity_rank: int  # static equity's rank of it, HastyBot's move being 1
     static_equity_best: str
 
     @property
@@ -43,8 +42,6 @@ class Position:
         """What `pick`, a move as the pick tool writes it, is here."""
         if pick in self.reference:
             return REFERENCE
-        if pick in self.sim_artifact:
-            return ARTIFACT
         return EQUITY if pick == self.static_equity_best else OTHER
 
 
@@ -57,7 +54,7 @@ def load(directory: Path = DIRECTORY) -> list[Position]:
             title=e["title"],
             gcg=directory / e["gcg"],
             reference=tuple(e["reference"]),
-            sim_artifact=tuple(e["sim_artifact"]),
+            reference_equity_rank=e["reference_equity_rank"],
             static_equity_best=e["static_equity_best"],
         )
         for e in entries

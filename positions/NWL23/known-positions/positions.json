@@ -8,10 +8,10 @@
     "reference": [
       "-EELLT"
     ],
-    "reference_from": "the play made, as the commentary in the source explains it",
+    "reference_equity_rank": 158,
+    "evidence": "the play made, as the commentary in the source explains it",
     "static_equity_best": "8K ..NTE",
-    "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's.",
-    "sim_artifact": []
+    "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's."
   },
   {
     "id": "aceta",
@@ -22,10 +22,10 @@
     "reference": [
       "K6 AC.TA"
     ],
-    "reference_from": "the play made",
+    "reference_equity_rank": 62,
+    "evidence": "the play made",
     "static_equity_best": "L3 ATTAC.",
-    "note": "",
-    "sim_artifact": []
+    "note": ""
   },
   {
     "id": "clinker",
@@ -36,9 +36,9 @@
     "reference": [
       "8H .....ER"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 46,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 17.9 +- 0.4 points of win %",
     "static_equity_best": "F6 JILTE.",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -50,9 +50,9 @@
     "reference": [
       "M14 O."
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 114,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.2 +- 0.5 points of win %",
     "static_equity_best": "O9 COINERs",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -64,9 +64,9 @@
     "reference": [
       "K10 A.M"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 594,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 9.2 +- 0.7 points of win %",
     "static_equity_best": "L4 POsTGAM.",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -78,9 +78,9 @@
     "reference": [
       "K12 NIM"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 124,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 5.5 +- 0.4 points of win %",
     "static_equity_best": "M12 FIN",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -92,9 +92,9 @@
     "reference": [
       "15E GIV.N"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 50,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 19.2 +- 0.5 points of win %",
     "static_equity_best": "C12 .AX",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -106,9 +106,9 @@
     "reference": [
       "H12 .IL"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 123,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 7.6 +- 0.4 points of win %",
     "static_equity_best": "11A LAYIN",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -120,9 +120,9 @@
     "reference": [
       "14A AD"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 31,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 6.4 +- 0.5 points of win %",
     "static_equity_best": "15A DHA.",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -134,9 +134,9 @@
     "reference": [
       "H10 .ITCH"
     ],
-    "reference_from": "David's reading, confirmed by the sim",
+    "reference_equity_rank": 167,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 10.3 +- 0.3 points of win %",
     "static_equity_best": "H10 .ITCHY",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -148,9 +148,9 @@
     "reference": [
       "1B .OUCHE"
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 83,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 21.7 +- 0.4 points of win %",
     "static_equity_best": "2L .OU",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -162,9 +162,9 @@
     "reference": [
       "L1 THAN"
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 32,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 12.0 +- 0.4 points of win %",
     "static_equity_best": "13H THeA.INe",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -176,9 +176,9 @@
     "reference": [
       "G11 TORI"
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 31,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.2 +- 0.5 points of win %",
     "static_equity_best": "15D .ROTIC",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -190,23 +190,9 @@
     "reference": [
       "11A .IG"
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 12,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.9 +- 0.4 points of win %",
     "static_equity_best": "B12 G.T",
-    "sim_artifact": [],
-    "note": ""
-  },
-  {
-    "id": "chord-pass",
-    "title": "CHORD: a pass that keeps the bag closed",
-    "gcg": "chord-pass.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#chord-a-pass-that-keeps-the-bag-closed",
-    "origin": "hidden_blind_spots v1 1792941188977491622-local-0-g53-turn21",
-    "reference": [
-      "-"
-    ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
-    "static_equity_best": "4H .HORD",
-    "sim_artifact": [],
     "note": ""
   },
   {
@@ -218,24 +204,10 @@
     "reference": [
       "L10 Q."
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 75,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 73.6 +- 0.6 points of win %",
     "static_equity_best": "1A A.I",
-    "sim_artifact": [],
     "note": ""
-  },
-  {
-    "id": "indigene-pass",
-    "title": "INDIGENE: a pass that works only against HastyBot",
-    "gcg": "indigene-pass.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#indigene-a-pass-that-works-only-against-hastybot",
-    "origin": "hidden_blind_spots v1 1792940705497667449-ssh-0-g186-turn28",
-    "reference": [],
-    "reference_from": "the confirming sim, against HastyBot's replies",
-    "static_equity_best": "B5 INDIGEN.",
-    "sim_artifact": [
-      "-"
-    ],
-    "note": "The sim's best is the pass, which wins only against an opponent who never passes back. An agent that models a searching opponent should not make it."
   },
   {
     "id": "exchange-seven",
@@ -246,9 +218,9 @@
     "reference": [
       "-ADFGQTV"
     ],
-    "reference_from": "the confirming sim, against HastyBot's replies",
+    "reference_equity_rank": 20,
+    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 26.3 +- 0.7 points of win %",
     "static_equity_best": "11C D.V",
-    "sim_artifact": [],
     "note": ""
   }
 ]

@@ -27,24 +27,23 @@ def hasty_picks(tmp_path_factory):
 
 def test_every_position_replays_to_hastybots_recorded_move(hasty_picks):
     positions, picks = hasty_picks
-    assert len(positions) == len(picks) >= 18
+    assert len(positions) == len(picks) >= 16
     assert len({p.id for p in positions}) == len(positions)
     for p, pick in zip(positions, picks, strict=True):
         assert pick["pick"] == p.static_equity_best, p.id
         assert p.read(pick["pick"]) == known_positions.EQUITY, p.id
-        # No reference is the move static equity makes: that is what makes
-        # the position one.
-        assert p.static_equity_best not in p.reference, p.id
+        # What makes a position one: its answer is outside HastyBot's ten
+        # best, and is not a pass.
+        assert p.reference and p.reference_equity_rank > 10, p.id
+        assert "-" not in p.reference, p.id
 
 
 def test_a_pick_is_read_against_its_positions_answer(hasty_picks):
     positions, picks = hasty_picks
     by_id = {p.id: p for p in positions}
     assert by_id["richards-eellt"].read("-EELLT") == known_positions.REFERENCE
-    assert by_id["indigene-pass"].read("-") == known_positions.ARTIFACT
-    assert by_id["chord-pass"].read("-") == known_positions.REFERENCE
     assert by_id["clinker"].read("O1 ZZZ") == known_positions.OTHER
     text = known_position_picks.table(positions, picks)
     assert text.splitlines()[-1] == (
-        f"{len(positions)} positions: 0 reference, 0 artifact, {len(positions)} equity, 0 other"
+        f"{len(positions)} positions: 0 reference, {len(positions)} equity, 0 other"
     )
