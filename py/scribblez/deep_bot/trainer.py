@@ -21,7 +21,6 @@ the names the dashboard's Loss tab stacks.
 
 import functools
 import os
-import shutil
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -30,7 +29,8 @@ import torch
 from torch import nn
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY, release, units
+from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY, kept_checkpoints, release, units
+from scribblez.deep_bot.seeds import seed_path
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls
@@ -40,7 +40,7 @@ from scribblez.policy_set import dataset
 from scribblez.policy_set.onnx_export import LEAVE_GENERATION_KEY, LEAVE_TAG_KEY
 from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
-from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.base import WorkerContext, await_tag_file
 from scribblez.workloads.deep_bot import CHUNK_SIDECARS
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
@@ -140,21 +140,17 @@ def export_provenance(kind: str, tag: str, number: int) -> dict:
     return out
 
 
-def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows: dict) -> list:
-    """Write release `number`: the three exports, then its manifest. Returns
-    the files, the manifest last."""
+def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows: dict):
+    """Write release `number`: the three exports, then its manifest."""
     release.release_dir(paths, number).mkdir(parents=True, exist_ok=True)
-    files = []
     for kind, unit in by_kind.items():
         path = release.export_path(paths, number, kind)
         if unit.export(path, export_provenance(kind, tag, number)) is False:
             raise RuntimeError(f"the {kind} seed trains nothing a release can serve")
-        files.append(path)
-    files.append(release.write_manifest(paths, number, tag, rows))
-    return files
+    release.write_manifest(paths, number, tag, rows)
 
 
-def save_checkpoint(by_kind: dict, paths: TagPaths, params, state: DeepBotState):
+def save_checkpoint(by_kind: dict, paths: TagPaths, params, state: DeepBotState, remote: bool):
     """The rolling checkpoint of the three models and optimizers, and every
     `keep_checkpoint_every`th release's copy of it."""
     config = {
@@ -164,9 +160,7 @@ def save_checkpoint(by_kind: dict, paths: TagPaths, params, state: DeepBotState)
     checkpoint.save(paths, models(by_kind), OptimizerSet(by_kind), state, config)
     every = params.keep_checkpoint_every
     if every > 0 and state.generation_index % every == 0:
-        kept = paths.checkpoint_path(state.generation_index)
-        kept.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(paths.rolling_checkpoint, kept)
+        kept_checkpoints.keep(paths, state.generation_index, remote)
 
 
 def resume(by_kind: dict, paths: TagPaths, device) -> DeepBotState:
@@ -181,15 +175,17 @@ def resume(by_kind: dict, paths: TagPaths, device) -> DeepBotState:
     return state
 
 
-def _deliver_release(sink, paths: TagPaths, files: list):
-    for path in files:
-        sink.deliver_output(path, str(path.relative_to(paths.root)), keep=True)
+def _deliver_release(remote: bool, paths: TagPaths, number: int):
+    """Hand release `number` to the controller, from a trainer on an ssh
+    machine. A local trainer's is already in the controller's tag."""
+    if remote:
+        release.deliver(paths, number)
 
 
-def _deliver_generation(sink, paths, gen, files, checkpoint_snap, state_snap, recorder, staged):
-    """One generation's deliveries: the release, the state pair, and last the
-    record."""
-    _deliver_release(sink, paths, files)
+def _deliver_generation(sink, remote, paths, gen, checkpoint_snap, state_snap, recorder, staged):
+    """One generation's deliveries: the release it made, the state pair, and
+    last the record."""
+    _deliver_release(remote, paths, gen + 1)
     state_pair.deliver(sink, checkpoint_snap, state_snap, gen)
     recorder.deliver_staged(staged)
 
@@ -213,8 +209,8 @@ def run_one_generation(by_kind, baseline, recorder, paths, params, state, ctx):
     t_publish = time.time()
     state.generation_index = gen + 1
     state.rows_trained += games_in(gen_dir)
-    files = publish_release(by_kind, paths, ctx["tag"], gen + 1, unit_rows(state))
-    save_checkpoint(by_kind, paths, params, state)
+    publish_release(by_kind, paths, ctx["tag"], gen + 1, unit_rows(state))
+    save_checkpoint(by_kind, paths, params, state, ctx["remote"])
     lifecycle.write_train_state(paths, asdict(state))
     timed_print(f"[gen {gen}] games={state.rows_trained}; release {gen + 1} published")
     staged = recorder.stage_generation(gen, state.rows_trained, record)
@@ -223,9 +219,9 @@ def run_one_generation(by_kind, baseline, recorder, paths, params, state, ctx):
         functools.partial(
             _deliver_generation,
             ctx["sink"],
+            ctx["remote"],
             paths,
             gen,
-            files,
             state_pair.snapshot(paths.rolling_checkpoint, gen),
             state_pair.snapshot(paths.train_state_path, gen),
             recorder,
@@ -260,14 +256,15 @@ def run_generations(by_kind, baseline, recorder, paths, params, state, ctx):
     timed_print(f"Stopped at generation {state.generation_index}.")
 
 
-def ensure_newest_release(by_kind: dict, paths: TagPaths, tag: str, sink, state: DeepBotState):
+def ensure_newest_release(by_kind, paths: TagPaths, tag: str, remote: bool, state: DeepBotState):
     """Publish the units as the cursor's release unless it is there: release
     0, the seeds', which the first generation is played on, or after a
     restore onto a new machine the release the checkpoint holds."""
     number = state.generation_index
     if release.newest(paths) == number:
         return
-    _deliver_release(sink, paths, publish_release(by_kind, paths, tag, number, unit_rows(state)))
+    publish_release(by_kind, paths, tag, number, unit_rows(state))
+    _deliver_release(remote, paths, number)
     timed_print(f"release {number} published")
 
 
@@ -279,6 +276,8 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
+    for kind in KINDS:
+        await_tag_file(ctx, seed_path(paths, kind))
     by_kind = units.build_units(paths, params, device)
     # Release 0, kept loaded and never trained: each generation is scored
     # under it too, so a chart can tell the models' progress from the games'
@@ -297,13 +296,14 @@ def run(ctx: WorkerContext) -> int:
     run_ctx = {
         "tag": ctx.tag,
         "sink": ctx.sink,
+        "remote": ctx.kind != "local",
         "read_controls": functools.partial(read_controls, ctx.sink),
         "stats": WorkerStats(ctx),
         "deliverer": OutputDeliverer(),
     }
     state_pair.install_seed(paths)
     state = resume(by_kind, paths, device)
-    ensure_newest_release(by_kind, paths, ctx.tag, ctx.sink, state)
+    ensure_newest_release(by_kind, paths, ctx.tag, run_ctx["remote"], state)
     longest = max(units.window(params, kind) for kind in KINDS)
     ensure_window(paths, ctx.sink, state.generation_index, longest)
     lifecycle.write_train_state(paths, asdict(state))

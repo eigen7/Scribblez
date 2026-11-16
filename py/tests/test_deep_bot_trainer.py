@@ -25,6 +25,7 @@ from scribblez.deep_bot import (  # noqa: E402
     LEAF,
     LEAVE,
     POLICY,
+    kept_checkpoints,
     release,
     seeds,
     trainer,
@@ -92,13 +93,14 @@ def tag(chunk, tmp_path, monkeypatch) -> TagPaths:
     return paths
 
 
-def _context(paths: TagPaths, monkeypatch):
+def _context(paths: TagPaths, monkeypatch, remote: bool = False):
     recorder = TrainRecorder(LocalSink(paths.root))
     staged = []
     monkeypatch.setattr(recorder, "deliver_staged", staged.append)
     ctx = {
         "tag": paths.tag,
         "sink": LocalSink(paths.root),
+        "remote": remote,
         "cpu": type("Cpu", (), {"dataloader_workers": 1})(),
         "stats": type("S", (), {"cycle_done": lambda self, phases, units, nbytes: None})(),
         "deliverer": OutputDeliverer(),
@@ -146,8 +148,9 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
     baseline = units.build_units(tag, PARAMS, CPU)
     recorder, ctx, staged = _context(tag, monkeypatch)
     state = trainer.DeepBotState()
-    trainer.ensure_newest_release(by_kind, tag, "t", ctx["sink"], state)
+    trainer.ensure_newest_release(by_kind, tag, "t", False, state)
     assert release.newest(tag) == 0
+    assert not (tag.root / release.OUTBOX).exists()  # a local trainer delivers nothing
     for unit in by_kind.values():
         unit.start(recorder, 0)
 
@@ -184,5 +187,47 @@ def test_a_restored_trainer_republishes_the_release_its_checkpoint_holds(tag, mo
     by_kind = units.build_units(tag, PARAMS, CPU)
     _, ctx, _ = _context(tag, monkeypatch)
     state = trainer.DeepBotState(generation_index=3, rows_trained=3)
-    trainer.ensure_newest_release(by_kind, tag, "t", ctx["sink"], state)
+    trainer.ensure_newest_release(by_kind, tag, "t", False, state)
     assert release.newest(tag) == 3
+
+
+def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tmp_path):
+    """What a trainer on an ssh machine links for the controller, the pull
+    moves and the controller installs: release 2 and its kept checkpoint."""
+    tag = TagPaths("t", "deep_bot", tmp_path / "trainer")
+    for kind in KINDS:
+        release.export_path(tag, 2, kind).parent.mkdir(parents=True, exist_ok=True)
+        release.export_path(tag, 2, kind).write_text(kind)
+    release.write_manifest(tag, 2, "t", {})
+    tag.rolling_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    tag.rolling_checkpoint.write_text("state 2")
+
+    trainer._deliver_release(True, tag, 2)
+    kept_checkpoints.keep(tag, 2, remote=True)
+    assert release.newest(tag) == 2  # the trainer keeps its own copy
+
+    home = TagPaths("t", "deep_bot", tmp_path / "controller")
+    pulled = home.root / release.OUTBOX
+    shutil.move(tag.root / release.OUTBOX, pulled)
+    shutil.move(tag.root / kept_checkpoints.OUTBOX, home.root / kept_checkpoints.OUTBOX)
+    release.install(pulled / "release_000002", home)
+    kept_checkpoints.install(home.root / kept_checkpoints.OUTBOX / "gen_000002", home)
+    assert [(home.root / rel).is_file() for rel in release.newest_files(home, None)] == [True] * 4
+    assert release.export_path(home, 2, LEAF).read_text() == LEAF
+    assert home.checkpoint_path(2).read_text() == "state 2"
+    assert not any(pulled.iterdir())
+
+
+def test_the_controller_keeps_the_release_it_has_and_drops_a_torn_one(tmp_path):
+    home = TagPaths("t", "deep_bot", tmp_path)
+    release.release_dir(home, 1).mkdir(parents=True)
+    (release.release_dir(home, 1) / release.MANIFEST).write_text("first")
+    for number, files in ((1, [release.MANIFEST]), (2, ["leaf.onnx"])):
+        delivered = home.root / release.OUTBOX / f"release_{number:06d}"
+        delivered.mkdir(parents=True)
+        for name in files:
+            (delivered / name).write_text("again")
+        release.install(delivered, home)
+        assert not delivered.exists()
+    assert (release.release_dir(home, 1) / release.MANIFEST).read_text() == "first"
+    assert release.newest(home) == 1 and not release.release_dir(home, 2).exists()
