@@ -1,7 +1,9 @@
 #include "data/binary_log.h"
 
+#include "data/turn_pool.h"
 #include "game/bag.h"
 #include "game/game_log.h"
+#include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
 
@@ -11,6 +13,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <random>
 #include <utility>
 #include <vector>
@@ -140,8 +143,9 @@ int pick_any_turn(const GameLog& log, std::mt19937_64& rng) {
 // BinaryLogWriter
 // ---------------------------------------------------------------------------
 
-BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags)
-    : dir_(dir), games_per_file_(games_per_file), flags_(flags) {
+BinaryLogWriter::BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags,
+                                 int pools_per_game)
+    : dir_(dir), games_per_file_(games_per_file), flags_(flags), pools_per_game_(pools_per_game) {
   if (games_per_file_ < 1) games_per_file_ = 1;
 }
 
@@ -185,6 +189,8 @@ struct PreparedBatch {
   std::vector<int> sampled_turn;
   std::vector<EligibleSpan> eligible;
   std::vector<GameLog> games;
+  // Each written game's recorded searches, parallel to `games`.
+  std::vector<const std::vector<SearchedTurn>*> pools;
 };
 
 // Drops any game whose eligible region is empty: one that ended during its
@@ -212,6 +218,7 @@ PreparedBatch prepare_batch(const std::vector<GameLogStorage>& games) {
     p.turns.push_back(std::move(turns));
     p.eligible.push_back(span);
     p.games.push_back(g);
+    p.pools.push_back(&gs.pools);
   }
   return p;
 }
@@ -272,6 +279,69 @@ void write_slog_file(const std::filesystem::path& path, const PreparedBatch& p,
   }
 }
 
+// Decorrelates a game's pool sample from its other seeded draws.
+constexpr uint64_t kPoolSampleSalt = 0x9E6C63D0876A9A47ULL;
+
+// At most `keep` of `searched`, drawn uniformly by the game's seed, in turn
+// order.
+std::vector<SearchedTurn> pool_sample(const std::vector<SearchedTurn>& searched, size_t keep,
+                                      uint64_t game_seed) {
+  if (searched.size() <= keep) return searched;
+  std::mt19937_64 rng(game_seed ^ kPoolSampleSalt);
+  std::vector<SearchedTurn> kept;
+  std::sample(searched.begin(), searched.end(), std::back_inserter(kept), keep, rng);
+  return kept;
+}
+
+// The name of the first field of the sidecars' headers in which the records
+// `a` and `b` differ; nullptr if they agree.
+const char* header_difference(const TurnPool& a, const TurnPool& b) {
+  if (const char* field = a.sources.first_difference(b.sources)) return field;
+  if (a.survivor_rollouts != b.survivor_rollouts) return "survivors' rollout budget";
+  if (a.solved_racks != b.solved_racks) return "solved survivors' racks";
+  return nullptr;
+}
+
+// The searches the batch keeps, `per_game` of each game's, each addressed by
+// its game's index in the file and its turn. Throws util::Exception if two
+// came from different sources, which one sidecar's header cannot say.
+std::vector<TurnPool*> addressed_pools(const PreparedBatch& p, size_t per_game) {
+  std::vector<TurnPool*> out;
+  for (size_t g = 0; g < p.pools.size(); ++g) {
+    for (const SearchedTurn& searched : pool_sample(*p.pools[g], per_game, p.games[g].seed)) {
+      TurnPool& t = *searched.pool;
+      t.pool.at = t.survivors.at = {uint32_t(g), uint32_t(searched.turn)};
+      if (const char* differs = out.empty() ? nullptr : header_difference(*out[0], t)) {
+        throw util::Exception(
+          "BinaryLogWriter: the games of one file recorded pools that differ in their {}; both "
+          "players must search on the same models and budgets",
+          differs);
+      }
+      out.push_back(&t);
+    }
+  }
+  return out;
+}
+
+// The .pool and .survivors sidecars of the .slog at `path`, from `per_game`
+// of each game's recorded searches.
+void write_pool_sidecars(std::filesystem::path path, const PreparedBatch& p, size_t per_game) {
+  const std::vector<TurnPool*> pools = addressed_pools(p, per_game);
+  if (pools.empty()) {
+    std::cerr << "BinaryLogWriter: no game of " << path.filename().string()
+              << " recorded a search; it gets no pool sidecars\n";
+    return;
+  }
+  PoolWriter pool_writer(path.replace_extension(kPoolExtension).string(), pools[0]->sources);
+  SurvivorWriter survivor_writer(path.replace_extension(kSurvivorExtension).string(),
+                                 SurvivorReply::HASTY, pools[0]->survivor_rollouts,
+                                 pools[0]->solved_racks);
+  for (const TurnPool* t : pools) {
+    pool_writer.add_position(t->pool);
+    survivor_writer.add_position(t->survivors);
+  }
+}
+
 }  // namespace
 
 void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
@@ -282,6 +352,7 @@ void BinaryLogWriter::write_batch(std::vector<GameLogStorage>&& games) {
   // A strictly increasing timestamp, so no two writes in this process collide.
   const std::filesystem::path path =
     std::filesystem::path(dir_) / std::format("{}.slog", util::get_unique_id());
+  if (pools_per_game_ > 0) write_pool_sidecars(path, prepared, size_t(pools_per_game_));
   write_slog_file(path, prepared, meta, flags_);
 }
 

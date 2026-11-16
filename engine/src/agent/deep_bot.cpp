@@ -12,6 +12,7 @@
 #include "sim/pool_labeler.h"
 #include "sim/sim_runner.h"
 #include "training/policy_set_inputs.h"
+#include "util/assert.h"
 #include "util/exception.h"
 #include "util/math.h"
 #include "util/misc.h"
@@ -169,6 +170,44 @@ std::vector<Move> moves_at(const std::vector<Move>& moves, const std::vector<siz
   return out;
 }
 
+// What the second stage gave the screen's survivors `moves`, candidates of
+// `pool`: its solved value for each move that has one (`solved`, parallel to
+// `moves`, kPruned for the rest), and `sims`' label and rollout values for
+// each move of `simmed` (ascending indices into `moves`, parallel to the
+// sims). A move with neither, one that empties the bag and that the first
+// pass dropped, is no survivor.
+TurnSurvivors survivors_of(const PoolPosition& pool, const std::vector<Move>& moves,
+                           const std::vector<double>& solved, const std::vector<size_t>& simmed,
+                           const std::vector<PoolLabel>& labels, const std::vector<float>& values) {
+  TurnSurvivors out;
+  size_t next = 0;  // into simmed
+  const float* v = values.data();
+  for (size_t c = 0; c < moves.size(); ++c) {
+    const bool has_sims = next < simmed.size() && simmed[next] == c;
+    if (!has_sims && std::isnan(solved[c])) continue;
+    const auto at = std::find(pool.moves.begin(), pool.moves.end(), moves[c]);
+    RELEASE_ASSERT(at != pool.moves.end(), "a survivor is a candidate of the turn's pool");
+    Survivor s{.candidate = uint32_t(at - pool.moves.begin()),
+               .source = SurvivorSource::SOLVED,
+               .label = {.win_prob = solved[c]}};
+    if (has_sims) {
+      s.source = SurvivorSource::SIMS;
+      s.label = labels[next++];
+      out.values.insert(out.values.end(), v, v + s.label.rollouts);
+      v += s.label.rollouts;
+    }
+    out.survivors.push_back(s);
+  }
+  return out;
+}
+
+// 0, 1, ..., n - 1.
+std::vector<size_t> all_indices(size_t n) {
+  std::vector<size_t> out(n);
+  std::iota(out.begin(), out.end(), size_t(0));
+  return out;
+}
+
 // The index of the label most likely the best.
 size_t likeliest(const std::vector<PoolLabel>& labels) {
   const auto best = std::max_element(
@@ -235,6 +274,7 @@ void validate(const DeepBot::Params& p) {
 DeepBot::DeepBot(const Params& params, Backend backend)
     : Agent(params.thread_id, params.name), params_(params), backend_(std::move(backend)) {
   validate(params_);
+  backend_.sources.rollouts = params_.screen_rollouts;
   if (!backend_.policy) return;
   if (params_.dict == nullptr) throw util::Exception("deepbot: a policy model needs a dictionary");
   scorer_ = std::make_unique<PolicyScorer>(backend_.policy->policy, backend_.policy->cross_checks,
@@ -315,32 +355,68 @@ MoveDecision DeepBot::make_move(const MoveRequest& req) {
   std::vector<Move> pool = candidate_pool(req);
   if (pool.size() == 1) return pool.front();
   const std::shared_ptr<const belief::LeaveSampler> belief = root_belief(q);
-  const std::vector<Move> moves = candidates(req, std::move(pool), belief.get());
-  if (params_.reply != "hasty") return subtree_move(req, moves, belief.get());
-  return hasty_move(req, moves, belief.get());
+  const std::shared_ptr<TurnPool> record = records(req) ? std::make_shared<TurnPool>() : nullptr;
+  const std::vector<Move> moves = record ? recorded_candidates(req, belief.get(), record.get())
+                                         : candidates(req, std::move(pool), belief.get());
+  MoveDecision decision(params_.reply != "hasty"
+                          ? subtree_move(req, moves, belief.get())
+                          : hasty_move(req, moves, belief.get(), record.get()));
+  decision.pool = record;
+  return decision;
+}
+
+PoolPosition DeepBot::screened_pool(const MoveRequest& req,
+                                    const belief::LeaveSampler* belief) const {
+  const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
+  policy_set::PoolCandidates pool = policy_set::pool_candidates(ranked, params_.blank_prune_points);
+  PoolJob job = position_job(sim_position_from(req), pool.moves, turn_seed() ^ kScreenSeed, belief,
+                             req.dict, params_.screen_rollouts);
+  job.record.num_legal_moves = uint32_t(ranked.size());
+  job.record.equity_ranks = std::move(pool.equity_ranks);
+  job.record.opp_rack = policy_set::opp_rack_summary(req.board, req.my_rack, belief);
+  PoolLabeler labeler(*backend_.values, {.rollouts = params_.screen_rollouts, .race = true});
+  return label(labeler, std::move(job));
+}
+
+std::vector<Move> DeepBot::recorded_candidates(const MoveRequest& req,
+                                               const belief::LeaveSampler* belief,
+                                               TurnPool* record) const {
+  record->sources = backend_.sources;
+  record->survivor_rollouts = params_.rollouts;
+  record->solved_racks = params_.bob_racks;
+  record->pool = screened_pool(req, belief);
+  std::vector<Move> moves;
+  std::vector<PoolLabel> labels;
+  for (size_t c = 0; c < record->pool.moves.size(); ++c) {
+    if (is_pass(record->pool.moves[c])) continue;
+    moves.push_back(record->pool.moves[c]);
+    labels.push_back(record->pool.labels[c]);
+  }
+  return likeliest_best(moves, labels, candidate_count(req));
 }
 
 Move DeepBot::hasty_move(const MoveRequest& req, const std::vector<Move>& moves,
-                         const belief::LeaveSampler* belief) const {
+                         const belief::LeaveSampler* belief, TurnPool* record) const {
   const std::vector<size_t> emptying =
     solves_endgame_replies() ? split_by_emptying(moves, req.bag_size, true) : std::vector<size_t>{};
-  if (emptying.empty()) {
-    return moves[likeliest(
-      hasty_labels(req, moves, belief, params_.rollouts, params_.race, turn_seed()).labels)];
-  }
   // The candidates that empty the bag stay out of the race: their hasty
   // values read too well, and would stop a rival the endgames then favour.
   std::vector<double> values =
-    endgame_values(req, moves, first_pass_best(req, moves, emptying, belief), belief);
-  const std::vector<size_t> rest = split_by_emptying(moves, req.bag_size, false);
+    emptying.empty()
+      ? std::vector<double>(moves.size(), kPruned)
+      : endgame_values(req, moves, first_pass_best(req, moves, emptying, belief), belief);
+  const std::vector<size_t> rest =
+    emptying.empty() ? all_indices(moves.size()) : split_by_emptying(moves, req.bag_size, false);
+  const HastySims sims = rest.empty() ? HastySims{}
+                                      : hasty_labels(req, moves_at(moves, rest), belief,
+                                                     params_.rollouts, params_.race, turn_seed());
+  if (record)
+    record->survivors = survivors_of(record->pool, moves, values, rest, sims.labels, sims.values);
   if (!rest.empty()) {
-    const std::vector<PoolLabel> labels =
-      hasty_labels(req, moves_at(moves, rest), belief, params_.rollouts, params_.race, turn_seed())
-        .labels;
     // The race's other candidates stopped early, on fewer rollouts than a
     // value beside the solved ones' needs.
-    const size_t best = likeliest(labels);
-    values[rest[best]] = labels[best].win_prob;
+    const size_t best = likeliest(sims.labels);
+    values[rest[best]] = sims.labels[best].win_prob;
   }
   return moves[best_candidate(values)];
 }
@@ -372,9 +448,10 @@ DeepBot::HastySims DeepBot::hasty_labels(const MoveRequest& req, const std::vect
                                          bool race, uint64_t seed) const {
   PoolJob job = position_job(sim_position_from(req), moves, seed, belief, req.dict, rollouts);
   PoolLabeler labeler(*backend_.values, {.rollouts = rollouts, .race = race});
-  HastySims out{.labels = label(labeler, std::move(job)).labels, .sims = 0};
-  out.sims = labeler.stats().tasks;
-  return out;
+  PoolPosition labeled = label(labeler, std::move(job));
+  return {.labels = std::move(labeled.labels),
+          .values = std::move(labeled.rollout_values),
+          .sims = labeler.stats().tasks};
 }
 
 Move DeepBot::subtree_move(const MoveRequest& req, const std::vector<Move>& moves,

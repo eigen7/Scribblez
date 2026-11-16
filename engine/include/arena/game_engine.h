@@ -34,6 +34,9 @@ class GameEngine {
     // Play face-up-leaves Scrabble, in which each player's retained tiles are
     // public until they move again (docs/roadmap.md).
     bool face_up_leaves = false;
+    // Have the agents record each turn's search for the game's log
+    // (Game::set_record_pools).
+    bool record_pools = false;
   };
 
   // Builds `params.threads` agent pairs, downgrading to 1 (with a warning) if

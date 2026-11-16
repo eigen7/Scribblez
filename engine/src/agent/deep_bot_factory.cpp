@@ -42,12 +42,14 @@ DeepBot::Backend make_backend(const DeepBot::Params& p) {
   rollouts.validate();
   DeepBot::Backend b;
   b.values = rollouts.shared(load_dictionary_or_throw());
+  b.sources.leaf_model = rollouts.leaf_identity();
   if (!p.policy_model.empty()) b.policy = PolicyBot::make_backend(dump_policy_params(p));
   if (p.leave_inference.empty()) return b;
   belief::AgentLeaveModel leave =
     belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
   b.table = std::move(leave.table);
   b.predict = std::move(leave.predict);
+  b.sources.leave_model = pool_model(leave.identity);
   return b;
 }
 

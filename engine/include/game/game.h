@@ -42,6 +42,10 @@ class Game {
   // stay hidden. Each seat sees the other's leave in MoveRequest::opp_rack.
   void set_face_up_leaves(bool on);
 
+  // Ask the agents to record each turn's search (MoveRequest::record_pool)
+  // and keep what they give in the log (GameLogStorage::pools).
+  void set_record_pools(bool on);
+
   // Stop after `plies` moves: the horizon of a value-truncated rollout
   // (docs/roadmap.md), whose final position is scored by the position
   // evaluation model. A game that ends naturally by then is not truncated, and
@@ -97,6 +101,7 @@ class Game {
   GameLogStorage log_;
   std::array<Rack, 2> leaves_{};
   bool face_up_leaves_ = false;
+  bool record_pools_ = false;
   int max_plies_ = 0;  // 0 = no cap
   int random_opening_plies_ = 0;
   std::mt19937_64 opening_rng_;

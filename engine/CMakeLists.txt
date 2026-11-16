@@ -115,6 +115,7 @@ add_library(scribblez_core STATIC
   src/data/sidecar_io.cpp
   src/data/probe_log.cpp
   src/data/pool_log.cpp
+  src/data/survivor_log.cpp
   src/data/group_log.cpp
   src/data/probe_replay.cpp
   src/data/slog_sampling.cpp

@@ -75,7 +75,8 @@ trainer works on the last.
 |---|---|---|
 | `.slog` | `play_game` | all three trainers |
 | `.forgone` | `forgone_play_tool`, on the CPU | the leave inference rows; the pools' beliefs |
-| `.pool` | self-play itself (below); the pool tool until that is built | the policy, value and continuation heads |
+| `.pool` | self-play itself (below); the pool tool until the workload switches over | the policy, value and continuation heads |
+| `.survivors` | self-play itself (below) | the policy's target, once the trainer reads it |
 | `.group` | `policy_set_pool_tool`, off until the store (step 12) | the store input |
 
 The chunk's `.pool` header already names the leaf network and leave
@@ -135,10 +136,36 @@ solved value.
   move the screen dropped, which needs no comparison across the two rollout
   counts. The value head fits the sims' win probability for a survivor and
   the screen's for the rest.
-- **To settle when built:** the target at a turn where a solved value,
-  which has no `q`, is compared with the race's winner; and whether the
-  survivors' rollout values are kept, which the value head's variance
-  target reads, or their labels alone.
+- **To settle when the trainer reads it:** the target at a turn where a
+  solved value, which has no `q`, is compared with the race's winner.
+
+**The engine half is built** (2026-11-16): `play_game
+--pool-positions-per-game N` has the agents record each searched turn and
+writes two sidecars beside each `.slog`.
+
+- **The `.pool`** is the screen's, in the pool tool's format unchanged, so
+  the `policy_set` corpus and its readers are untouched. A recorded screen
+  sims the pool whole as the tool does: the pass too, which stays out of the
+  candidates, and also at a turn with no more moves than candidates.
+- **The `.survivors`** (data/survivor_log.h) holds, position for position,
+  each survivor's index into the pool, its label from the turn's sims with
+  their rollout values, or the solver's value alone. The values are kept:
+  they are what any later target or paired comparison is computed from.
+- **`N` turns of each game** are kept, drawn uniformly from the turns
+  searched.
+
+Measured on the dev laptop, 20 games of the generating agent on release 0's
+exports, every searched turn kept:
+
+| | |
+|---|---|
+| Games a second | 0.25 (79 s; a batch this small pays its last games' tail) |
+| Pools | 445, 22 a game, 5.6 a second |
+| Candidates a pool | 609 on average |
+| Survivors a pool | 20 on average; 190 solved values over 30 turns |
+| Rollout values kept for a pool's survivors | 6,300 of a budget of 20,300 |
+| Bytes a game | 1.9 MB of pools, 0.57 MB of survivors |
+| Turns where the sims' likeliest best is not the screen's | 39% |
 
 ## The trainer
 
@@ -489,8 +516,10 @@ Each is a pull request.
    and its chunk filled generation 0 here. Not yet seen live: a second
    release reaching a running generator, and a trainer on an ssh machine.
 5. **Self-play writes the pools.** The engine change, with both stages of
-   the turn in the record; the trainer's target from them; the per-game
-   sample; and the belief metric by the played move's rank. *Measure:* pools
+   the turn in the record, and the per-game sample: built 2026-11-16, with
+   its numbers [above](#self-play-writes-the-pools). Still to build: the
+   workload taking its pools from self-play, the trainer's target from the
+   two stages, and the belief metric by the played move's rank. *Measure:* pools
    a second and bytes a game against the table above; the policy's curve
    against pools trained, under the screen's labels and under the turn's.
 6. **The measure role:** the matches against HastyBot and `A_0` with their

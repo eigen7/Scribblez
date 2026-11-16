@@ -223,6 +223,79 @@ TEST(DeepBot, TheScreenAdmitsAMoveStaticEquityRanksLow) {
   }
 }
 
+// Asked to record, a searched turn leaves the screen's labels of the whole
+// pool, the pass included, and what the sims of the screen's survivors gave
+// each; the pick is the survivor those sims make likeliest the best.
+TEST(DeepBot, ARecordedTurnKeepsTheScreensPoolAndItsSurvivorsSims) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEGLNOV");
+  const Rack hidden;
+  DeepBot::Params p = small_params(6, "hasty");
+  p.screen_rollouts = 4;
+  DeepBot bot(p, cpu_backend());
+  bot.begin_game({});
+  EXPECT_EQ(bot.make_move({board, nwl23(), rack, hidden, 0, 0, 86}).pool, nullptr);
+
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86, /*record_pool=*/true};
+  const MoveDecision decision = bot.make_move(req);
+  ASSERT_NE(decision.pool, nullptr);
+  const PoolPosition& pool = decision.pool->pool;
+  const size_t size = pool.moves.size();
+  EXPECT_EQ(pool.num_legal_moves, equity_top_k(req, std::numeric_limits<int>::max()).size());
+  EXPECT_EQ(std::count_if(pool.moves.begin(), pool.moves.end(),
+                          [](const Move& m) { return m.type() == MoveType::PASS; }),
+            1);
+  ASSERT_EQ(pool.labels.size(), size);
+  ASSERT_EQ(pool.equity_ranks.size(), size);
+  double q = 0;
+  size_t values = 0;
+  for (const PoolLabel& l : pool.labels) {
+    q += l.q;
+    values += size_t(l.rollouts);
+  }
+  EXPECT_NEAR(q, 1.0, 1e-9);
+  EXPECT_EQ(pool.rollout_values.size(), values);
+  EXPECT_EQ(decision.pool->sources.rollouts, 4);
+
+  const TurnSurvivors& second = decision.pool->survivors;
+  EXPECT_EQ(decision.pool->survivor_rollouts, p.rollouts);
+  ASSERT_EQ(second.survivors.size(), size_t(p.candidates));
+  size_t best = 0, sims = 0;
+  for (size_t i = 0; i < second.survivors.size(); ++i) {
+    const Survivor& s = second.survivors[i];
+    ASSERT_LT(s.candidate, size);
+    EXPECT_NE(pool.moves[s.candidate].type(), MoveType::PASS);
+    EXPECT_EQ(s.source, SurvivorSource::SIMS);
+    sims += size_t(s.label.rollouts);
+    if (s.label.q > second.survivors[best].label.q) best = i;
+  }
+  EXPECT_EQ(second.values.size(), sims);
+  EXPECT_EQ(decision.move, pool.moves[second.survivors[best].candidate]);
+}
+
+// A game told to record keeps each searched turn's record with its turn.
+TEST(DeepBot, AGameKeepsItsAgentsRecordedTurns) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  DeepBot::Params p = small_params(3, "hasty");
+  p.screen_rollouts = 1;
+  DeepBot deepbot(p, cpu_backend());
+  HastyBot hasty({.thread_id = 0, .name = "HastyBot"});
+  Game game(deepbot, hasty, nwl23(), /*seed=*/1);
+  game.set_record_pools(true);
+  game.set_max_plies(3);
+  game.play();
+  const GameLogStorage log = game.extract_log();
+  // DeepBot's two turns of the three; HastyBot records nothing.
+  ASSERT_EQ(log.pools.size(), 2u);
+  EXPECT_EQ(log.pools[0].turn, 0);
+  EXPECT_EQ(log.pools[1].turn, 2);
+  for (const SearchedTurn& t : log.pools) {
+    const std::vector<Move>& moves = t.pool->pool.moves;
+    EXPECT_NE(std::find(moves.begin(), moves.end(), log.turns[size_t(t.turn)].move), moves.end());
+  }
+}
+
 // Replayed to one of its turns of a recorded game, DeepBot holds what it held
 // there in play: it asks the model the same question and picks the same move.
 TEST(DeepBot, ReplayedToARecordedTurnItAsksAndPicksAsItDidInPlay) {
@@ -524,6 +597,30 @@ TEST(DeepBot, UnderTheHastyReplyTheSolverValuesACandidateThatEmptiesTheBag) {
     bot.begin_game({});
     bot.make_move(req);
     EXPECT_EQ(values->after_emptying, emptying * p.bob_racks);
+
+    // Recorded, the turn's survivors are the one solved candidate, by its
+    // value alone, and the simmed rest; the first pass's others are none.
+    p.screen_rollouts = 2;
+    DeepBot recording(p, cpu_backend());
+    recording.begin_game({});
+    const MoveRequest recorded{at.board,         nwl23(),
+                               at.racks[mover],  hidden,
+                               at.scores[mover], at.scores[1 - mover],
+                               at.bag,           /*record_pool=*/true};
+    const MoveDecision decision = recording.make_move(recorded);
+    ASSERT_NE(decision.pool, nullptr);
+    int solved = 0;
+    for (const Survivor& s : decision.pool->survivors.survivors) {
+      const Move& m = decision.pool->pool.moves[s.candidate];
+      const bool empties = m.type() == MoveType::PLAY && m.num_glyphs() >= at.bag;
+      EXPECT_EQ(s.source == SurvivorSource::SOLVED, empties);
+      if (!empties) continue;
+      ++solved;
+      EXPECT_EQ(s.label.rollouts, 0);
+      EXPECT_GE(s.label.win_prob, 0.0);
+      EXPECT_LE(s.label.win_prob, 1.0);
+    }
+    EXPECT_EQ(solved, 1);
     return;
   }
   FAIL() << "no turn of the game has two candidates that empty the bag";

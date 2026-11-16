@@ -63,7 +63,6 @@ namespace fs = std::filesystem;
 namespace json = boost::json;
 using namespace scribblez;
 
-constexpr const char* kPoolExt = ".pool";
 constexpr const char* kOutExt = ".blindspots.json";
 constexpr int kOutVersion = 1;
 // Added to every confirming rollout seed, so the confirmation never reuses the
@@ -338,7 +337,7 @@ json::array judge_all(const binlog::PendingSlog& slog, const std::vector<SimmedP
 // .blindspots.json and kept positions' .gcg files.
 void confirm_file(const binlog::PendingSlog& slog, const Dictionary& dict, const Options& opt,
                   RolloutValues& values, LeaveModel* leave_model) {
-  const fs::path pool_path = slog.sidecar(kPoolExt);
+  const fs::path pool_path = slog.sidecar(kPoolExtension);
   const PoolReader pools(pool_path.string());
   check_pool_sources(pools, pool_path, opt, leave_model);
   const std::map<binlog::GamePositionIndex, Screened> candidates = screen_file(pools, opt);
@@ -363,7 +362,7 @@ void confirm_file(const binlog::PendingSlog& slog, const Dictionary& dict, const
 
 void check_pools_exist(const std::vector<fs::path>& slogs) {
   for (const fs::path& slog : slogs) {
-    if (!fs::exists(fs::path(slog).replace_extension(kPoolExt)))
+    if (!fs::exists(fs::path(slog).replace_extension(kPoolExtension)))
       throw util::CleanException("{} has no .pool; run policy_set_pool_tool over it first",
                                  slog.string());
   }

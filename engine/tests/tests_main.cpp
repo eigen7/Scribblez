@@ -15,6 +15,8 @@
 #include "data/pool_log.h"
 #include "data/sim_observation_log.h"
 #include "data/slog_sampling.h"
+#include "data/survivor_log.h"
+#include "data/turn_pool.h"
 #include "encoding/board_planes.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
@@ -5397,6 +5399,153 @@ TEST(PoolLog, RoundTripAndVersionGate) {
   std::memcpy(bytes.data() + offsetof(PoolFileHeader, version), &stale, sizeof(stale));
   std::ofstream(path, std::ios::binary) << bytes;
   EXPECT_THROW(PoolReader{path}, util::Exception);
+  fs::remove_all(dir);
+}
+
+// A written .survivors file reads back exactly, and a reader refuses another
+// format version or a truncated file.
+TEST(SurvivorLog, RoundTripAndVersionGate) {
+  namespace fs = std::filesystem;
+  const fs::path dir = scribblez::testing::make_temp_dir("scribblez_survivor_log");
+  const std::string path = (dir / "t.survivors").string();
+  TurnSurvivors p;
+  p.at = {2, 9};
+  p.survivors = {{.candidate = 4,
+                  .source = SurvivorSource::SIMS,
+                  .label = {.win_prob = 0.5, .paired_se = 0.0, .q = 0.75, .rollouts = 3}},
+                 {.candidate = 1, .source = SurvivorSource::SOLVED, .label = {.win_prob = 0.625}},
+                 {.candidate = 0,
+                  .source = SurvivorSource::SIMS,
+                  .label = {.win_prob = 0.25, .paired_se = 0.125, .q = 0.25, .rollouts = 1}}};
+  p.values = {1.0f, 0.5f, 0.0f, 0.25f};
+  {
+    SurvivorWriter w(path, SurvivorReply::HASTY, 1000, 100);
+    w.add_position(p);
+    w.add_position({.at = {2, 11}, .survivors = {}, .values = {}});  // no second stage
+    w.close();
+  }
+  const SurvivorReader r(path);
+  EXPECT_EQ(r.header().version, kSurvivorFormatVersion);
+  EXPECT_EQ(r.header().rollouts, 1000u);
+  EXPECT_EQ(r.header().solved_racks, 100u);
+  ASSERT_EQ(r.num_positions(), 2);
+  const SurvivorReader::Position pos = r.position(0);
+  EXPECT_EQ(pos.header->game_index, 2u);
+  EXPECT_EQ(pos.header->turn_index, 9u);
+  ASSERT_EQ(pos.header->num_survivors, 3u);
+  for (size_t i = 0; i < 3; ++i) {
+    EXPECT_EQ(pos.survivors[i].candidate, p.survivors[i].candidate);
+    EXPECT_EQ(pos.survivors[i].source, uint8_t(p.survivors[i].source));
+    EXPECT_EQ(pos.survivors[i].rollouts, p.survivors[i].label.rollouts);
+    EXPECT_FLOAT_EQ(pos.survivors[i].win_prob, float(p.survivors[i].label.win_prob));
+    EXPECT_FLOAT_EQ(pos.survivors[i].q, float(p.survivors[i].label.q));
+  }
+  EXPECT_EQ(std::vector<float>(pos.values, pos.values + 4), p.values);
+  EXPECT_EQ(r.position(1).header->turn_index, 11u);
+  EXPECT_EQ(r.position(1).header->num_survivors, 0u);
+
+  std::string bytes = scribblez::util::read_file(path);
+  std::ofstream(path, std::ios::binary) << bytes.substr(0, bytes.size() - 1);
+  EXPECT_THROW(SurvivorReader{path}, util::Exception);
+  const uint16_t stale = kSurvivorFormatVersion + 1;
+  std::memcpy(bytes.data() + offsetof(SurvivorFileHeader, version), &stale, sizeof(stale));
+  std::ofstream(path, std::ios::binary) << bytes;
+  EXPECT_THROW(SurvivorReader{path}, util::Exception);
+  fs::remove_all(dir);
+}
+
+namespace {
+
+// A recorded search of `turn` with a one-move pool and one simmed survivor,
+// its labels from `rollouts`-rollout screens.
+SearchedTurn searched_turn(int turn, int rollouts) {
+  auto t = std::make_shared<TurnPool>();
+  t->sources.rollouts = rollouts;
+  t->survivor_rollouts = 8;
+  t->solved_racks = 3;
+  t->pool.moves = {Move::pass()};
+  t->pool.equity_ranks = {-1};
+  t->pool.labels = {{.win_prob = 0.5, .paired_se = 0.0, .q = 1.0, .rollouts = 1}};
+  t->pool.rollout_values = {0.5f};
+  t->survivors.survivors = {
+    {.candidate = 0,
+     .source = SurvivorSource::SIMS,
+     .label = {.win_prob = 0.5, .paired_se = 0.0, .q = 1.0, .rollouts = 2}}};
+  t->survivors.values = {1.0f, 0.0f};
+  return {turn, std::move(t)};
+}
+
+// The one file with `extension` that `dir` holds.
+std::filesystem::path only_file(const std::filesystem::path& dir, const std::string& extension) {
+  std::filesystem::path found;
+  for (const auto& ent : std::filesystem::directory_iterator(dir)) {
+    if (ent.path().extension() != extension) continue;
+    EXPECT_TRUE(found.empty());
+    found = ent.path();
+  }
+  return found;
+}
+
+}  // namespace
+
+// A file's games' recorded searches become its .pool and .survivors, each
+// position addressed by its game's index in the file and its turn, a sample
+// of each game's when it recorded more than the writer keeps.
+TEST(BinaryLog, RecordedSearchesBecomeTheFilesPoolSidecars) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+  const fs::path dir = scribblez::testing::make_temp_dir("scribblez_test_pool_sidecars");
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/2, /*flags=*/0,
+                                              /*pools_per_game=*/2);
+    GameLogStorage first = play_test_game(dict, /*seed=*/300);
+    first.pools = {searched_turn(1, 100), searched_turn(3, 100), searched_turn(4, 100),
+                   searched_turn(6, 100)};
+    GameLogStorage second = play_test_game(dict, /*seed=*/301);
+    second.pools = {searched_turn(2, 100)};
+    writer.append(std::move(first));
+    writer.append(std::move(second));
+  }
+  const fs::path slog = only_file(dir, ".slog");
+  const PoolReader pools(fs::path(slog).replace_extension(kPoolExtension).string());
+  const SurvivorReader survivors(fs::path(slog).replace_extension(kSurvivorExtension).string());
+  EXPECT_EQ(pools.header().rollouts, 100u);
+  EXPECT_EQ(survivors.header().rollouts, 8u);
+  EXPECT_EQ(survivors.header().solved_racks, 3u);
+  ASSERT_EQ(pools.num_positions(), 3);  // two of the first game's four, and the second's one
+  ASSERT_EQ(survivors.num_positions(), 3);
+  std::vector<uint32_t> first_turns;
+  for (int i = 0; i < 3; ++i) {
+    const PoolPositionHeader& h = *pools.position(i).header;
+    EXPECT_EQ(h.game_index, i < 2 ? 0u : 1u);
+    EXPECT_EQ(survivors.position(i).header->game_index, h.game_index);
+    EXPECT_EQ(survivors.position(i).header->turn_index, h.turn_index);
+    if (i < 2) first_turns.push_back(h.turn_index);
+  }
+  EXPECT_LT(first_turns[0], first_turns[1]);  // the sample keeps the turns' order
+  EXPECT_EQ(pools.position(2).header->turn_index, 2u);
+  fs::remove_all(dir);
+}
+
+// One sidecar names one set of sources, so a file whose games' searches came
+// from two is refused; and a file whose games recorded nothing gets no sidecars.
+TEST(BinaryLog, AFilesRecordedSearchesMustShareTheirSources) {
+  namespace fs = std::filesystem;
+  Dictionary dict = medium_dict();
+  const fs::path dir = scribblez::testing::make_temp_dir("scribblez_test_pool_sources");
+  GameLogStorage mixed = play_test_game(dict, /*seed=*/300);
+  mixed.pools = {searched_turn(1, 100), searched_turn(3, 50)};
+  std::vector<GameLogStorage> games;
+  games.push_back(std::move(mixed));
+  {
+    scribblez::binlog::BinaryLogWriter writer(dir.string(), /*games_per_file=*/1, /*flags=*/0,
+                                              /*pools_per_game=*/8);
+    EXPECT_THROW(writer.append(std::move(games[0])), util::Exception);
+    writer.append(play_test_game(dict, /*seed=*/301));
+  }
+  EXPECT_FALSE(only_file(dir, ".slog").empty());
+  EXPECT_TRUE(only_file(dir, kPoolExtension).empty());
+  EXPECT_TRUE(only_file(dir, kSurvivorExtension).empty());
   fs::remove_all(dir);
 }
 
