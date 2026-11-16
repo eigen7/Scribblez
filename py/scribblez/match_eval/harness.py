@@ -88,6 +88,12 @@ def play_round(
     lines = [json.loads(ln) for ln in results_file.read_text().splitlines() if ln.strip()]
     if len(lines) != 2 * num_pairs:
         raise RuntimeError(f"expected {2 * num_pairs} game records, got {len(lines)}")
+    return round_result(lines)
+
+
+def round_result(lines: list[dict]) -> RoundResult:
+    """Player 0's results over the games `lines` record, play_game's
+    --results-file lines of a --paired run."""
     scores = [_game_score_for_player0(line) for line in lines]
     return RoundResult(
         pair_scores=_pair_by_seed(lines),

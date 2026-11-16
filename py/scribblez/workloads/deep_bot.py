@@ -19,7 +19,12 @@ then gave the screen's survivors as the .survivors. The cycle then adds the
 Either role runs on the controller's machine or on one reached over ssh. A
 generator beside the trainer reads the releases from the tag in place; the
 controller pushes the newest to the others, and the seeds to a trainer
-elsewhere (RoleSpec.tag_files). The measure role is not built.
+elsewhere (RoleSpec.tag_files).
+
+The measure role's one slot plays each release, as the generating agent,
+against HastyBot and against release 0 (scribblez/deep_bot/measure.py), on
+the controller's assignment (measure_dispatch.py). Every game is kept under
+the tag.
 """
 
 import functools
@@ -29,12 +34,12 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import LEAF, LEAVE, kept_checkpoints, release, seeds
+from scribblez.deep_bot import LEAF, LEAVE, kept_checkpoints, matches, release, seeds
 from scribblez.generational import lifecycle
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import ParamsError, param
-from scribblez.paths import TagPaths
+from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.policy_set import POOL_SUFFIX, SURVIVORS_SUFFIX
 from scribblez.workloads.base import (
     DeliveredSet,
@@ -105,6 +110,14 @@ class DeepBotParams:
     leave_lr: float = param(0.0, "leave inference learning rate; 0 = its optimizer arm's default")
     leaf_lr: float = param(0.0, "leaf network learning rate; 0 = its optimizer arm's default")
     policy_lr: float = param(0.0, "policy learning rate; 0 = its optimizer arm's default")
+    # The measure role's matches.
+    match_every_generations: int = param(
+        1, "match every Nth release against HastyBot and against release 0; 0 = none"
+    )
+    match_games: int = param(
+        200, "games of each match, mirrored in pairs over the same seeds for every release"
+    )
+    match_seed: int = param(1, "the matches' first game seed (not 0)")
     keep_checkpoint_every: int = param(
         10, "keep every this many releases' checkpoint, as a seed for a later tag; 0 = none"
     )
@@ -116,6 +129,10 @@ class DeepBotParams:
         for name in ("leave_window", "leaf_window", "policy_window"):
             if getattr(self, name) < 1:
                 raise ParamsError(f"{name} must be >= 1, got {getattr(self, name)}")
+        if self.match_games < 2 or self.match_games % 2:
+            raise ParamsError(f"match_games must be even and >= 2, got {self.match_games}")
+        if self.match_seed == 0:
+            raise ParamsError("match_seed must not be 0, which play_game reads as a random seed")
 
     @property
     def window(self) -> int:
@@ -240,13 +257,23 @@ SPEC = WorkloadSpec(
                 background=frozenset({"upload_s"}),  # the trainer's OutputDeliverer thread
             ),
         ),
+        RoleSpec(
+            name="measure",
+            title="Matches (GPU)",
+            runner="scribblez.deep_bot.measure:run",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            dispatch="scribblez.deep_bot.measure_dispatch:tick",
+            singleton=True,
+            gpu=True,
+            stats=StatsSpec(unit="games", phases={"match_s": "match"}),
+        ),
     ),
     scheduler=TICK_FOR_TASK,
     progress="scribblez.workloads.deep_bot:progress",
     complete="scribblez.workloads.deep_bot:complete",
     finalize="scribblez.workloads.deep_bot:finalize",
     pace_role="train",
-    collected_dirs=(STAGING_DIR,),
+    collected_dirs=(STAGING_DIR, matches.MATCH_GAMES_DIR, MATCH_RESULTS_DIR),
     primary_params=(
         "seed_leave_tag",
         "seed_leaf_tag",

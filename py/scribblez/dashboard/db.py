@@ -18,6 +18,7 @@ Tables:
   loss_weights    each loss component's coefficient in the optimized total
   lane_pred       max_move_per_lane's per-checkpoint lane-analysis predictions
   match_eval      per-generation match result vs a fixed opponent
+  release_match   per-release match result vs each of deep_bot's opponents
   match_arm       per-arm match result of a match_arms experiment
   control         live operator controls and their current values
   control_event   when each control change took effect, on the rows clock
@@ -86,6 +87,16 @@ CREATE TABLE IF NOT EXISTS match_eval (
   score REAL,                   -- mean pair score (win rate, draws at 0.5)
   ci_half_width REAL,           -- pointwise CI half-width around score
   elapsed_s REAL
+);
+CREATE TABLE IF NOT EXISTS release_match (
+  release INTEGER,              -- the deep_bot release under test
+  opponent TEXT,                -- its name (deep_bot/matches.py)
+  games INTEGER, wins INTEGER, draws INTEGER, losses INTEGER,
+  pair_counts TEXT,             -- JSON [5]: pentanomial pair-score counts
+  score REAL,                   -- mean pair score (win rate, draws at 0.5)
+  ci_half_width REAL,           -- pointwise CI half-width around score
+  elapsed_s REAL,
+  PRIMARY KEY (release, opponent)
 );
 CREATE TABLE IF NOT EXISTS match_arm (
   arm TEXT PRIMARY KEY,         -- arm name from the task's frozen arms param
@@ -349,6 +360,37 @@ def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):
 def read_all_match_eval(conn: sqlite3.Connection) -> list[dict]:
     """Every match-eval row, oldest generation first, pair_counts decoded."""
     rows = [dict(r) for r in conn.execute("SELECT * FROM match_eval ORDER BY epoch")]
+    for r in rows:
+        r["pair_counts"] = json.loads(r["pair_counts"])
+    return rows
+
+
+def write_release_match(conn: sqlite3.Connection, release: int, opponent: str, record: dict):
+    """Store one release's match against `opponent`. Replaying it replaces its
+    row."""
+    conn.execute(
+        "INSERT OR REPLACE INTO release_match "
+        "(release, opponent, games, wins, draws, losses, pair_counts, score, ci_half_width, "
+        "elapsed_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            release,
+            opponent,
+            int(record["games"]),
+            int(record["wins"]),
+            int(record["draws"]),
+            int(record["losses"]),
+            json.dumps(record["pair_counts"]),
+            float(record["score"]),
+            float(record["ci_half_width"]),
+            float(record["elapsed_s"]),
+        ),
+    )
+    conn.commit()
+
+
+def read_release_matches(conn: sqlite3.Connection) -> list[dict]:
+    """Every release's matches, oldest release first, pair_counts decoded."""
+    rows = [dict(r) for r in conn.execute("SELECT * FROM release_match ORDER BY release, opponent")]
     for r in rows:
         r["pair_counts"] = json.loads(r["pair_counts"])
     return rows

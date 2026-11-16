@@ -38,6 +38,12 @@ def export_path(paths: TagPaths, release: int, kind: str) -> Path:
     return release_dir(paths, release) / f"{kind}.onnx"
 
 
+def export_rel(release: int, kind: str) -> str:
+    """Release `release`'s export of `kind`, relative to the tag root or to
+    wherever else its files (below) are laid out."""
+    return f"releases/release_{release:06d}/{kind}.onnx"
+
+
 def write_manifest(paths: TagPaths, release: int, tag: str, rows: dict[str, int]) -> Path:
     """Complete release `release`: its exports must be in place. `rows` is
     each model's rows-clock at the release."""
@@ -56,8 +62,8 @@ def write_manifest(paths: TagPaths, release: int, tag: str, rows: dict[str, int]
 
 def files(release: int) -> list[str]:
     """Release `release`'s files, tag-relative, the manifest last."""
-    names = [f"{kind}.onnx" for kind in KINDS] + [MANIFEST]
-    return [f"releases/release_{release:06d}/{name}" for name in names]
+    exports = [export_rel(release, kind) for kind in KINDS]
+    return [*exports, f"releases/release_{release:06d}/{MANIFEST}"]
 
 
 def newest_files(paths: TagPaths, params) -> list[str]:
@@ -88,6 +94,10 @@ def install(set_dir: Path, paths: TagPaths):
         dest.parent.mkdir(parents=True, exist_ok=True)
         os.replace(set_dir, dest)
     shutil.rmtree(set_dir, ignore_errors=True)
+
+
+def exists(paths: TagPaths, release: int) -> bool:
+    return (release_dir(paths, release) / MANIFEST).exists()
 
 
 def newest(paths: TagPaths) -> int | None:
