@@ -76,12 +76,14 @@ class ChunkSidecar(NamedTuple):
 
 
 class Cycle(NamedTuple):
-    """What one generator cycle plays: the --player spec of both seats, and
-    write(chunk_dir, threads), which writes the chunk's sidecars (None: the
-    chunk has none)."""
+    """What one generator cycle plays: the --player spec of both seats;
+    write(chunk_dir, threads), which writes the chunk's sidecars that the
+    games do not (None: there are none); and how many turns of each game the
+    games themselves write the pool sidecars of (selfplay.run_games)."""
 
     player_spec: str
     write_sidecars: Callable[[Path, int], None] | None = None
+    pool_positions_per_game: int = 0
 
 
 def _deliver_chunk_dir(
@@ -259,6 +261,7 @@ def generate_cycles(
                 player_spec=plan.player_spec,
                 random_opening_mean=random_opening_mean,
                 face_up_leaves=face_up_leaves,
+                pool_positions_per_game=plan.pool_positions_per_game,
             )
             if rc != 0:
                 _publish(stats, deliverer.drain(), games_per_chunk)

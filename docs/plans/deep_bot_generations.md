@@ -75,8 +75,8 @@ trainer works on the last.
 |---|---|---|
 | `.slog` | `play_game` | all three trainers |
 | `.forgone` | `forgone_play_tool`, on the CPU | the leave inference rows; the pools' beliefs |
-| `.pool` | self-play itself (below); the pool tool until the workload switches over | the policy, value and continuation heads |
-| `.survivors` | self-play itself (below) | the policy's target, once the trainer reads it |
+| `.pool` | self-play itself (below) | the policy, value and continuation heads |
+| `.survivors` | self-play itself (below) | the policy's target and the value head's, at the screen's survivors |
 | `.group` | `policy_set_pool_tool`, off until the store (step 12) | the store input |
 
 The chunk's `.pool` header already names the leaf network and leave
@@ -136,8 +136,27 @@ solved value.
   move the screen dropped, which needs no comparison across the two rollout
   counts. The value head fits the sims' win probability for a survivor and
   the screen's for the rest.
-- **To settle when the trainer reads it:** the target at a turn where a
-  solved value, which has no `q`, is compared with the race's winner.
+- **Where a solved value meets the race** (7% of the turns measured
+  below), the target follows the agent's own comparison: the race's winner
+  beside each solved survivor, by value. Those contenders split the mass by
+  the label's rule on independent estimates, the winner's standard error
+  from its rollouts and a solved value's from its 100 endgames; the race's
+  share then goes to the simmed survivors by their label
+  (`policy_set/survivors.py`).
+- **The value head's variance target and the regret metric** stay on the
+  screen's rollout values, which under the `hasty` reply are the same sims
+  on other racks. Under the `policy` reply they will not be, and both move
+  to the survivors' values then.
+
+On the 20 games measured below, the turn's labels against the screen's:
+
+| | The screen's | The turn's |
+|---|---|---|
+| Mean label entropy (nats) | 1.64 | 0.41 |
+| Mean mass on the likeliest best | 0.60 | 0.84 |
+| Turns whose likeliest best is another move | | 35% |
+| The screen's mass on moves it then dropped | 11% | |
+| Mass on solved survivors, at the 30 turns that have them | | 0.69 |
 
 **The engine half is built** (2026-11-16): `play_game
 --pool-positions-per-game N` has the agents record each searched turn and
@@ -515,13 +534,14 @@ Each is a pull request.
    second laptop received release 0 once it started, played it,
    and its chunk filled generation 0 here. Not yet seen live: a second
    release reaching a running generator, and a trainer on an ssh machine.
-5. **Self-play writes the pools.** The engine change, with both stages of
-   the turn in the record, and the per-game sample: built 2026-11-16, with
-   its numbers [above](#self-play-writes-the-pools). Still to build: the
-   workload taking its pools from self-play, the trainer's target from the
-   two stages, and the belief metric by the played move's rank. *Measure:* pools
-   a second and bytes a game against the table above; the policy's curve
-   against pools trained, under the screen's labels and under the turn's.
+5. **Self-play writes the pools.** Built 2026-11-16, with its numbers
+   [above](#self-play-writes-the-pools): the engine change with both stages
+   of the turn in the record, the per-game sample, the workload taking its
+   pools from self-play, and the policy's target from the two stages. Still
+   to build: the belief metric by the played move's rank. *Measure:* pools
+   a second and bytes a game (above); and the policy's curve against pools
+   trained, under the screen's labels and under the turn's, which is not
+   yet measured: a tag's games hold both.
 6. **The measure role:** the matches against HastyBot and `A_0` with their
    games kept, the match command, the known positions, the blind spots.
    *Measure:* the GPU time a match takes from a running generator.

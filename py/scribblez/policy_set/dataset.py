@@ -21,7 +21,7 @@ import torch
 
 from scribblez.ffi import format_layout, policy_set_positions, task_input_shapes
 from scribblez.move_set_eval import moves as move_enc
-from scribblez.policy_set import pools
+from scribblez.policy_set import pools, survivors
 
 # The opponent-rack input's width (engine policy_set::kOppRackFloats).
 OPP_RACK_FLOATS = format_layout()["constants"]["policy_set"]["opp_rack_floats"]
@@ -36,12 +36,16 @@ class PoolItem:
 
 
 def read_items(directories: list[Path]) -> list[PoolItem]:
-    """Every pool of the .pool files in `directories`, in name order."""
+    """Every pool of the .pool files in `directories`, in name order. A
+    self-played file's pools carry their turns' decisions
+    (survivors.decided_pools): the labels the model then trains on and is
+    scored by."""
     items = []
     for d in directories:
         for path in sorted(d.glob(f"*{pools.SUFFIX}")):
             slog = path.with_suffix(".slog")
-            items += [PoolItem(slog, p) for p in pools.read_pools(path)[1]]
+            pool_list = survivors.decided_pools(path, pools.read_pools(path)[1])
+            items += [PoolItem(slog, p) for p in pool_list]
     return items
 
 

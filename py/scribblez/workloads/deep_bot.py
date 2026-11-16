@@ -10,10 +10,11 @@ generation, and publishes them together as a release
 
 A generator cycle takes the tag's newest release and plays a chunk of
 hidden-leaves self-play, `deepbot-endgame` under the `hasty` reply in both
-seats on the release's leaf network and leave inference model. It then writes
-the chunk's .forgone sidecar and labels `pool_positions_per_game` turns of
-each game with policy_set_pool_tool on the same two models, into the chunk's
-.pool. The tool stands in until self-play writes the pools of its own turns.
+seats on the release's leaf network and leave inference model. The games
+write their own policy data, for `pool_positions_per_game` turns of each: the
+agent's screen as the chunk's .pool, and what its sims and the endgame solver
+then gave the screen's survivors as the .survivors. The cycle then adds the
+.forgone sidecar.
 
 Either role runs on the controller's machine or on one reached over ssh. A
 generator beside the trainer reads the releases from the tag in place; the
@@ -34,7 +35,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
 from scribblez.params import ParamsError, param
 from scribblez.paths import TagPaths
-from scribblez.policy_set import POOL_SUFFIX
+from scribblez.policy_set import POOL_SUFFIX, SURVIVORS_SUFFIX
 from scribblez.workloads.base import (
     DeliveredSet,
     RoleSpec,
@@ -43,7 +44,6 @@ from scribblez.workloads.base import (
     WorkloadSpec,
     await_push,
 )
-from scribblez.workloads.policy_set import PoolLabelParams, write_pools
 from scribblez.workloads.selfplay_gen import (
     GENERATOR_STATS,
     STAGING_DIR,
@@ -53,7 +53,7 @@ from scribblez.workloads.selfplay_gen import (
 
 # The sidecars every chunk carries beside its .slog: the forgone plays the
 # leave inference rows read, and the pools the policy trains on.
-CHUNK_SIDECARS = (forgone.SUFFIX, POOL_SUFFIX)
+CHUNK_SIDECARS = (forgone.SUFFIX, POOL_SUFFIX, SURVIVORS_SUFFIX)
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,9 @@ class DeepBotParams:
         1, "generations kept open ahead of the trainer's cursor before generators are parked"
     )
     pool_positions_per_game: int = param(
-        20, "turns of each game whose pool (the agent's screen) the chunk keeps for the policy"
+        20,
+        "turns of each game, drawn from those the agent searched, whose pool (its screen) and "
+        "survivors (its sims of the screen's picks) the chunk keeps for the policy",
     )
     games_per_chunk: int = param(
         50, "games per generator cycle; a generator takes up a new release at its next cycle"
@@ -133,15 +135,6 @@ def player_spec(params: DeepBotParams, leaf: Path, leave: Path) -> str:
     )
 
 
-def pool_params(params: DeepBotParams) -> PoolLabelParams:
-    """The pool tool's labeling, the agent's screen at the turns it samples."""
-    return PoolLabelParams(
-        positions_per_game=params.pool_positions_per_game,
-        rollouts=params.screen_rollouts,
-        blank_prune_points=params.blank_prune_points,
-    )
-
-
 def newest_release(ctx: WorkerContext) -> int:
     """The newest release the worker holds. The trainer publishes release 0
     before its data home's first heartbeat releases the generators, so a
@@ -162,7 +155,8 @@ def release_cycle(ctx: WorkerContext) -> Cycle:
     print(f"playing release {number}")
     return Cycle(
         player_spec(params, leaf, leave),
-        functools.partial(write_pools, pool_params(params), leaf, leave),
+        forgone.write_sidecars,
+        pool_positions_per_game=params.pool_positions_per_game,
     )
 
 
