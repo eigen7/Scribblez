@@ -123,7 +123,7 @@ def test_a_remote_generator_waits_for_the_controllers_first_release(tmp_path, mo
 
 def test_the_controller_carries_seeds_to_a_trainer_and_the_newest_release_to_generators(tmp_path):
     paths = SPEC.paths("t", tmp_path)
-    tag_files = {role.name: workloads.resolve(role.tag_files) for role in SPEC.roles}
+    tag_files = {r.name: workloads.resolve(r.tag_files) for r in SPEC.roles if r.tag_files}
     assert tag_files["train"](paths, PARAMS) == [f"seeds/{kind}.pt" for kind in KINDS]
     assert tag_files["generate"](paths, PARAMS) == []  # before release 0
     _publish(paths, 0)
