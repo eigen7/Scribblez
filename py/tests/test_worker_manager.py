@@ -2635,8 +2635,8 @@ def test_a_failed_relay_neither_fails_its_pull_nor_loses_the_pulls_state_pair(ma
     installed = []
     monkeypatch.setattr(
         WorkerManager,
-        "_install_pulled_pairs",
-        lambda self, spec, task, pulled: installed.append(pulled),
+        "_install_pulled_sets",
+        lambda self, spec, task, w, pulled: installed.append(pulled),
     )
     assert manager._transfer_ssh(spec, task, task.worker("tr")) is result
     assert installed == [result.pulled]
