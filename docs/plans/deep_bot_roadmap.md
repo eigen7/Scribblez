@@ -224,11 +224,12 @@ tried under it later:
   pools](deep_bot_generations.md#self-play-writes-the-pools)). Under the
   `hasty` reply that is ten times the rollouts on the near-top moves, where
   the policy is weakest, and the endgame solver's value for a play that
-  empties the bag. Under the `policy` reply it is what makes the loop
-  improve Bob: the survivors' sims have him reply by one release's policy,
-  so the next release's policy learns what wins against an opponent who
-  blocks. With the screen's labels alone, his reply in every label would be
-  HastyBot's in every generation.
+  empties the bag. Under the `policy` reply the survivors' sims have the
+  opponent reply by one release's policy, so the next release's policy
+  prices its own setups against an opponent who blocks. The screen's labels
+  alone would price them against HastyBot in every generation. Learning to
+  block does not wait on this: the screen's labels already reward it, as
+  the next point says.
 - **Until self-play writes them** (the loop's steps 3 and 4, and the
   `policy_set` tags), a pool is the pool tool's: the screen's sims and no
   more. There a block still scores well at a position after a setup, since
