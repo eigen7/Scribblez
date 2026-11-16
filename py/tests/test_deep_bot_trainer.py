@@ -26,6 +26,7 @@ from scribblez.deep_bot import (  # noqa: E402
     LEAF,
     LEAVE,
     POLICY,
+    belief_by_rank,
     kept_checkpoints,
     release,
     seeds,
@@ -166,7 +167,12 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
     names = sorted(p.name for p in release.release_dir(tag, 1).iterdir())
     assert names == ["leaf.onnx", "leave.onnx", "manifest.json", "policy.onnx"]
     (record,) = [s.record["metrics"] for s in staged]
-    for key in ("leave_eval_nll", "leaf_eval_model_logloss", "policy_eval_recall_8"):
+    for key in (
+        "leave_eval_nll",
+        "leave_eval_nll_vs_uniform_rank_0",
+        "leaf_eval_model_logloss",
+        "policy_eval_recall_8",
+    ):
         # Before any training the newest release is release 0.
         assert record[key] == record[f"r0_{key}"], key
     for kind in KINDS:
@@ -251,3 +257,23 @@ def test_the_controller_keeps_the_release_it_has_and_drops_a_torn_one(tmp_path):
         assert not delivered.exists()
     assert (release.release_dir(home, 1) / release.MANIFEST).read_text() == "first"
     assert release.newest(home) == 1 and not release.release_dir(home, 2).exists()
+
+
+def test_the_leave_inference_score_is_broken_down_by_the_played_moves_rank(tag, chunk):
+    """HastyBot plays static equity's first move, so its game's turns all
+    score in the first band; a pool re-ranked puts its turn in another."""
+    unit = units.build_unit(LEAVE, tag, PARAMS, CPU)
+    gen_dir = tag.generation_dir(0)
+    (pool_path,) = gen_dir.glob(f"*{POOL_SUFFIX}")
+    games, turns, ranks = belief_by_rank.played_ranks(pool_path)
+    assert len(games) == 2 and ranks.tolist() == [0, 0]
+
+    scores = belief_by_rank.evaluate(unit, gen_dir)
+    assert scores["eval_played_rank_0_share"] == 1.0
+    assert np.isfinite(scores["eval_nll_vs_uniform_rank_0"])
+    assert "eval_nll_vs_uniform_rank_10_up" not in scores
+
+    # The same rows, scored one at a time, average to the band's score.
+    slog = pool_path.with_suffix(".slog")
+    gaps = belief_by_rank.nll_vs_uniform(unit, slog, games, turns + 1)
+    assert np.nanmean(gaps) == pytest.approx(scores["eval_nll_vs_uniform_rank_0"])

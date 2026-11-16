@@ -1,6 +1,6 @@
 # Plan: one workload that advances DeepBot's generations
 
-**Status: proposed 2026-11-13; steps 1 to 4 of its
+**Status: proposed 2026-11-13; steps 1 to 5 of its
 [build order](#build-order) are built.** This is step 11 of DeepBot's
 [build order](deep_bot.md#build-order) as a dashboard workload, and step 3
 of [the order of the remaining work](deep_bot_roadmap.md). Its
@@ -537,8 +537,11 @@ Each is a pull request.
 5. **Self-play writes the pools.** Built 2026-11-16, with its numbers
    [above](#self-play-writes-the-pools): the engine change with both stages
    of the turn in the record, the per-game sample, the workload taking its
-   pools from self-play, and the policy's target from the two stages. Still
-   to build: the belief metric by the played move's rank. *Measure:* pools
+   pools from self-play, the policy's target from the two stages, and the
+   leave inference score by the played move's rank
+   (`deep_bot/belief_by_rank.py`; in the 20 games above the agent played
+   static equity's first move at 56% of its turns, a move ranked 1 to 9 at
+   29% and one ranked 10 or lower at 14%). *Measure:* pools
    a second and bytes a game (above); and the policy's curve against pools
    trained, under the screen's labels and under the turn's, which is not
    yet measured: a tag's games hold both.

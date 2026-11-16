@@ -438,6 +438,19 @@ DEEP_BOT_QUALITY = [
         "Leave inference, private history hidden: NLL vs uniform",
         "leave_eval_hidden_nll_vs_uniform",
     ),
+    # The same score where it should move most: after a move static equity
+    # ranks low, the leave is the tell (deep_bot/belief_by_rank.py).
+    *(
+        _beside_release_0(
+            f"Leave inference: NLL vs uniform after a move of static-equity rank {title}",
+            f"leave_eval_nll_vs_uniform_rank_{band}",
+        )
+        for band, title in (("0", "0"), ("1_9", "1 to 9"), ("10_up", "10 or lower"))
+    ),
+    (
+        "Share of moves played, by static-equity rank",
+        [f"leave_eval_played_rank_{band}_share" for band in ("0", "1_9", "10_up")],
+    ),
     _beside_release_0(
         "Leaf network: log loss of the expected score",
         "leaf_eval_model_logloss",

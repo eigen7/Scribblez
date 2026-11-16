@@ -30,7 +30,16 @@ import torch
 from torch import nn
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY, kept_checkpoints, release, units
+from scribblez.deep_bot import (
+    KINDS,
+    LEAF,
+    LEAVE,
+    POLICY,
+    belief_by_rank,
+    kept_checkpoints,
+    release,
+    units,
+)
 from scribblez.deep_bot.seeds import seed_path
 from scribblez.ffi import read_file_header, struct_dtype
 from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
@@ -107,10 +116,12 @@ def newest_release_share(gen_dir, newest: int) -> float:
 
 def evaluate_generation(by_kind: dict, gen_dir, cpu) -> dict:
     """Each model's metrics on the games of `gen_dir`: the leave inference
-    model's and the leaf network's under their names, and the policy's, whose
-    keys name their form and the equity baseline already."""
+    model's, with its score by the rank of the move played, and the leaf
+    network's under their names, and the policy's, whose keys name their form
+    and the equity baseline already."""
     return {
         **prefixed(f"{LEAVE}_", by_kind[LEAVE].evaluate(gen_dir, cpu)),
+        **prefixed(f"{LEAVE}_", belief_by_rank.evaluate(by_kind[LEAVE], gen_dir)),
         **prefixed(f"{LEAF}_", by_kind[LEAF].evaluate(gen_dir, cpu)),
         **by_kind[POLICY].evaluate(dataset.read_items([gen_dir])),
     }
