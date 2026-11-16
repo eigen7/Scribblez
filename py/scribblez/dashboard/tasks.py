@@ -541,7 +541,7 @@ class TaskStore:
         if not spec.complete:
             return bool(task.workers) and all(w.finished for w in task.workers)
         params = params_mod.validate(spec.params_cls, task.params)
-        return resolve(spec.complete)(spec, self.paths(spec, task.tag), params)
+        return spec.is_complete(self.paths(spec, task.tag), params)
 
     def params_error(self, spec: WorkloadSpec, task: TaskRecord) -> str | None:
         """Why the task's stored params no longer validate against the
