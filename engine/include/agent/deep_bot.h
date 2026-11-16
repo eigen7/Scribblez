@@ -39,6 +39,14 @@
 // keeps the first pass's value, whose sims play the game to its end by
 // HastyBot.
 //
+// Where the game asks (MoveRequest::record_pool), a searched turn leaves its
+// record (data/turn_pool.h): the screen's labels as the turn's policy-set
+// pool, and under `hasty` what the sims and the solver then gave its
+// survivors. The recorded screen sims the pool whole, as
+// policy_set_pool_tool labels a position: the pass too, which is never a
+// candidate, and also at a turn with no more moves than candidates, where the
+// screen otherwise has nothing to choose.
+//
 // Hidden leaves only, before the endgame: EndgameAgent<DeepBot> solves the turns
 // with the bag empty, and DeepBot alone plays HastyBot's move there.
 
@@ -52,6 +60,7 @@
 #include "belief/leave_history_recorder.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
+#include "data/turn_pool.h"
 #include "encoding/game_state_encoder.h"
 #include "lexicon/leave_value_arrays.h"
 #include "sim/pool_labels.h"
@@ -135,6 +144,9 @@ class DeepBot : public Agent {
     std::shared_ptr<const LeaveValueArrays> table;
     // The dump's policy-set model, with --policy-model.
     std::optional<PolicyBot::Backend> policy;
+    // The leaf network and leave inference model a recorded pool names as
+    // its labels' sources; the rollout budget is the screen's.
+    PoolSources sources{};
   };
 
   // Builds the backend Params names (deep_bot_factory.cpp, which reaches
@@ -171,18 +183,31 @@ class DeepBot : public Agent {
   // Alice's belief about Bob's leave, null where the model has none to give.
   std::shared_ptr<const belief::LeaveSampler> root_belief(const belief::LeaveQuery& q) const;
   uint64_t turn_seed() const;
-  // The hasty sims of `moves` over `rollouts` racks for Bob, dealt by `seed`,
-  // and the rollouts they ran.
+  // The hasty sims of `moves` over `rollouts` racks for Bob, dealt by `seed`:
+  // their labels, each move's rollout win values in turn (label.rollouts of
+  // them), and the rollouts they ran.
   struct HastySims {
     std::vector<PoolLabel> labels;
+    std::vector<float> values;
     long long sims = 0;
   };
   HastySims hasty_labels(const MoveRequest& req, const std::vector<Move>& moves,
                          const belief::LeaveSampler* belief, int rollouts, bool race,
                          uint64_t seed) const;
-  // The `hasty` reply model's pick among `moves`.
+  // The `hasty` reply model's pick among `moves`; `record`, if not null,
+  // takes what its sims and the solver gave them.
   Move hasty_move(const MoveRequest& req, const std::vector<Move>& moves,
-                  const belief::LeaveSampler* belief) const;
+                  const belief::LeaveSampler* belief, TurnPool* record) const;
+  // Whether this turn's search goes into the game's log.
+  bool records(const MoveRequest& req) const {
+    return req.record_pool && params_.screen_rollouts > 0;
+  }
+  // The turn's policy-set pool, labeled by the screen's sims.
+  PoolPosition screened_pool(const MoveRequest& req, const belief::LeaveSampler* belief) const;
+  // Her candidates at a recorded turn, from the screen of the whole pool,
+  // which `record` keeps.
+  std::vector<Move> recorded_candidates(const MoveRequest& req, const belief::LeaveSampler* belief,
+                                        TurnPool* record) const;
   // The subtree_candidates of `which` (indices into `moves`) with the best
   // hasty sims at bob_racks racks for Bob, in candidate order.
   std::vector<size_t> first_pass_best(const MoveRequest& req, const std::vector<Move>& moves,
