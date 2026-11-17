@@ -28,8 +28,12 @@ Chooser = Callable[[Pool, int], np.ndarray]
 
 
 def equity_top(pool: Pool, n: int) -> np.ndarray:
-    """The baseline: the candidates ranked in the static-equity top `n`."""
-    return np.flatnonzero((pool.equity_rank >= 0) & (pool.equity_rank < n))
+    """The baseline: the candidates ranked in the static-equity top `n`, or
+    the one candidate equity ranks highest where the pool holds none of them
+    (its blank pruning can drop equity's first moves)."""
+    ranked = np.flatnonzero(pool.equity_rank >= 0)
+    top = ranked[pool.equity_rank[ranked] < n]
+    return top if len(top) else ranked[[np.argmin(pool.equity_rank[ranked])]]
 
 
 def _leader(pool: Pool) -> int:
