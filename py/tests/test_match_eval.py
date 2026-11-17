@@ -182,7 +182,9 @@ def test_play_match_plays_the_whole_fixed_budget(tmp_path, monkeypatch):
         return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
-    outcome = runner._play_match(_ctx(tmp_path, match_pairs=5, match_seed=7), _MODEL)
+    outcome = runner._play_match(
+        _ctx(tmp_path, match_pairs=5, match_seed=7), "--type=neural", face_up_leaves=True
+    )
     assert calls == [(5, 7)]
     assert outcome.pair_counts == [0, 0, 0, 0, 5]
     assert (outcome.wins, outcome.draws, outcome.losses) == (10, 0, 0)

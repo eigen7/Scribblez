@@ -11,10 +11,15 @@ neither the database nor the exports.
 
 An interrupted match leaves the model in the inbox, so the next start replays
 it from the same seeds.
+
+How an export plays is the workload's: run() takes a Player, the export's
+--player spec and the information condition the match is played under. The
+default, model_player, is position_eval's and the evidence trainer's.
 """
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +65,17 @@ def _model_player_spec(onnx_path: Path, params) -> str:
     return spec + " --name=model"
 
 
+# How an export plays: (ctx, the assigned export) -> (its --player spec,
+# whether the match is played with face-up leaves).
+Player = Callable[[WorkerContext, Path], tuple[str, bool]]
+
+
+def model_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
+    """A position-evaluation or move-proposal export (_model_player_spec),
+    under the tag's own information condition."""
+    return _model_player_spec(model, ctx.params), ctx.params.face_up_leaves
+
+
 @dataclass(frozen=True)
 class MatchOutcome:
     """One generation's match result: pair-score counts
@@ -75,17 +91,18 @@ class MatchOutcome:
         return self.wins + self.draws + self.losses
 
 
-def _play_match(ctx: WorkerContext, model: Path) -> MatchOutcome:
-    """Play `match_pairs` mirrored pairs from the tag's fixed seed."""
+def _play_match(ctx: WorkerContext, spec: str, face_up_leaves: bool) -> MatchOutcome:
+    """Play `match_pairs` mirrored pairs of `spec` against the tag's opponent
+    from the tag's fixed seed."""
     p = ctx.params
     result = harness.play_round(
-        _model_player_spec(model, p),
+        spec,
         p.match_opponent,
         num_pairs=p.match_pairs,
         threads=ctx.threads,
         seed=p.match_seed,
         results_file=ctx.tag_paths().work_dir(ctx.worker_id) / "match_results.jsonl",
-        face_up_leaves=p.face_up_leaves,
+        face_up_leaves=face_up_leaves,
     )
     counts = stats.pair_score_counts(result.pair_scores)
     return MatchOutcome(counts, result.wins, result.draws, result.losses)
@@ -119,8 +136,9 @@ def _deliver(ctx: WorkerContext, record: dict) -> int:
     return ctx.sink.deliver(path, f"{MATCH_RESULTS_DIR}/{path.name}")
 
 
-def run(ctx: WorkerContext) -> int:
-    """The match_eval role entry point."""
+def run(ctx: WorkerContext, player: Player = model_player) -> int:
+    """The match_eval role entry point, the assigned exports playing as
+    `player` says."""
     paths = ctx.tag_paths()
     stats_rec = WorkerStats(ctx)
     print(
@@ -141,7 +159,7 @@ def run(ctx: WorkerContext) -> int:
             gen = paths.onnx_epoch(model)
             cycles += 1
             t0 = time.monotonic()
-            outcome = _play_match(ctx, model)
+            outcome = _play_match(ctx, *player(ctx, model))
             record = match_record(ctx, gen, outcome, time.monotonic() - t0)
             nbytes = _deliver(ctx, record)
             # Mark rather than delete: the generation must stay assigned until
