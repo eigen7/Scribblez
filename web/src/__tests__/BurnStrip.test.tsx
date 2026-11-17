@@ -60,11 +60,13 @@ describe('the cloud burn strip', () => {
     expect(screen.queryByText('position_eval/gone')).toBeNull();
   });
 
-  it('is quiet when nothing bills, counting stopped disks', async () => {
-    await setup(fleet({ instances: [inst({ state: 'stopped' })] }));
+  it('is quiet when nothing bills, still linking a stopped machine to its tag', async () => {
+    const onOpen = await setup(fleet({ instances: [inst({ state: 'stopped' })] }));
     await waitFor(() => screen.getByText('nothing billing'));
-    expect(screen.getByText('· 1 stopped (disk only)')).toBeInTheDocument();
-    expect(screen.queryByText('g6.2xlarge')).toBeNull();
+    expect(screen.getByText('stopped (disk only)')).toBeInTheDocument();
+    expect(screen.queryByText('$1.00/hr')).toBeNull();
+    fireEvent.click(screen.getByText('position_eval/run7'));
+    expect(onOpen).toHaveBeenCalledWith('position_eval', 'run7');
   });
 
   it('says so when the listing has stopped refreshing', async () => {

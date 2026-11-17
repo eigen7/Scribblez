@@ -10,7 +10,9 @@ import { TagLink } from './ui';
 // one whose task record was lost, shows here all the same. Loud when
 // anything bills, quiet when nothing does, and amber when the listing itself
 // has stopped refreshing: a dashboard that silently stopped observing is the
-// one failure a quiet strip could otherwise hide.
+// one failure a quiet strip could otherwise hide. Every instance gets a chip,
+// stopped ones included: a stopped machine still holds a disk (and a tag's
+// slot), so the strip links it to its tag even while nothing bills.
 
 export type FleetInstance = {
   instance_id: string; type_id: string; state: string;
@@ -105,7 +107,7 @@ function InstanceChip({ inst, onOpen }: {
       <b>{inst.type_id}{inst.spot ? ' spot' : ''}</b>
       <span>{inst.state}{billing ? '' : ' (disk only)'}</span>
       {billing && <span>{fmtUptime(inst.uptime_s)}</span>}
-      <span>{inst.cost_per_hr != null ? `${money(inst.cost_per_hr)}/hr` : 'rate unknown'}</span>
+      {billing && <span>{inst.cost_per_hr != null ? `${money(inst.cost_per_hr)}/hr` : 'rate unknown'}</span>}
       {canOpen ? (
         <TagLink workload={workload} tag={tag} onOpen={onOpen}
           title={`open ${workload}/${tag} (machine ${machine})`} />
@@ -133,7 +135,6 @@ export default function BurnStrip({ onOpen }: { onOpen: (workload: string, tag: 
   }, []);
 
   const billing = fleet?.instances.filter((i) => BILLING.has(i.state)) ?? [];
-  const idle = fleet?.instances.filter((i) => !BILLING.has(i.state)) ?? [];
   const burning = billing.length > 0;
   useEffect(() => {
     if (!burning) setStopping(false);
@@ -165,10 +166,7 @@ export default function BurnStrip({ onOpen }: { onOpen: (workload: string, tag: 
               {burning ? `burning ${money(fleet.burn_per_hr)}/hr` : 'nothing billing'}
             </b>
             {fleet.instances.length === 0 && <span>· no instances</span>}
-            {!burning && idle.length > 0 && (
-              <span>· {idle.length} stopped (disk only)</span>
-            )}
-            {(burning ? fleet.instances : []).map((i) => (
+            {fleet.instances.map((i) => (
               <InstanceChip key={i.instance_id} inst={i} onOpen={onOpen} />
             ))}
             {unreachable && <span className="pill-stale">dashboard API unreachable</span>}
