@@ -98,12 +98,12 @@ class DeepBotLeafEvalParams:
     huber_delta_mean: float = param(10.0, "Huber delta, score-diff mean head")
     huber_delta_std: float = param(10.0, "Huber delta, score-diff std head")
     lambda_ownership: float = param(
-        1.0, "ownership loss weight (per-square cross-entropy over the empty squares)"
+        0.1, "ownership loss weight (per-square cross-entropy over the empty squares)"
     )
     lambda_points: float = param(
         1.0, "square-points loss weight (per-square mean and variance, in units of 100 points)"
     )
-    lambda_going_out: float = param(1.0, "going-out loss weight (three-way cross-entropy)")
+    lambda_going_out: float = param(0.1, "going-out loss weight (three-way cross-entropy)")
     lambda_end_points: float = param(
         1.0, "end-of-game points loss weight (mean and variance, in units of 100 points)"
     )
