@@ -64,6 +64,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
   deep_bot_leaf_eval: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('leaf_eval_metrics', 'metrics', 'No per-generation metrics yet.'),
+    figureTab('Match', 'match_eval', 'match_eval', 'No match results yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
