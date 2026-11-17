@@ -1,18 +1,23 @@
 #pragma once
 
 // A leave inference model loaded to serve beliefs from several threads: its
-// TensorRT engine (LeaveInferenceNet) behind a mutex, and the identity a
-// consumer records as provenance.
+// TensorRT engine (LeaveInferenceNet), and the identity a consumer records as
+// provenance. Concurrent callers' rows are gathered into one engine call
+// (util::CallerLedBatcher): a game asks for one belief a turn, and an engine
+// call per query would leave the GPU running launches, not rows.
 
 #include "belief/leave_inference_net.h"
 #include "belief/leave_params.h"
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/leave_values.h"
 #include "nn/onnx_metadata.h"
+#include "util/caller_led_batcher.h"
 
+#include <exception>
 #include <memory>
-#include <mutex>
+#include <span>
 #include <string>
+#include <vector>
 
 namespace scribblez::belief {
 
@@ -36,9 +41,26 @@ class ServedLeaveModel {
   LeaveParamsFn predict_fn();
 
  private:
+  // One caller's rows and where their parameters go, and the exception if the
+  // engine call failed.
+  struct Request {
+    const float* rows;
+    int count;
+    LeaveParams* out;
+    std::exception_ptr error = nullptr;
+  };
+  using Pack = std::span<Request* const>;
+
+  // Predict every request's rows in one engine call. Never throws: a failure
+  // is recorded on every request of the pack.
+  void serve(Pack pack);
+
   LeaveInferenceNet net_;
-  std::mutex mutex_;
   Identity identity_;
+  util::CallerLedBatcher<Request> batcher_;
+  // Dispatcher-only staging for a pack's rows and parameters, reused.
+  std::vector<float> rows_;
+  std::vector<LeaveParams> out_;
 };
 
 // A served model and the leave table its beliefs are over: what a tool that
