@@ -39,6 +39,9 @@ po::options_description leafbot_options(LeafBot::Params& p) {
      "HastyBot's best moves by static equity that the leaf values")  //
     ("opp-leaves", po::value<int>(&p.opp_leaves)->default_value(p.opp_leaves),
      "the opponent's leaves each candidate is valued over")  //
+    ("report-values", po::bool_switch(&p.report_values),
+     "also value and report the candidates that keep the bag where another would empty it "
+     "(an analysis; play is HastyBot's move there either way)")  //
     ("seed", po::value<uint64_t>(&p.seed), "the leaves' quantile jitter (default: SeedProducer)");
   return desc;
 }

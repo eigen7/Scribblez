@@ -62,6 +62,8 @@ struct RecordedPick {
   int opp_score = 0;
   int bag = 0;
   Move pick;
+  // The agent's values of the moves it weighed (MoveDecision::values).
+  std::vector<CandidateValue> values;
 };
 
 // `agent`'s move at turn `turn` of `g`, in the seat that moved there. The

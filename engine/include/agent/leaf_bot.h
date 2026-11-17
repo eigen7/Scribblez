@@ -16,8 +16,10 @@
 //
 // The leaf trained only on turns whose mover's refill leaves the bag
 // non-empty, so at a turn where a candidate would empty the bag LeafBot plays
-// HastyBot's move. Hidden leaves only, before the endgame: EndgameAgent<LeafBot>
-// solves the turns with the bag empty.
+// HastyBot's move. Its decision reports the candidates' values
+// (MoveDecision::values); with `report_values`, also those of the candidates
+// that do not empty the bag at such a turn, for an analysis that asks. Hidden leaves only, before
+// the endgame: EndgameAgent<LeafBot> solves the turns with the bag empty.
 
 #include "agent/agent.h"
 #include "belief/leave_history_recorder.h"
@@ -65,6 +67,9 @@ class LeafBot : public Agent {
     std::string leave_inference{};
     int candidates = 10;  // HastyBot's best by static equity
     int opp_leaves = 16;  // the opponent's leaves each candidate is valued over
+    // Value the candidates that keep the bag, and report them, also at a turn
+    // where another would empty it and HastyBot's move is played.
+    bool report_values = false;
     uint64_t seed = 0;
   };
 
@@ -107,6 +112,9 @@ class LeafBot : public Agent {
                              const std::vector<WeightedLeave>& opp) const;
 
  private:
+  // `moves` and their values over this turn's opponent leaves (values()).
+  std::vector<CandidateValue> valued(const MoveRequest& req, const std::vector<Move>& moves,
+                                     const belief::LeaveQuery& q) const;
   // The opponent's leaves this turn's candidates are valued over: the
   // distinct draws, each weighted by its share of them.
   std::vector<WeightedLeave> opp_leaves(const belief::LeaveQuery& q) const;
@@ -126,6 +134,6 @@ class LeafBot : public Agent {
 bool empties_bag(const Move& move, int bag);
 
 // The index of the best of `values`, the earliest on ties.
-size_t best_value(const std::vector<double>& values);
+size_t best_value(const std::vector<CandidateValue>& values);
 
 }  // namespace scribblez

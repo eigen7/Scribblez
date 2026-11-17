@@ -32,10 +32,10 @@ std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
   return out;
 }
 
-size_t best_value(const std::vector<double>& values) {
+size_t best_value(const std::vector<CandidateValue>& values) {
   size_t best = 0;
   for (size_t i = 1; i < values.size(); ++i)
-    if (values[i] > values[best]) best = i;
+    if (values[i].value > values[best].value) best = i;
   return best;
 }
 
@@ -76,9 +76,27 @@ MoveDecision LeafBot::make_move(const MoveRequest& req) {
   const belief::LeaveQuery q = recorder_.own_query(req);
   const std::vector<Move> moves = equity_top_k(req, params_.candidates);
   if (moves.size() == 1) return moves.front();
+  std::vector<Move> keeping;
   for (const Move& m : moves)
-    if (empties_bag(m, req.bag_size)) return hasty_best_move_wmp(req);
-  return moves[best_value(values(req, moves, opp_leaves(q)))];
+    if (!empties_bag(m, req.bag_size)) keeping.push_back(m);
+  if (keeping.size() < moves.size()) {
+    MoveDecision hasty(hasty_best_move_wmp(req));
+    if (params_.report_values && !keeping.empty()) hasty.values = valued(req, keeping, q);
+    return hasty;
+  }
+  MoveDecision decision(moves.front());
+  decision.values = valued(req, moves, q);
+  decision.move = decision.values[best_value(decision.values)].move;
+  return decision;
+}
+
+std::vector<CandidateValue> LeafBot::valued(const MoveRequest& req, const std::vector<Move>& moves,
+                                            const belief::LeaveQuery& q) const {
+  const std::vector<double> v = values(req, moves, opp_leaves(q));
+  std::vector<CandidateValue> out;
+  out.reserve(moves.size());
+  for (size_t i = 0; i < moves.size(); ++i) out.push_back({moves[i], v[i]});
+  return out;
 }
 
 std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) const {

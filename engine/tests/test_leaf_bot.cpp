@@ -229,6 +229,46 @@ TEST(LeafBot, AsksTheModelForTheOpponentsLeaveAtEachModelledTurn) {
   EXPECT_GE(calls, 5);  // every turn but the first, a bingo's or a pass's, and the late ones
 }
 
+TEST(LeafBot, ItsDecisionReportsEachCandidatesValue) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEINRST");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
+  const std::vector<Move> ranked = equity_top_k(req, 4);
+  Board favoured = board;
+  favoured.apply(ranked[2]);
+  LeafBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
+  const MoveDecision d = bot.make_move(req);
+  ASSERT_EQ(d.values.size(), ranked.size());
+  for (size_t i = 0; i < ranked.size(); ++i) {
+    EXPECT_EQ(d.values[i].move, ranked[i]);
+    EXPECT_DOUBLE_EQ(d.values[i].value, i == 2 ? 1.0 : 0.0);
+  }
+  EXPECT_EQ(d.move, ranked[2]);
+}
+
+// Where a candidate would empty the bag, an analysis that asks still gets the
+// values of those that keep it; the move is still HastyBot's.
+TEST(LeafBot, ReportsTheValuesOfTheCandidatesThatKeepTheBagWhereAsked) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEINRST");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 4};
+  LeafBot::Params p = small_params(1);
+  p.candidates = 200;
+  auto values = std::make_shared<RecordingValues>();
+  LeafBot quiet(small_params(1), backend(values));
+  EXPECT_TRUE(quiet.make_move(req).values.empty());
+  p.report_values = true;
+  LeafBot asked(p, backend(values));
+  const MoveDecision d = asked.make_move(req);
+  EXPECT_EQ(d.move, hasty_best_move_wmp(req));
+  ASSERT_FALSE(d.values.empty());
+  for (const CandidateValue& v : d.values) EXPECT_LT(v.move.num_glyphs(), 4);
+}
+
 // The leaf never trained on a turn whose refill empties the bag.
 TEST(LeafBot, PlaysHastyBotsMoveWhereACandidateWouldEmptyTheBag) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
@@ -275,6 +315,7 @@ TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
 }
 
 TEST(LeafBot, TheBestValueIsTheEarliestOnTies) {
-  EXPECT_EQ(best_value({0.2, 0.5, 0.5, 0.1}), 1u);
-  EXPECT_EQ(best_value({0.7}), 0u);
+  const Move m = Move::pass();
+  EXPECT_EQ(best_value({{m, 0.2}, {m, 0.5}, {m, 0.5}, {m, 0.1}}), 1u);
+  EXPECT_EQ(best_value({{m, 0.7}}), 0u);
 }
