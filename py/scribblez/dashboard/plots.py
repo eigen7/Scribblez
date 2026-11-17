@@ -913,11 +913,12 @@ def _stacked_loss_figure(x, bands, title: str, y_label: str, log_x: bool):
 
 
 def _loss_bands(series, weights, normalized):
-    """Weighted loss bands [(label, y), ...], bottom to top in `weights` order.
+    """Weighted loss bands [(label, y), ...], bottom to top in `weights` order,
+    each labeled by its loss's name (the weights are the chart title's).
     `normalized` divides each column by its total, so band heights read as a
     share of the loss."""
     bands = [
-        (name if w == 1 else f"{w:g} x {name}", np.asarray(series[name], dtype=np.float64) * w)
+        (name, np.asarray(series[name], dtype=np.float64) * w)
         for name, w in weights.items()
         if name in series
     ]
