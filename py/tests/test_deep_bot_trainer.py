@@ -72,7 +72,7 @@ def chunk(tmp_path_factory) -> Path:
     return made
 
 
-def _seed(paths: TagPaths, kind: str):
+def save_tiny_seed(paths: TagPaths, kind: str):
     """Save a tiny seed of `kind` where the tag keeps its seeds."""
     unit = units.UNIT_CLASSES[kind](SEED_PARAMS[kind], CPU)
     config = asdict(SEED_PARAMS[kind]) | units.unit_versions(kind, unit)
@@ -89,7 +89,7 @@ def tag(chunk, tmp_path, monkeypatch) -> TagPaths:
     paths = TagPaths("t", "deep_bot", tmp_path)
     torch.manual_seed(0)
     for kind in KINDS:
-        _seed(paths, kind)
+        save_tiny_seed(paths, kind)
     gen_dir = lifecycle.open_generation(paths, 0, target_games=1)
     for f in chunk.iterdir():
         shutil.copy(f, gen_dir / f.name)

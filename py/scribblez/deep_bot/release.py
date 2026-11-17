@@ -60,6 +60,10 @@ def write_manifest(paths: TagPaths, release: int, tag: str, rows: dict[str, int]
     return path
 
 
+def read_manifest(paths: TagPaths, release: int) -> dict:
+    return json.loads((release_dir(paths, release) / MANIFEST).read_text())
+
+
 def files(release: int) -> list[str]:
     """Release `release`'s files, tag-relative, the manifest last."""
     exports = [export_rel(release, kind) for kind in KINDS]
@@ -100,11 +104,15 @@ def exists(paths: TagPaths, release: int) -> bool:
     return (release_dir(paths, release) / MANIFEST).exists()
 
 
-def newest(paths: TagPaths) -> int | None:
-    """The newest complete release's number, or None before release 0."""
-    done = [
+def numbers(paths: TagPaths) -> list[int]:
+    """The complete releases' numbers, ascending."""
+    return sorted(
         int(d.name.removeprefix("release_"))
         for d in releases_dir(paths).glob("release_*")
         if (d / MANIFEST).exists()
-    ]
-    return max(done, default=None)
+    )
+
+
+def newest(paths: TagPaths) -> int | None:
+    """The newest complete release's number, or None before release 0."""
+    return max(numbers(paths), default=None)

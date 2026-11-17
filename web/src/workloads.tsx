@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import ControlsTab from './components/ControlsTab';
+import DeepBotPositions from './components/DeepBotPositions';
 import EvidenceTrajectories from './components/EvidenceTrajectories';
 import InfoTab from './components/InfoTab';
 import LaneAnalysis from './components/LaneAnalysis';
@@ -70,7 +71,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('deep_bot_metrics', 'metrics', 'No generation scored yet.'),
     figureTab('Matches', 'release_matches', 'release_match', 'No match results yet.'),
-    figureTab('Positions', 'release_picks', 'release_pick', 'No release asked yet.'),
+    { name: 'Positions', render: (w, t) => <DeepBotPositions task={w} tag={t} /> },
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
