@@ -72,7 +72,10 @@ def glyph_char(code: int) -> str:
 
 def move_notation(move: np.void, board: list) -> str:
     """A move's GCG notation on the pre-move `board` (the board JSON's rows):
-    position and word, through-tiles as '.', or '-TILES' for an exchange."""
+    position and word, through-tiles as '.', '-TILES' for an exchange, or '-'
+    for a pass (data/gcg_writer.h's move_notation)."""
+    if move["type"] == MOVE_PASS:
+        return "-"
     if move["type"] == MOVE_EXCHANGE:
         return "-" + "".join(glyph_char(int(g)) for g in move["glyphs"][: int(move["num_played"])])
     horizontal, lane = bool(move["horizontal"]), int(move["start"])

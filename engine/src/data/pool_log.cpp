@@ -38,6 +38,8 @@ PoolFileHeader make_header(const PoolSources& s) {
   return h;
 }
 
+}  // namespace
+
 PoolOppRack pool_opp_rack(const belief::OppRackSummary& s) {
   PoolOppRack r{};
   r.presence = s.presence;
@@ -46,8 +48,6 @@ PoolOppRack pool_opp_rack(const belief::OppRackSummary& s) {
   r.modelled = s.modelled ? 1 : 0;
   return r;
 }
-
-}  // namespace
 
 belief::OppRackSummary opp_rack_summary(const PoolOppRack& r) {
   return {.presence = r.presence,

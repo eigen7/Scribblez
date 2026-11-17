@@ -91,7 +91,8 @@ struct PoolOppRack {
 };
 static_assert(sizeof(PoolOppRack) == 120, "PoolOppRack must be 120 bytes");
 
-// The summary a PoolOppRack records.
+// The record of `s`, and the summary a PoolOppRack records.
+PoolOppRack pool_opp_rack(const belief::OppRackSummary& s);
 belief::OppRackSummary opp_rack_summary(const PoolOppRack& r);
 
 struct PoolCandidate {
