@@ -49,9 +49,9 @@ double seconds_since(Clock::time_point t0) {
 
 using LeafEncoder = LeafEvalInputEncoder;
 
-// The host route over `leaves`: encoded and staged from host memory
-// (GpuRolloutValues::predict, the sims' prior), timed. Returns each leaf's
-// win value.
+// The host route over `leaves`: their states built on the host, uploaded and
+// encoded on the device (GpuRolloutValues::predict, the sims' prior), timed.
+// Returns each leaf's win value.
 struct HostRoute {
   std::vector<LeafPrediction> predictions;
   std::vector<double> win_values;

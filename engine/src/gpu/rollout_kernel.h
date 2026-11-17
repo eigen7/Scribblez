@@ -175,4 +175,14 @@ void encode_leaves(DeviceTables* tables, const uint32_t* tasks, int count, float
 void encode_leaves_to_host(DeviceTables* tables, const uint32_t* tasks, int count, float* spatial,
                            float* scalar);
 
+// The rows of `count` states built on the host (`leaves`, a host array), row i
+// for leaves[i], written to device buffers as encode_leaves writes them.
+// Synchronous.
+void encode_host_leaves(DeviceTables* tables, const rollout_abi::LeafState* leaves, int count,
+                        float* spatial, float* scalar);
+
+// encode_host_leaves, copied back to host buffers.
+void encode_host_leaves_to_host(DeviceTables* tables, const rollout_abi::LeafState* leaves,
+                                int count, float* spatial, float* scalar);
+
 }  // namespace scribblez::rollout_gpu

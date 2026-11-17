@@ -58,6 +58,14 @@ class GpuHastyRollouts {
   void encode_leaves(const uint32_t* tasks, int count, float* spatial, float* scalar);
   // encode_leaves, with the rows copied back to the host (for checks).
   void encode_leaves_to_host(const uint32_t* tasks, int count, float* spatial, float* scalar);
+  // The same rows for `count` states built on the host (leaf_state()), row i
+  // for leaves[i]: a leaf network's inputs without a rollout, encoded on the
+  // device so that only the compact states cross the bus.
+  void encode_host_leaves(const rollout_abi::LeafState* leaves, int count, float* spatial,
+                          float* scalar);
+  // encode_host_leaves, with the rows copied back to the host (for checks).
+  void encode_host_leaves_to_host(const rollout_abi::LeafState* leaves, int count, float* spatial,
+                                  float* scalar);
   // Adds to the last run's maps the leaf network's completion of tasks
   // [0, count), ascending, row i of the device buffers `heads` for tasks[i]:
   // what each of those rollouts left open (rollout_abi::add_square_completion).

@@ -7,6 +7,7 @@
 #include "agent/greedy_agent.h"
 #include "agent/hasty_bot.h"
 #include "agent/human_web_agent.h"
+#include "agent/leaf_bot.h"
 #include "agent/mset_sim_agent.h"
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
@@ -53,7 +54,7 @@ std::unique_ptr<Agent> build_human(const std::vector<std::string>& tokens, int t
 }
 
 // Adding a player type takes only a new row here.
-constexpr std::array<PlayerType, 16> kPlayerTypes{{
+constexpr std::array<PlayerType, 18> kPlayerTypes{{
   {"bestbot", "BestBot", &BestBot::options_help, &build_agent<&BestBot::from_spec>},
   {"bestbot-endgame", "EndgameBestBot", &EndgameAgent<BestBot>::options_help,
    &build_agent<&EndgameAgent<BestBot>::from_spec>},
@@ -65,6 +66,9 @@ constexpr std::array<PlayerType, 16> kPlayerTypes{{
   {"hastybot", "HastyBot", &HastyBot::options_help, &build_agent<&HastyBot::from_spec>},
   {"hastybot-endgame", "EndgameHastyBot", &EndgameAgent<HastyBot>::options_help,
    &build_agent<&EndgameAgent<HastyBot>::from_spec>},
+  {"leafbot", "LeafBot", &LeafBot::options_help, &build_agent<&LeafBot::from_spec>},
+  {"leafbot-endgame", "EndgameLeafBot", &EndgameAgent<LeafBot>::options_help,
+   &build_agent<&EndgameAgent<LeafBot>::from_spec>},
   {"mset-sim", "MsetSim", &MsetSimAgent::options_help, &build_agent<&MsetSimAgent::from_spec>},
   {"neural", "Neural", &NeuralAgent::options_help, &build_agent<&NeuralAgent::from_spec>},
   {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,

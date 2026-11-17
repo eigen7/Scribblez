@@ -180,7 +180,7 @@ TEST_F(GameRunnerTest, PairedRequiresEvenGames) {
 namespace {
 
 // Every player type paired with its default display name (no explicit --name).
-const std::array<std::pair<const char*, const char*>, 16> kTypeDefaults{{
+const std::array<std::pair<const char*, const char*>, 18> kTypeDefaults{{
   {"bestbot", "BestBot"},
   {"bestbot-endgame", "EndgameBestBot"},
   {"deepbot", "DeepBot"},
@@ -189,6 +189,8 @@ const std::array<std::pair<const char*, const char*>, 16> kTypeDefaults{{
   {"human", "You"},
   {"hastybot", "HastyBot"},
   {"hastybot-endgame", "EndgameHastyBot"},
+  {"leafbot", "LeafBot"},
+  {"leafbot-endgame", "EndgameLeafBot"},
   {"mset-sim", "MsetSim"},
   {"neural", "Neural"},
   {"neural-sim", "NeuralSim"},

@@ -9,41 +9,17 @@ namespace scribblez {
 namespace nn {
 
 BatchingPositionEvalService::BatchingPositionEvalService(std::unique_ptr<PositionEvalService> inner)
-    : inner_(std::move(inner)) {}
+    : inner_(std::move(inner)), batcher_([this](Pack pack) { serve(pack); }) {}
 
 void BatchingPositionEvalService::evaluate(const SpecBatch& batch,
                                            std::span<float* const> head_out) {
   Request req{&batch, head_out};
-  std::unique_lock<std::mutex> lock(mutex_);
-  queue_.push_back(&req);
-
-  if (dispatching_) {
-    // Another caller is dispatching and will serve this request.
-    served_.wait(lock, [&req] { return req.done; });
-  } else {
-    // Dispatch until the queue is empty. The lock is released while serve()
-    // runs; requests arriving meanwhile see dispatching_ set, wait, and are
-    // served by the next iteration.
-    dispatching_ = true;
-    while (!queue_.empty()) {
-      const std::vector<Request*> pack(queue_.begin(), queue_.end());
-      queue_.clear();
-      lock.unlock();
-      serve(pack);
-      lock.lock();
-      for (Request* r : pack) r->done = true;
-      served_.notify_all();
-    }
-    dispatching_ = false;
-  }
-
-  lock.unlock();
+  batcher_.submit(req);
   if (req.error) std::rethrow_exception(req.error);
 }
 
 bool BatchingPositionEvalService::try_evaluate(const SpecBatch& batch,
-                                               std::span<float* const> head_out,
-                                               const std::vector<Request*>& blame) {
+                                               std::span<float* const> head_out, Pack blame) {
   try {
     inner_->evaluate(batch, head_out);
     return true;
@@ -54,7 +30,7 @@ bool BatchingPositionEvalService::try_evaluate(const SpecBatch& batch,
   }
 }
 
-void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
+void BatchingPositionEvalService::serve(Pack pack) {
   // A lone request, the common case under light load, is evaluated straight
   // into its caller's buffers with no gather/scatter copies.
   if (pack.size() == 1) {
@@ -71,7 +47,7 @@ void BatchingPositionEvalService::serve(const std::vector<Request*>& pack) {
   scatter(pack);
 }
 
-int BatchingPositionEvalService::gather(const std::vector<Request*>& pack) {
+int BatchingPositionEvalService::gather(Pack pack) {
   const int row_floats = spatial_planes() * kBoardCells + scalar_floats();
   int total = 0;
   for (const Request* r : pack) total += r->batch->count;
@@ -90,7 +66,7 @@ int BatchingPositionEvalService::gather(const std::vector<Request*>& pack) {
   return total;
 }
 
-void BatchingPositionEvalService::scatter(const std::vector<Request*>& pack) const {
+void BatchingPositionEvalService::scatter(Pack pack) const {
   int offset = 0;
   for (const Request* r : pack) {
     for (size_t h = 0; h < Outputs::size; ++h) {

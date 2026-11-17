@@ -131,24 +131,53 @@ std::vector<float> cpu_leaf_rows(const std::vector<CpuLeaf>& leaves, const Dicti
   return rows;
 }
 
-std::vector<float> device_leaf_rows(GpuHastyRollouts& gpu, int n, int batch) {
-  std::vector<float> spatial(size_t(n) * LeafEncoder::kSpatialFloats);
-  std::vector<float> scalar(size_t(n) * LeafEncoder::kScalarFloats);
-  std::vector<uint32_t> tasks(static_cast<size_t>(n));
-  std::iota(tasks.begin(), tasks.end(), 0u);
-  for (int first = 0; first < n; first += batch) {
-    gpu.encode_leaves_to_host(&tasks[size_t(first)], std::min(batch, n - first),
-                              &spatial[size_t(first) * LeafEncoder::kSpatialFloats],
-                              &scalar[size_t(first) * LeafEncoder::kScalarFloats]);
-  }
-  std::vector<float> rows(size_t(n) * LeafEncoder::kInputFloats);
-  for (size_t i = 0; i < size_t(n); ++i) {
+namespace {
+
+// Rows split into their spatial and scalar parts, joined into whole rows.
+std::vector<float> joined_rows(const std::vector<float>& spatial, const std::vector<float>& scalar,
+                               size_t n) {
+  std::vector<float> rows(n * LeafEncoder::kInputFloats);
+  for (size_t i = 0; i < n; ++i) {
     float* row = &rows[i * LeafEncoder::kInputFloats];
     std::copy_n(&spatial[i * LeafEncoder::kSpatialFloats], LeafEncoder::kSpatialFloats, row);
     std::copy_n(&scalar[i * LeafEncoder::kScalarFloats], LeafEncoder::kScalarFloats,
                 row + LeafEncoder::kSpatialFloats);
   }
   return rows;
+}
+
+// `n` rows encoded `batch` at a time by `encode(first, count, spatial,
+// scalar)` into host buffers, joined.
+template <typename Encode>
+std::vector<float> rows_in_batches(int n, int batch, Encode&& encode) {
+  std::vector<float> spatial(size_t(n) * LeafEncoder::kSpatialFloats);
+  std::vector<float> scalar(size_t(n) * LeafEncoder::kScalarFloats);
+  for (int first = 0; first < n; first += batch) {
+    encode(first, std::min(batch, n - first), &spatial[size_t(first) * LeafEncoder::kSpatialFloats],
+           &scalar[size_t(first) * LeafEncoder::kScalarFloats]);
+  }
+  return joined_rows(spatial, scalar, size_t(n));
+}
+
+}  // namespace
+
+std::vector<float> device_leaf_rows(GpuHastyRollouts& gpu, int n, int batch) {
+  std::vector<uint32_t> tasks(static_cast<size_t>(n));
+  std::iota(tasks.begin(), tasks.end(), 0u);
+  return rows_in_batches(n, batch, [&](int first, int count, float* spatial, float* scalar) {
+    gpu.encode_leaves_to_host(&tasks[size_t(first)], count, spatial, scalar);
+  });
+}
+
+std::vector<float> host_leaf_rows(GpuHastyRollouts& gpu, const std::vector<CpuLeaf>& leaves,
+                                  const Dictionary& dict, int batch) {
+  std::vector<rollout_abi::LeafState> states;
+  states.reserve(leaves.size());
+  for (const CpuLeaf& leaf : leaves) states.push_back(leaf_state(leaf, dict));
+  return rows_in_batches(
+    int(leaves.size()), batch, [&](int first, int count, float* spatial, float* scalar) {
+      gpu.encode_host_leaves_to_host(&states[size_t(first)], count, spatial, scalar);
+    });
 }
 
 RowCheck compare_leaf_rows(const std::vector<float>& cpu, const std::vector<float>& gpu) {

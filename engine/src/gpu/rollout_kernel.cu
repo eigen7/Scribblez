@@ -1610,7 +1610,7 @@ __global__ void __launch_bounds__(kEncodeThreads)
                      float* scalar) {
   const int b = blockIdx.x;
   if (b >= count) return;
-  const LeafState& leaf = leaves[tasks[b]];
+  const LeafState& leaf = leaves[tasks ? tasks[b] : uint32_t(b)];
   __shared__ LeafSmem s;
   load_leaf(leaf, s);
   float* row = spatial + size_t(b) * kLeafSpatialPlanes * kSquares;
@@ -1618,6 +1618,33 @@ __global__ void __launch_bounds__(kEncodeThreads)
     row[idx] = plane_value(leaf, s, idx / kSquares, idx % kSquares);
   }
   write_leaf_scalars(leaf, s, scalar + size_t(b) * kLeafScalars);
+}
+
+// The leaf encoder over `count` states of `leaves`, row i from
+// leaves[tasks[i]], or from leaves[i] for null `tasks`. Synchronous.
+void launch_leaf_encoder(const LeafState* leaves, const uint32_t* tasks, int count, float* spatial,
+                         float* scalar) {
+  leaf_encode_kernel<<<count, kEncodeThreads>>>(leaves, tasks, count, spatial, scalar);
+  cuda_check(cudaGetLastError(), "leaf encoder launch");
+  cuda_check(cudaDeviceSynchronize(), "leaf encoder");
+}
+
+// `count` rows encoded by `encode` into device scratch, copied back to the
+// host buffers `spatial` and `scalar`.
+template <typename Encode>
+void rows_to_host(int count, float* spatial, float* scalar, Encode&& encode) {
+  const size_t spatial_bytes = sizeof(float) * size_t(count) * kLeafSpatialPlanes * kSquares;
+  const size_t scalar_bytes = sizeof(float) * size_t(count) * kLeafScalars;
+  float *d_spatial = nullptr, *d_scalar = nullptr;
+  cuda_check(cudaMalloc(&d_spatial, spatial_bytes), "malloc rows");
+  cuda_check(cudaMalloc(&d_scalar, scalar_bytes), "malloc scalars");
+  encode(d_spatial, d_scalar);
+  cuda_check(cudaMemcpy(spatial, d_spatial, spatial_bytes, cudaMemcpyDeviceToHost),
+             "rows download");
+  cuda_check(cudaMemcpy(scalar, d_scalar, scalar_bytes, cudaMemcpyDeviceToHost),
+             "scalars download");
+  cudaFree(d_spatial);
+  cudaFree(d_scalar);
 }
 
 }  // namespace
@@ -1645,6 +1672,7 @@ struct DeviceTables {
   DeviceBuffer<uint32_t> start_offsets;
   DeviceBuffer<SimMaps> maps;
   DeviceBuffer<uint32_t> leaf_tasks;  // the tasks encode_leaves was given
+  DeviceBuffer<LeafState> host_leaves;  // the states encode_host_leaves was given
   // complete_maps' tasks, their rows binned by start, the bins' slices with
   // each start's first, and the slices' partial sums
   DeviceBuffer<uint32_t> map_tasks;
@@ -1846,26 +1874,28 @@ void encode_leaves(DeviceTables* d, const uint32_t* tasks, int count, float* spa
                    float* scalar) {
   if (count <= 0) return;
   d->leaf_tasks.upload(tasks, size_t(count));
-  leaf_encode_kernel<<<count, kEncodeThreads>>>(d->leaves.data, d->leaf_tasks.data, count, spatial,
-                                                scalar);
-  cuda_check(cudaGetLastError(), "leaf encoder launch");
-  cuda_check(cudaDeviceSynchronize(), "leaf encoder");
+  launch_leaf_encoder(d->leaves.data, d->leaf_tasks.data, count, spatial, scalar);
+}
+
+void encode_host_leaves(DeviceTables* d, const LeafState* leaves, int count, float* spatial,
+                        float* scalar) {
+  if (count <= 0) return;
+  d->host_leaves.upload(leaves, size_t(count));
+  launch_leaf_encoder(d->host_leaves.data, nullptr, count, spatial, scalar);
 }
 
 void encode_leaves_to_host(DeviceTables* d, const uint32_t* tasks, int count, float* spatial,
                            float* scalar) {
-  const size_t spatial_bytes = sizeof(float) * size_t(count) * kLeafSpatialPlanes * kSquares;
-  const size_t scalar_bytes = sizeof(float) * size_t(count) * kLeafScalars;
-  float *d_spatial = nullptr, *d_scalar = nullptr;
-  cuda_check(cudaMalloc(&d_spatial, spatial_bytes), "malloc rows");
-  cuda_check(cudaMalloc(&d_scalar, scalar_bytes), "malloc scalars");
-  encode_leaves(d, tasks, count, d_spatial, d_scalar);
-  cuda_check(cudaMemcpy(spatial, d_spatial, spatial_bytes, cudaMemcpyDeviceToHost),
-             "rows download");
-  cuda_check(cudaMemcpy(scalar, d_scalar, scalar_bytes, cudaMemcpyDeviceToHost),
-             "scalars download");
-  cudaFree(d_spatial);
-  cudaFree(d_scalar);
+  rows_to_host(count, spatial, scalar, [&](float* d_spatial, float* d_scalar) {
+    encode_leaves(d, tasks, count, d_spatial, d_scalar);
+  });
+}
+
+void encode_host_leaves_to_host(DeviceTables* d, const LeafState* leaves, int count,
+                                float* spatial, float* scalar) {
+  rows_to_host(count, spatial, scalar, [&](float* d_spatial, float* d_scalar) {
+    encode_host_leaves(d, leaves, count, d_spatial, d_scalar);
+  });
 }
 
 }  // namespace scribblez::rollout_gpu

@@ -14,6 +14,7 @@
 
 #include <array>
 #include <functional>
+#include <span>
 #include <vector>
 
 namespace scribblez {
@@ -55,8 +56,15 @@ class RolloutValues {
   virtual BatchValues run(const RolloutBatch& batch) = 0;
   // The leaf's prediction at each of `leaves`, as the sims' leaf would be
   // valued there: the prior a sim's maps are read against when `leaves` are
-  // the sims' starts (agent/bob_subtree.h).
-  virtual std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) = 0;
+  // the sims' starts (agent/bob_subtree.h), or a candidate's value with no
+  // rollout at all (agent/leaf_bot.h).
+  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves);
+  // predict() over leaves held elsewhere, out[i] for *leaves[i]: what a
+  // caller that gathers several callers' leaves into one call passes.
+  virtual std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) = 0;
+  // The value alone of predict_leaves(): a backend may skip what it costs to
+  // bring the continuation heads back.
+  virtual std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves);
 };
 
 // A leaf network's prediction at a rollout's leaf, from player 0's side (the
@@ -87,7 +95,7 @@ class CpuRolloutValues : public RolloutValues {
   CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf);
 
   BatchValues run(const RolloutBatch& batch) override;
-  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override;
+  std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) override;
 
  private:
   const Dictionary& dict_;
