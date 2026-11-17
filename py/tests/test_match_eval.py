@@ -9,7 +9,7 @@ from scribblez import selfplay
 from scribblez.dashboard import api, db
 from scribblez.match_eval import harness, runner
 from scribblez.match_eval.harness import RoundResult
-from scribblez.paths import DONE_SUFFIX, POSITION_EVAL, TagPaths
+from scribblez.paths import DONE_SUFFIX, MATCH_RESULTS_DIR, POSITION_EVAL, TagPaths
 from scribblez.sim_evidence.slog_meta import game_metas, read_slog_bytes
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams
@@ -237,6 +237,31 @@ def test_run_delivers_the_result_and_marks_the_model_played(tmp_path, monkeypatc
     assert record["epoch"] == 20
     assert record["games"] == 8
     assert "positions" not in record  # the controller's column, not the worker's
+
+
+def test_a_workloads_own_files_go_out_before_the_result(tmp_path, monkeypatch):
+    """The result marks the generation done, so what the workload delivers
+    about the export must already be there."""
+    paths = TagPaths("t", POSITION_EVAL, mount_root=tmp_path)
+    inbox = paths.match_inbox_dir("w0")
+    inbox.mkdir(parents=True)
+    (inbox / paths.onnx_path(7).name).touch()
+    extra = tmp_path / "extra.json"
+    extra.write_text("{}")
+    order = []
+
+    class RecordingSink(LocalSink):
+        def deliver(self, src, rel):
+            order.append(rel)
+            return super().deliver(src, rel)
+
+    def fake_round(spec0, spec1, num_pairs, threads, seed, results_file, face_up_leaves):
+        return RoundResult([1.0] * num_pairs, wins=2 * num_pairs, draws=0, losses=0)
+
+    monkeypatch.setattr(runner.harness, "play_round", fake_round)
+    ctx = _ctx(tmp_path, sink=RecordingSink(paths.root), match_pairs=1)
+    runner.run(ctx, after_match=lambda c, model, gen: [(extra, f"extras/gen_{gen}.json")])
+    assert order == ["extras/gen_7.json", f"{MATCH_RESULTS_DIR}/gen_000007-w0.json"]
 
 
 def test_a_move_proposal_export_plays_as_ultimatebot(tmp_path):
