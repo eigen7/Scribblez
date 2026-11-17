@@ -66,12 +66,22 @@ std::vector<Move> generate_legal_exchanges(const MoveRequest& req);
 // them out without prompting the agents again, so self-play stops spending
 // compute on decided games. If the game is not over when the list runs out,
 // the loop resumes prompting.
+// A move the agent weighed and its value to the agent, in the agent's own
+// scale (LeafBot's: its leaf win value).
+struct CandidateValue {
+  Move move;
+  double value = 0;
+};
+
 struct MoveDecision {
   Move move;
   std::vector<Move> projected_remaining_moves;
   // The turn's search, where the request asked for it and the agent searched;
   // null otherwise.
   std::shared_ptr<TurnPool> pool;
+  // The moves the agent valued and their values, for an agent that values
+  // its candidates on one scale; empty otherwise.
+  std::vector<CandidateValue> values;
 
   // Implicit, so an agent without proof machinery can return a plain Move.
   MoveDecision(const Move& m) : move(m) {}

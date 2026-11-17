@@ -14,7 +14,9 @@ it from the same seeds.
 
 How an export plays is the workload's: run() takes a Player, the export's
 --player spec and the information condition the match is played under. The
-default, model_player, is position_eval's and the evidence trainer's.
+default, model_player, is position_eval's and the evidence trainer's. A
+workload may also deliver files of its own about each played export
+(AfterMatch), before the result that marks the generation done.
 """
 
 import json
@@ -68,6 +70,10 @@ def _model_player_spec(onnx_path: Path, params) -> str:
 # How an export plays: (ctx, the assigned export) -> (its --player spec,
 # whether the match is played with face-up leaves).
 Player = Callable[[WorkerContext, Path], tuple[str, bool]]
+# What a workload delivers about a played export besides the match:
+# (ctx, the export, its generation) -> [(a file, the path under data/ it is
+# delivered to)].
+AfterMatch = Callable[[WorkerContext, Path, int], list[tuple[Path, str]]]
 
 
 def model_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
@@ -136,9 +142,11 @@ def _deliver(ctx: WorkerContext, record: dict) -> int:
     return ctx.sink.deliver(path, f"{MATCH_RESULTS_DIR}/{path.name}")
 
 
-def run(ctx: WorkerContext, player: Player = model_player) -> int:
+def run(
+    ctx: WorkerContext, player: Player = model_player, after_match: AfterMatch | None = None
+) -> int:
     """The match_eval role entry point, the assigned exports playing as
-    `player` says."""
+    `player` says, and `after_match`'s files delivered with each result."""
     paths = ctx.tag_paths()
     stats_rec = WorkerStats(ctx)
     print(
@@ -161,7 +169,9 @@ def run(ctx: WorkerContext, player: Player = model_player) -> int:
             t0 = time.monotonic()
             outcome = _play_match(ctx, *player(ctx, model))
             record = match_record(ctx, gen, outcome, time.monotonic() - t0)
-            nbytes = _deliver(ctx, record)
+            extras = after_match(ctx, model, gen) if after_match else []
+            nbytes = sum(ctx.sink.deliver(path, rel) for path, rel in extras)
+            nbytes += _deliver(ctx, record)
             # Mark rather than delete: the generation must stay assigned until
             # the controller has the result (see dispatch.py).
             model.rename(model.with_name(model.name + DONE_SUFFIX))

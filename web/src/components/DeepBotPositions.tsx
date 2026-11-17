@@ -1,11 +1,11 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { TabActiveContext } from './TabActiveContext';
-import Board from './Board';
 import GenerationSlider from './GenerationSlider';
+import {
+  AnswerRow, BoardColumn, BoardView, MoveRef, PositionHeader, PositionPicker, READING_COLOR, Unseen, pct,
+  useKnownPositions,
+} from './KnownPositionView';
 import OppRackBelief from './OppRackBelief';
-import Rack from './Rack';
-import UnseenTiles from './UnseenTiles';
-import { PlacedTile, TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 import { RackBeliefChart } from '../lib/surveyTypes';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
@@ -18,20 +18,8 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // published the release (py/scribblez/deep_bot/release_positions.py). Clicking a
 // move draws it on the board.
 
-const NOOP = () => {};
-const DIM = 15;
-// How a pick reads against the position's answer (deep_bot/known_positions.py):
-// the reference move, static equity's move, any other.
-const READING_COLOR: Record<string, string> = { reference: '#2ca02c', equity: '#888888', other: '#e67e22' };
-const PREVIEW_TINT = 'rgba(58, 134, 212, 0.55)';
 const POLICY_COLOR = '#3a86d4';
 const REPLY_LABEL: Record<string, string> = { hasty: 'hasty reply', subtree: 'subtree reply' };
-
-interface MoveRef {
-  move: string; // GCG notation, the key the lists match on
-  display: string;
-  tiles: PlacedTile[];
-}
 
 interface Pick extends MoveRef {
   reading: string; // reference, equity or other
@@ -52,21 +40,7 @@ interface Policy {
   candidates: Candidate[];
 }
 
-interface Payload {
-  id: string;
-  title: string;
-  turn: number;
-  mover: number;
-  rack: string;
-  scores: [number, number];
-  bag_size: number;
-  opp_rack_count: number;
-  board: (string | null)[][];
-  bonuses: (string | null)[][];
-  tile_scores: Record<string, number>;
-  last_move: { text: string; squares: [number, number][] } | null;
-  reference: MoveRef[];
-  static_equity_best: MoveRef;
+interface Payload extends BoardView {
   release: number;
   picks: Record<string, Pick>;
   // Null for a release published before the trainer analyzed the positions.
@@ -79,41 +53,6 @@ interface Release {
   rows_trained: Record<string, number>;
   picked: boolean; // whether the measure role has recorded its picks
 }
-
-interface KnownPosition {
-  id: string;
-  title: string;
-}
-
-function rackTiles(rack: string, tileScores: Record<string, number>): TileInfo[] {
-  return [...rack].map((ch) =>
-    ch === '?' ? { letter: '', score: 0, isBlank: true } : { letter: ch, score: tileScores[ch] ?? 0 },
-  );
-}
-
-// The rack slots a move's tiles come from (a blank's slot is '?'), so the rack
-// shows the leave of the move on the board.
-function usedRackIndices(rack: string, move: MoveRef | null): Set<number> {
-  const used = new Set<number>();
-  for (const t of move?.tiles ?? []) {
-    const want = t.isBlank ? '?' : t.letter;
-    const slot = [...rack].findIndex((ch, i) => ch === want && !used.has(i));
-    if (slot >= 0) used.add(slot);
-  }
-  return used;
-}
-
-function previewTints(move: MoveRef | null) {
-  const grid: ({ color: string } | null)[][] = Array.from({ length: DIM }, () =>
-    Array.from({ length: DIM }, () => null),
-  );
-  for (const t of move?.tiles ?? []) grid[t.row][t.col] = { color: PREVIEW_TINT };
-  return grid;
-}
-
-// A probability as a percentage: one decimal, or two significant figures
-// below 1%, so the policy's long tail still reads apart from zero.
-const pct = (p: number) => `${p >= 0.01 ? (100 * p).toFixed(1) : (100 * p).toPrecision(2)}%`;
 
 // What a move is to this position: the answer, static equity's choice, a pick.
 function moveTags(p: Payload, move: string): string[] {
@@ -131,25 +70,6 @@ function policyText(byMove: Map<string, Candidate> | null, move: string): string
   return c ? `policy #${c.policy_rank} · ${pct(c.prob)}` : 'not a policy candidate';
 }
 
-function AnswerRow({
-  label, move, color, policy, selected, onSelect,
-}: {
-  label: string;
-  move: MoveRef;
-  color?: string;
-  policy: string;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button className={`dbp-answer${selected ? ' selected' : ''}`} onClick={onSelect}>
-      <span className="dbp-answer-label">{label}</span>
-      <span className="dbp-answer-move" style={color ? { color } : undefined}>{move.display}</span>
-      <span className="dbp-answer-policy">{policy}</span>
-    </button>
-  );
-}
-
 function Answers({
   p, byMove, selected, onSelect,
 }: {
@@ -164,15 +84,15 @@ function Answers({
       <div className="dbp-panel-title">The position&apos;s answer and release {p.release}&apos;s picks</div>
       {p.reference.map((r) => (
         <AnswerRow key={`ref-${r.move}`} label="reference" move={r} color={READING_COLOR.reference}
-          policy={policyText(byMove, r.move)} selected={selected === r.move} onSelect={() => onSelect(r.move)} />
+          note={policyText(byMove, r.move)} selected={selected === r.move} onSelect={() => onSelect(r.move)} />
       ))}
-      <AnswerRow label="static equity" move={p.static_equity_best} policy={policyText(byMove, p.static_equity_best.move)}
+      <AnswerRow label="static equity" move={p.static_equity_best} note={policyText(byMove, p.static_equity_best.move)}
         selected={selected === p.static_equity_best.move} onSelect={() => onSelect(p.static_equity_best.move)} />
       {replies.map((reply) => {
         const pick = p.picks[reply];
         return (
           <AnswerRow key={reply} label={`pick · ${REPLY_LABEL[reply] ?? reply}`} move={pick}
-            color={READING_COLOR[pick.reading] ?? READING_COLOR.other} policy={policyText(byMove, pick.move)}
+            color={READING_COLOR[pick.reading] ?? READING_COLOR.other} note={policyText(byMove, pick.move)}
             selected={selected === pick.move} onSelect={() => onSelect(pick.move)} />
         );
       })}
@@ -229,69 +149,6 @@ function PolicyTable({
   );
 }
 
-function BoardColumn({ p, preview }: { p: Payload; preview: MoveRef | null }) {
-  const lastMoveCells = useMemo(
-    () => new Set((p.last_move?.squares ?? []).map(([r, c]) => `${r},${c}`)),
-    [p.last_move],
-  );
-  return (
-    <div className="dbp-board">
-      <Rack
-        tiles={Array.from({ length: p.opp_rack_count }, () => ({ letter: '?', score: 0, isUnknown: true }))}
-        usedIndices={new Set()}
-        label={`Opponent (Player ${2 - p.mover}) · ${p.scores[1 - p.mover]} points`}
-        interactive={false}
-        hideScoreForQuestion
-      />
-      <Board
-        board={p.board}
-        bonuses={p.bonuses}
-        candidateTiles={preview?.tiles ?? []}
-        tileScores={p.tile_scores}
-        cursorRow={null}
-        cursorCol={null}
-        cursorDir={null}
-        interactive={false}
-        onCellClick={NOOP}
-        onCellDrop={NOOP}
-        cellHighlights={previewTints(preview)}
-        lastMoveCells={lastMoveCells}
-      />
-      <div className="dbp-note">
-        {preview ? `On the board: ${preview.display}` : 'Click a move to draw it on the board.'}
-        {p.last_move && ` · their last move: ${p.last_move.text}`}
-      </div>
-      <Rack
-        tiles={rackTiles(p.rack, p.tile_scores)}
-        usedIndices={usedRackIndices(p.rack, preview)}
-        label={`To move (Player ${p.mover + 1}) · ${p.scores[p.mover]} points`}
-        interactive={false}
-        onTileClick={NOOP}
-      />
-    </div>
-  );
-}
-
-function Unseen({ p }: { p: Payload }) {
-  return (
-    <UnseenTiles
-      alsoSeen=""
-      state={{
-        type: 'state',
-        board: p.board,
-        bonuses: p.bonuses,
-        rack: rackTiles(p.rack, p.tile_scores).map((t) => ({ ...t, letter: t.isBlank ? '?' : t.letter })),
-        scores: p.scores,
-        player_names: ['Player 1', 'Player 2'],
-        bag_count: p.bag_size,
-        opponent_rack_count: p.opp_rack_count,
-        your_turn: false,
-        game_over: false,
-      }}
-    />
-  );
-}
-
 // Every move the position's lists name, by notation, for the board preview.
 function namedMoves(p: Payload): Map<string, MoveRef> {
   const out = new Map<string, MoveRef>();
@@ -310,14 +167,13 @@ function PositionView({ p, modelPending }: { p: Payload; modelPending: boolean }
   const preview = shownMove != null ? moves.get(shownMove)! : null;
   return (
     <>
-      <div className="dbp-header">
-        <b>{p.title}</b> · turn {p.turn} · Player {p.mover + 1} to move · {p.scores[0]}–{p.scores[1]} · bag {p.bag_size}
+      <PositionHeader p={p}>
         {modelPending && (
           <span className="dbp-pending">
             · <span className="scz-spinner" style={{ verticalAlign: 'middle' }} /> loading release…
           </span>
         )}
-      </div>
+      </PositionHeader>
       <div className="lane-main">
         <BoardColumn p={p} preview={preview} />
         <div className="dbp-side">
@@ -337,23 +193,6 @@ function PositionView({ p, modelPending }: { p: Payload; modelPending: boolean }
       )}
     </>
   );
-}
-
-function useKnownPositions(active: boolean): KnownPosition[] {
-  const [positions, setPositions] = useState<KnownPosition[]>([]);
-  // Retry until they load: at startup the data API can take ~10s to bind.
-  useEffect(() => {
-    if (positions.length > 0 || !active) return;
-    let cancelled = false;
-    const tryFetch = () =>
-      getJSON('/api/deep_bot/positions')
-        .then((d) => { if (!cancelled && d.positions.length) setPositions(d.positions); })
-        .catch(() => {});
-    tryFetch();
-    const id = setInterval(tryFetch, 3000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [positions.length, active]);
-  return positions;
 }
 
 const sameReleases = (a: Release[], b: Release[]) =>
@@ -430,18 +269,7 @@ export default function DeepBotPositions({ task, tag }: { task: string; tag: str
           label={label}
         />
       </div>
-      <div className="lane-controls-row">
-        <label>
-          Position{' '}
-          <button className="arrow" onClick={() => setPosIdx((i) => Math.max(0, i - 1))}>◀</button>{' '}
-          <select value={posIdx} onChange={(e) => setPosIdx(Number(e.target.value))}>
-            {positions.map((p, i) => (
-              <option key={p.id} value={i}>{p.id} — {p.title}</option>
-            ))}
-          </select>{' '}
-          <button className="arrow" onClick={() => setPosIdx((i) => Math.min(positions.length - 1, i + 1))}>▶</button>
-        </label>
-      </div>
+      <PositionPicker positions={positions} index={posIdx} onChange={setPosIdx} />
       {error && <div className="dbp-error">{error}</div>}
       {current ? (
         <PositionView key={current.id} p={current} modelPending={modelPending} />

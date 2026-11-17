@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 namespace scribblez {
 
@@ -108,12 +109,14 @@ RecordedPick pick_at_recorded_turn(Agent& agent, const GameLog& g, int turn,
                           state.scores[1 - mover],
                           state.bag_size};
     if (k == turn) {
+      MoveDecision decision = agent.make_move(req);
       return {.board = board,
               .rack = state.racks[mover],
               .score = state.scores[mover],
               .opp_score = state.scores[1 - mover],
               .bag = state.bag_size,
-              .pick = agent.make_move(req).move};
+              .pick = decision.move,
+              .values = std::move(decision.values)};
     }
     if (mover == seat) agent.observe_turn(req);
     TurnRecord rec = g.records[k];

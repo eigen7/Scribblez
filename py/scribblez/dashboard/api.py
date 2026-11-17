@@ -37,6 +37,7 @@ from scribblez import params as params_mod
 from scribblez.dashboard import (
     db,
     deep_bot_api,
+    deep_bot_leaf_eval_api,
     figure_delta,
     master_api,
     plots,
@@ -941,6 +942,7 @@ def make_app(
             (r"/api/position_eval/alt_leave", PositionEvalAltLeaveHandler),
             *trajectories_api.ROUTES,
             *deep_bot_api.ROUTES,
+            *deep_bot_leaf_eval_api.ROUTES,
         ],
         mount_root=mount_root,
         worker_manager=worker_manager,

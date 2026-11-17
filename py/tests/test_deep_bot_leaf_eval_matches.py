@@ -2,12 +2,15 @@
 draw opponent leaves from is pinned at task creation and staged for a remote
 slot, and each assigned export plays as LeafBot under hidden leaves."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from cloud.sinks import LocalSink
 from scribblez import params
+from scribblez.deep_bot import known_positions
+from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.match_eval import runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.paths import TagPaths
@@ -16,6 +19,7 @@ from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot_leaf_eval import (
     LEAVE_INFERENCE,
     LEAVE_INPUT,
+    POSITIONS_INPUT_DIR,
     SPEC,
     DeepBotLeafEvalParams,
 )
@@ -61,11 +65,15 @@ def test_without_matches_no_leave_model_is_needed(tmp_path):
     assert deep_bot_leaf_eval.finalize(SPEC, _leaf_tag(tmp_path), off) == off
 
 
-def test_the_pinned_leave_model_is_the_match_slots_input(tmp_path):
+def test_the_pinned_leave_model_and_the_known_positions_are_the_match_slots_inputs(tmp_path):
     """A remote slot's mount has none of the exports, only the staged copy."""
     p = replace(PARAMS, match_leave_inference_generation=3)
     expected = TagPaths(LEAVE_TAG, LEAVE_INFERENCE, tmp_path).onnx_path(3)
-    assert deep_bot_leaf_eval.inputs(p, tmp_path) == {LEAVE_INPUT: expected}
+    got = deep_bot_leaf_eval.inputs(p, tmp_path)
+    assert got[LEAVE_INPUT] == expected
+    staged = {rel: src for rel, src in got.items() if rel != LEAVE_INPUT}
+    assert set(staged.values()) == set(known_positions.files())
+    assert all(rel.startswith(POSITIONS_INPUT_DIR + "/") for rel in staged)
 
 
 def _ctx(mount: Path, sink=None, **overrides) -> WorkerContext:
@@ -108,13 +116,25 @@ def test_the_match_role_plays_the_assigned_export_as_leafbot(tmp_path, monkeypat
         played.append((spec0, spec1, num_pairs, face_up_leaves))
         return RoundResult([0.5] * num_pairs, wins=num_pairs, draws=0, losses=num_pairs)
 
+    analyzed = []
+
+    def fake_analyze(positions, model_path, leave, opp_leaves, candidates, work, threads):
+        analyzed.append((len(positions), model_path, opp_leaves, candidates))
+        return {"candidates": candidates, "positions": {}}
+
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
+    monkeypatch.setattr(deep_bot_leaf_eval.leaf_positions, "analyze", fake_analyze)
     ctx = _ctx(tmp_path, sink=LocalSink(paths.root), match_pairs=3)
     assert deep_bot_leaf_eval.run_match(ctx) == 0
     ((spec0, spec1, pairs, face_up),) = played
     assert spec0.startswith(f"--type=leafbot-endgame --leaf-model={model} ")
     assert (spec1, pairs, face_up) == ("--type=hastybot-endgame", 3, False)
     assert [p.name for p in paths.match_results_dir.glob("*.json")] == ["gen_000020-w0.json"]
+    # The same export analyzed the known positions, delivered apart from the
+    # results the controller ingests.
+    assert analyzed == [(len(known_positions.load()), model, 16, 10)]
+    delivered = paths.data_dir / leaf_positions.rel(20)
+    assert json.loads(delivered.read_text())["generation"] == 20
 
 
 def test_a_match_slot_needs_its_measured_gpu_memory():

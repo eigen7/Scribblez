@@ -13,8 +13,10 @@
 // line per position, in the file's order: its "slog", "game" and "turn", the
 // mover's "rack" and the "bag" there, the "pick" in the notation of the
 // reports (data/gcg_writer.h's move_notation), and the "seconds" the agent
-// took. One agent plays every position, one at a time, on the process's
-// threads.
+// took; for an agent that values its candidates (MoveDecision::values),
+// "values" too: each move's "move", its "value" and its static "equity_rank"
+// at the position (1 for HastyBot's move). One agent plays every position,
+// one at a time, on the process's threads.
 
 #include "agent/player_factory.h"
 #include "arena/recorded_turn.h"
@@ -23,6 +25,7 @@
 #include "game/game_log.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "sim/sim_runner.h"
 #include "util/exception.h"
 #include "util/misc.h"
 #include "util/seed_producer.h"
@@ -36,6 +39,7 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -71,11 +75,32 @@ void validate(const Options& opt) {
   if (opt.threads < 1) throw util::CleanException("--threads must be >= 1");
 }
 
-json::object pick_json(const RecordedTurnRef& a, const RecordedPick& p, double seconds) {
-  return {{"slog", a.slog},    {"game", a.game},
-          {"turn", a.turn},    {"rack", p.rack.to_string()},
-          {"bag", p.bag},      {"pick", move_notation(p.board, p.pick)},
-          {"seconds", seconds}};
+// Each valued move of `p` with its static equity rank at the position.
+json::array values_json(const RecordedPick& p, const Dictionary& dict) {
+  const Rack hidden;
+  const MoveRequest req{p.board, dict, p.rack, hidden, p.score, p.opp_score, p.bag};
+  std::map<std::string, int> rank;
+  const std::vector<Move> ranked = equity_top_k(req, std::numeric_limits<int>::max());
+  for (size_t i = 0; i < ranked.size(); ++i)
+    rank.emplace(move_notation(p.board, ranked[i]), int(i) + 1);
+  json::array out;
+  for (const CandidateValue& v : p.values) {
+    const std::string move = move_notation(p.board, v.move);
+    const auto r = rank.find(move);
+    out.push_back(json::object{
+      {"move", move}, {"value", v.value}, {"equity_rank", r == rank.end() ? 0 : r->second}});
+  }
+  return out;
+}
+
+json::object pick_json(const RecordedTurnRef& a, const RecordedPick& p, double seconds,
+                       const Dictionary& dict) {
+  json::object out{{"slog", a.slog},    {"game", a.game},
+                   {"turn", a.turn},    {"rack", p.rack.to_string()},
+                   {"bag", p.bag},      {"pick", move_notation(p.board, p.pick)},
+                   {"seconds", seconds}};
+  if (!p.values.empty()) out["values"] = values_json(p, dict);
+  return out;
 }
 
 // `agent`'s pick at `a`, a position of the loaded .slog `buf`, as its line.
@@ -86,7 +111,7 @@ json::object ask(Agent& agent, const RecordedTurnRef& a, const std::vector<char>
   const auto began = std::chrono::steady_clock::now();
   const RecordedPick pick = pick_at_recorded_turn(agent, g, a.turn, dict);
   const std::chrono::duration<double> took = std::chrono::steady_clock::now() - began;
-  return pick_json(a, pick, took.count());
+  return pick_json(a, pick, took.count(), dict);
 }
 
 void run(const Options& opt) {
