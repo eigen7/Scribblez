@@ -4,10 +4,15 @@
 #include "lexicon/hasty_equity.h"
 #include "nn/shared_registry.h"
 #include "nn/trt_util.h"
+#include "util/caller_led_batcher.h"
 #include "util/exception.h"
 
+#include <cstddef>
+#include <exception>
 #include <mutex>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace scribblez {
 
@@ -15,27 +20,101 @@ namespace {
 
 constexpr const char* kLeafFormatKey = "leaf_eval_format_version";
 
-// Serializes a backend's run(): GpuRolloutValues is not thread-safe, and one
-// DeepBot turn already fills a launch with ~10K rollouts, so concurrent games
-// queue rather than batch together.
-class LockedRolloutValues : public RolloutValues {
+// What game threads share of one backend. GpuRolloutValues is not
+// thread-safe, so its calls are serialized. One DeepBot turn already fills a
+// rollout launch with ~10K rollouts, so concurrent games' run() calls queue
+// rather than batch together. A leaf harness's turn values a few hundred
+// leaves, too few to fill the GPU, so concurrent games' predictions are
+// gathered into one call (util::CallerLedBatcher), one gathering per kind.
+class SharedRolloutValues : public RolloutValues {
  public:
-  explicit LockedRolloutValues(std::unique_ptr<RolloutValues> inner) : inner_(std::move(inner)) {}
+  explicit SharedRolloutValues(std::unique_ptr<RolloutValues> inner);
 
-  BatchValues run(const RolloutBatch& batch) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return inner_->run(batch);
-  }
-
-  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return inner_->predict(leaves);
-  }
+  BatchValues run(const RolloutBatch& batch) override;
+  std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) override;
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
 
  private:
+  // One caller's leaves, and its outputs or the exception that failed them.
+  template <typename Out>
+  struct Request {
+    std::span<const CpuLeaf* const> leaves;
+    std::vector<Out> out{};
+    std::exception_ptr error = nullptr;
+  };
+  template <typename Out>
+  using Batcher = util::CallerLedBatcher<Request<Out>>;
+
+  // Submits `leaves` to `batcher`; returns their outputs or rethrows.
+  template <typename Out>
+  static std::vector<Out> submit(Batcher<Out>& batcher, std::span<const CpuLeaf* const> leaves);
+
+  // Calls `predict` once over every request's leaves, under the backend's
+  // lock, and hands each request its slice. Never throws: a failure is
+  // recorded on every request of the pack.
+  template <typename Out, typename Predict>
+  void serve(std::span<Request<Out>* const> pack, Predict&& predict);
+
   std::unique_ptr<RolloutValues> inner_;
-  std::mutex mutex_;
+  std::mutex mutex_;  // the backend, one call at a time
+  Batcher<LeafPrediction> predictions_;
+  Batcher<Wld> values_;
 };
+
+SharedRolloutValues::SharedRolloutValues(std::unique_ptr<RolloutValues> inner)
+    : inner_(std::move(inner)),
+      predictions_([this](std::span<Request<LeafPrediction>* const> pack) {
+        serve(pack,
+              [this](std::span<const CpuLeaf* const> all) { return inner_->predict_leaves(all); });
+      }),
+      values_([this](std::span<Request<Wld>* const> pack) {
+        serve(pack,
+              [this](std::span<const CpuLeaf* const> all) { return inner_->predict_wld(all); });
+      }) {}
+
+BatchValues SharedRolloutValues::run(const RolloutBatch& batch) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return inner_->run(batch);
+}
+
+std::vector<LeafPrediction> SharedRolloutValues::predict_leaves(
+  std::span<const CpuLeaf* const> leaves) {
+  return submit(predictions_, leaves);
+}
+
+std::vector<Wld> SharedRolloutValues::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  return submit(values_, leaves);
+}
+
+template <typename Out>
+std::vector<Out> SharedRolloutValues::submit(Batcher<Out>& batcher,
+                                             std::span<const CpuLeaf* const> leaves) {
+  Request<Out> req{leaves};
+  batcher.submit(req);
+  if (req.error) std::rethrow_exception(req.error);
+  return std::move(req.out);
+}
+
+template <typename Out, typename Predict>
+void SharedRolloutValues::serve(std::span<Request<Out>* const> pack, Predict&& predict) {
+  std::vector<const CpuLeaf*> all;
+  for (const Request<Out>* r : pack) all.insert(all.end(), r->leaves.begin(), r->leaves.end());
+  try {
+    std::vector<Out> out;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      out = predict(all);
+    }
+    auto next = out.begin();
+    for (Request<Out>* r : pack) {
+      r->out.assign(next, next + std::ptrdiff_t(r->leaves.size()));
+      next += std::ptrdiff_t(r->leaves.size());
+    }
+  } catch (...) {
+    const std::exception_ptr error = std::current_exception();
+    for (Request<Out>* r : pack) r->error = error;
+  }
+}
 
 }  // namespace
 
@@ -83,7 +162,7 @@ std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict) cons
 std::shared_ptr<RolloutValues> RolloutBackend::shared(const Dictionary& dict) const {
   static nn::SharedRegistry<RolloutBackend, RolloutValues> registry;
   return registry.get_or_create(*this,
-                                [&] { return std::make_shared<LockedRolloutValues>(make(dict)); });
+                                [&] { return std::make_shared<SharedRolloutValues>(make(dict)); });
 }
 
 }  // namespace scribblez

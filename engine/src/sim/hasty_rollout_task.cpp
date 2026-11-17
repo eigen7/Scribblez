@@ -90,6 +90,17 @@ void board_abi(const Board& board, const Dictionary& dict, uint8_t* squares,
   }
 }
 
+rollout_abi::LeafState leaf_state(const CpuLeaf& leaf, const Dictionary& dict) {
+  rollout_abi::LeafState s{};
+  board_abi(leaf.board, dict, s.squares, s.cross_mask);
+  for (int p = 0; p < 2; ++p) {
+    for (int k = 0; k < TILE_KINDS; ++k)
+      s.leaves[p][k] = uint8_t(leaf.leaves[p].count(Tile::of(k)));
+    s.scores[p] = leaf.scores[p];
+  }
+  return s;
+}
+
 PositionAbi to_abi(const RolloutStart& start, const Dictionary& dict) {
   PositionAbi abi;
   board_abi(start.board, dict, abi.squares, abi.cross_mask);

@@ -132,6 +132,10 @@ class NeuralNetBase {
   // (device_ptr()) on this device: no host-to-device copy. The writer must
   // have synchronized before the call.
   void predict_device_inputs(int num_rows);
+  // predict_device_inputs() copying back only the output `only_output`: for a
+  // caller that reads one head of a model with several. The others' host
+  // buffers keep their earlier contents.
+  void predict_device_inputs(int num_rows, const char* only_output);
 
   // The host buffer bound to `name`; NeuralNet<Spec>::host() is the typed way
   // in. Null for an aux output without params.copy_aux.
@@ -144,7 +148,9 @@ class NeuralNetBase {
   NeuralNetBase(const NeuralNetParamsBase& params, const RuntimeSpec& spec);
 
  private:
-  void run(int num_rows, bool copy_inputs);
+  // Copies back every output with a host buffer, or only `only_output` when
+  // it is not null.
+  void run(int num_rows, bool copy_inputs, const char* only_output = nullptr);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

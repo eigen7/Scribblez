@@ -273,6 +273,29 @@ TEST(GpuRolloutKernel, DeviceLeafRowsMatchTheCpuEncoder) {
   EXPECT_EQ(check.rows_identical, check.checked) << check.first_diffs;
 }
 
+// The same encoder fed states built on the host rather than left by a run:
+// the rollouts' leaves early and late in a game, and the starts themselves
+// (the candidates' post-move positions) with each rollout's known leave.
+TEST(GpuRolloutKernel, HostLeafRowsMatchTheCpuEncoder) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  std::vector<CpuLeaf> leaves;
+  for (const int plies : {2, 16}) {
+    const RolloutBatch batch = batch_at(plies);
+    std::vector<CpuLeaf> rollout_leaves(batch.tasks.size());
+    run_hasty_rollouts_cpu(batch, nwl23(), &rollout_leaves);
+    leaves.insert(leaves.end(), rollout_leaves.begin(), rollout_leaves.end());
+    for (const rollout_abi::RolloutTask& task : batch.tasks) {
+      const RolloutStart& start = batch.starts[task.position];
+      const std::vector<Rack>& opp = batch.groups[start.group].opp_leaves;
+      const Rack opp_leave = task.rollout < opp.size() ? opp[task.rollout] : Rack{};
+      leaves.push_back({start.board, {start.leave, opp_leave}, {start.my_score, start.opp_score}});
+    }
+  }
+  const RowCheck check = compare_leaf_rows(cpu_leaf_rows(leaves, nwl23()),
+                                           host_leaf_rows(gpu(), leaves, nwl23(), /*batch=*/64));
+  EXPECT_EQ(check.rows_identical, check.checked) << check.first_diffs;
+}
+
 // Every candidate of positions from the empty board (whose apply rebuilds
 // every cache entry on the CPU) to late in a game, in both of the board's
 // frames. Ply 0 is the empty board with a rack holding a blank.

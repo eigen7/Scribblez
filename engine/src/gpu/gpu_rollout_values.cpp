@@ -6,6 +6,7 @@
 #include "nn/onnx_metadata.h"
 #include "util/exception.h"
 #include "util/io.h"
+#include "util/work_pool.h"
 
 #include <algorithm>
 #include <chrono>
@@ -55,22 +56,40 @@ GpuRolloutValues::GpuRolloutValues(const Dictionary& dict, const HastyEquity& eq
   net_.load();
 }
 
-std::vector<LeafPrediction> GpuRolloutValues::predict(const std::vector<CpuLeaf>& leaves) {
-  std::vector<LeafPrediction> out(leaves.size());
-  std::vector<float> row(LeafEvalInputEncoder::kInputFloats);
+template <typename Read>
+void GpuRolloutValues::predict_in_chunks(std::span<const CpuLeaf* const> leaves,
+                                         const char* only_output, Read&& read) {
+  std::vector<rollout_abi::LeafState> states(leaves.size());
+  util::parallel_for(leaves.size(), [&](size_t i) { states[i] = leaf_state(*leaves[i], dict_); });
   const int n = int(leaves.size());
   for (int first = 0; first < n; first += net_.max_rows()) {
     const int count = std::min(net_.max_rows(), n - first);
-    for (int i = 0; i < count; ++i) {
-      const CpuLeaf& leaf = leaves[size_t(first + i)];
-      LeafEvalInputEncoder::encode(
-        {&leaf.board, leaf.leaves[0], leaf.leaves[1], leaf.scores[0] - leaf.scores[1]}, dict_,
-        leave_values_, row.data());
-      nn::stage_board_row(net_, row.data(), i);
-    }
-    net_.predict(count);
-    for (int i = 0; i < count; ++i) out[size_t(first + i)] = host_prediction(i);
+    rollouts_.encode_host_leaves(&states[size_t(first)], count,
+                                 static_cast<float*>(net_.device_ptr(nn::SpatialInput::kName)),
+                                 static_cast<float*>(net_.device_ptr(nn::ScalarInput::kName)));
+    if (only_output)
+      net_.predict_device_inputs(count, only_output);
+    else
+      net_.predict_device_inputs(count);
+    read(first, count);
   }
+}
+
+std::vector<LeafPrediction> GpuRolloutValues::predict_leaves(
+  std::span<const CpuLeaf* const> leaves) {
+  std::vector<LeafPrediction> out(leaves.size());
+  predict_in_chunks(leaves, nullptr, [&](int first, int count) {
+    for (int i = 0; i < count; ++i) out[size_t(first + i)] = host_prediction(i);
+  });
+  return out;
+}
+
+std::vector<Wld> GpuRolloutValues::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  std::vector<Wld> out(leaves.size());
+  predict_in_chunks(leaves, nn::WldOutput::kName, [&](int first, int count) {
+    const float* logits = net_.host<nn::WldOutput>();
+    for (int i = 0; i < count; ++i) out[size_t(first + i)] = wld_from_logits(logits + 3 * i);
+  });
   return out;
 }
 

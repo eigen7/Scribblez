@@ -43,9 +43,11 @@ struct RolloutBackend {
   PoolModel leaf_identity() const;
   // The process-wide backend for these settings, shared by every caller that
   // asks while one holds it (SharedRegistry): the GPU one carries a leaf
-  // engine and the lexicon tables on the device. Its run() is serialized, so
-  // game threads may call it concurrently. `dict` is not part of the key, so
-  // every caller must pass the same (process-lifetime) dictionary.
+  // engine and the lexicon tables on the device. Game threads may call it
+  // concurrently: its run() calls are serialized, and its predictions of
+  // concurrent callers are gathered into one network call. `dict` is not part
+  // of the key, so every caller must pass the same (process-lifetime)
+  // dictionary.
   std::shared_ptr<RolloutValues> shared(const Dictionary& dict) const;
 
   // An unshared backend. Factory-internal, and for a tool that runs one backend

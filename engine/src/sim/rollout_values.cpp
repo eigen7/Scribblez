@@ -57,9 +57,24 @@ CpuLeafFn synthetic_leaf() {
 CpuRolloutValues::CpuRolloutValues(const Dictionary& dict, CpuLeafFn leaf)
     : dict_(dict), leaf_(std::move(leaf)) {}
 
-std::vector<LeafPrediction> CpuRolloutValues::predict(const std::vector<CpuLeaf>& leaves) {
+std::vector<LeafPrediction> RolloutValues::predict(const std::vector<CpuLeaf>& leaves) {
+  std::vector<const CpuLeaf*> ptrs;
+  ptrs.reserve(leaves.size());
+  for (const CpuLeaf& leaf : leaves) ptrs.push_back(&leaf);
+  return predict_leaves(ptrs);
+}
+
+std::vector<Wld> RolloutValues::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  const std::vector<LeafPrediction> p = predict_leaves(leaves);
+  std::vector<Wld> out(p.size());
+  for (size_t i = 0; i < p.size(); ++i) out[i] = p[i].wld;
+  return out;
+}
+
+std::vector<LeafPrediction> CpuRolloutValues::predict_leaves(
+  std::span<const CpuLeaf* const> leaves) {
   std::vector<LeafPrediction> out(leaves.size());
-  util::parallel_for(leaves.size(), [&](size_t i) { out[i] = leaf_(leaves[i]); });
+  util::parallel_for(leaves.size(), [&](size_t i) { out[i] = leaf_(*leaves[i]); });
   return out;
 }
 

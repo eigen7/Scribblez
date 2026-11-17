@@ -61,6 +61,11 @@ std::vector<float> cpu_leaf_rows(const std::vector<CpuLeaf>& leaves, const Dicti
 // `batch` per call, laid out as the CPU writes them.
 std::vector<float> device_leaf_rows(GpuHastyRollouts& gpu, int n, int batch);
 
+// The device encoder's rows for `leaves` built on the host (leaf_state),
+// `batch` at a time, copied back: GpuHastyRollouts::encode_host_leaves.
+std::vector<float> host_leaf_rows(GpuHastyRollouts& gpu, const std::vector<CpuLeaf>& leaves,
+                                  const Dictionary& dict, int batch);
+
 struct RowCheck {
   int checked = 0, rows_identical = 0;
   float max_abs_diff = 0;

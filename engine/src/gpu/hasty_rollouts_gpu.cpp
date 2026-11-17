@@ -300,6 +300,16 @@ void GpuHastyRollouts::encode_leaves_to_host(const uint32_t* tasks, int count, f
   rollout_gpu::encode_leaves_to_host(impl_->tables, tasks, count, spatial, scalar);
 }
 
+void GpuHastyRollouts::encode_host_leaves(const rollout_abi::LeafState* leaves, int count,
+                                          float* spatial, float* scalar) {
+  rollout_gpu::encode_host_leaves(impl_->tables, leaves, count, spatial, scalar);
+}
+
+void GpuHastyRollouts::encode_host_leaves_to_host(const rollout_abi::LeafState* leaves, int count,
+                                                  float* spatial, float* scalar) {
+  rollout_gpu::encode_host_leaves_to_host(impl_->tables, leaves, count, spatial, scalar);
+}
+
 std::vector<GpuHastyRollouts::CountValue> GpuHastyRollouts::last_counts() const {
   std::vector<CountValue> out;
   for (int c = 0; c < rollout_gpu::kCounts; ++c) {

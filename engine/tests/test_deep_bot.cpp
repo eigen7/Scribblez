@@ -38,6 +38,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -100,8 +101,8 @@ class FavouringValues : public RolloutValues {
       if (same_tiles(batch.starts[batch.tasks[k].position].board)) out.outcomes[k].wld = {1, 0, 0};
     return out;
   }
-  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
-    return inner_.predict(leaves);
+  std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) override {
+    return inner_.predict_leaves(leaves);
   }
 
  private:
@@ -128,8 +129,8 @@ class CountingValues : public RolloutValues {
       ++(batch.starts[t.position].board.num_tiles() >= emptied_ ? after_emptying : after_rest);
     return inner_.run(batch);
   }
-  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override {
-    return inner_.predict(leaves);
+  std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) override {
+    return inner_.predict_leaves(leaves);
   }
 
   int after_emptying = 0;

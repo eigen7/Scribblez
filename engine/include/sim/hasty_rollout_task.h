@@ -106,6 +106,11 @@ struct CpuLeaf {
   std::array<int, 2> scores;
 };
 
+// `leaf` as the device's leaf encoder reads it: the board's glyphs and
+// cross-check masks (board_abi), both leaves and the scores. The fields the
+// encoder does not read (racks, bag, game over) are zero.
+rollout_abi::LeafState leaf_state(const CpuLeaf& leaf, const Dictionary& dict);
+
 // Runs every task of the batch in parallel, calling `each(k, result, leaf,
 // fates)` for task k from the thread that ran it, `fates` being what the
 // rollout settled of its maps (rollout_abi::RolloutFates).

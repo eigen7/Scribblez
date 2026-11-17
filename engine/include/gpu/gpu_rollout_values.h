@@ -15,6 +15,7 @@
 #include "sim/rollout_values.h"
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,8 @@ class GpuRolloutValues : public RolloutValues {
   BatchValues run(const RolloutBatch& batch) override;
   // The leaves encoded on the host (encoding/leaf_eval_input_encoder.h) and
   // staged from there, the network's rows at a time.
-  std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves) override;
+  std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) override;
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
 
   // Seconds in the rollout kernel (with the batch's conversion and
   // transfers) and in the leaf (encoding and the network), and the leaves
@@ -62,6 +64,12 @@ class GpuRolloutValues : public RolloutValues {
   rollout_abi::LeafHeadRows device_heads() const;
   // The network's prediction in row `row` of its host output buffers.
   LeafPrediction host_prediction(int row);
+  // Runs the network over `leaves` in chunks of its max_rows, each encoded
+  // on the device, calling `read(first, count)` after each chunk to take its
+  // outputs. `only_output`, if not null, is the one output copied back.
+  template <typename Read>
+  void predict_in_chunks(std::span<const CpuLeaf* const> leaves, const char* only_output,
+                         Read&& read);
   // Fills the outcomes of tasks[0, count) from the leaf network.
   void evaluate_leaves(const uint32_t* tasks, int count, std::vector<RolloutOutcome>* outcomes);
 
