@@ -36,8 +36,10 @@ struct NeuralNetParamsBase {
   // overflow FP16 stay finite (docs/plans/fp16_safe_serving.md has the
   // measurements). Opt into FP16 only for a model known to fit its range.
   Precision precision = Precision::kBF16;
-  uint64_t workspace_bytes = uint64_t{1} << 30;  // 1 GiB TensorRT scratch
-  std::string mount_root = "/workspace/mount";   // root of the engine-plan cache
+  // TensorRT scratch; a spec may raise it (NeuralNetParams).
+  // py/scribblez/workloads/base.py's TRT_WORKSPACE_GB mirrors it.
+  uint64_t workspace_bytes = uint64_t{1} << 30;
+  std::string mount_root = "/workspace/mount";  // root of the engine-plan cache
 
   // Build at TensorRT optimization level 0, which takes the first working
   // kernel per layer instead of timing tactics. A cold build drops from tens of
@@ -60,10 +62,11 @@ struct NeuralNetParamsBase {
   void add_options(boost::program_options::options_description& desc);
 };
 
-// The base params with max_rows at the family's default.
+// The base params with max_rows at the family's default, and workspace_bytes at
+// the family's kWorkspaceBytes where its spec declares one.
 template <typename Spec>
 struct NeuralNetParams : NeuralNetParamsBase {
-  NeuralNetParams() { max_rows = Spec::kDefaultMaxRows; }
+  NeuralNetParams();
 };
 
 // One engine I/O tensor as the runtime expects it: a spec descriptor

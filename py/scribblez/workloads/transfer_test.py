@@ -37,6 +37,7 @@ from scribblez.paths import ENGINE_DIR, TagPaths
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads import pair_store
 from scribblez.workloads.base import (
+    TRT_WORKSPACE_GB,
     RoleSpec,
     SlotPlan,
     StatsSpec,
@@ -78,9 +79,9 @@ TEACHER_INPUT = "inputs/teacher.onnx"
 # on the RTX 5000 Ada with the transformer-clipped epoch-2543 export at 28
 # threads, as the rise in device memory over the baseline: 0.77-1.15 GiB, the
 # range being a concurrent trainer's own drift. The figure takes the top of it,
-# plus the 1 GiB TensorRT build scratch on a machine without a cached plan (a
-# bound from NeuralNet's workspace cap) and 0.5 headroom.
-GENERATOR_GPU_GB = 1.15 + 1.0 + 0.5
+# plus the TensorRT build scratch on a machine without a cached plan (a bound
+# from the cap, TRT_WORKSPACE_GB) and 0.5 headroom.
+GENERATOR_GPU_GB = 1.15 + TRT_WORKSPACE_GB + 0.5
 
 
 @dataclass(frozen=True)

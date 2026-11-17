@@ -7,6 +7,12 @@ namespace scribblez {
 namespace nn {
 
 template <typename Spec>
+NeuralNetParams<Spec>::NeuralNetParams() {
+  max_rows = Spec::kDefaultMaxRows;
+  if constexpr (requires { Spec::kWorkspaceBytes; }) workspace_bytes = Spec::kWorkspaceBytes;
+}
+
+template <typename Spec>
 void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row) {
   const size_t spatial_floats = size_t(net.spatial_planes()) * kBoardCells;
   const size_t scalar_floats = net.scalar_floats();
