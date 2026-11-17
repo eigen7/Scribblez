@@ -55,6 +55,7 @@ from scribblez.workloads.base import (
     WorkloadSpec,
     resolve_input,
 )
+from scribblez.workloads.pinned_exports import export_generation, pinned_generation
 from scribblez.workloads.selfplay_gen import (
     GENERATOR_STATS,
     STAGING_DIR,
@@ -271,36 +272,11 @@ def _leaf_paths(params: PoolLabelParams, mount_root: Path) -> TagPaths:
 
 
 def _generation(paths: TagPaths, generation: int, name: str) -> int:
-    """`generation` of the source at `paths`, or (-1) its latest export.
-    Raises ParamsError if the tag is unset, the index invalid, or (-1) the tag
-    has no export. A generation already pinned is taken as is: a remote worker's
-    mount has none of the source's exports, only the staged input."""
-    if not paths.tag:
-        raise params_mod.ParamsError(f"{name}_tag is required")
-    if generation < -1:
-        raise params_mod.ParamsError(
-            f"{name}_generation must be a generation index (>= 0) or -1 for the latest, "
-            f"got {generation}"
-        )
-    if generation >= 0:
-        return generation
-    exported = paths.exported_generations()
-    if not exported:
-        raise params_mod.ParamsError(
-            f"{paths.task} tag '{paths.tag}' has no export{_export_hint(paths)}"
-        )
-    return exported[-1]
+    return export_generation(paths, generation, name, _export_hint(paths))
 
 
 def _pinned(paths: TagPaths, generation: int, name: str) -> int:
-    """_generation, failing also if that generation has no export."""
-    generation = _generation(paths, generation, name)
-    if generation not in paths.exported_generations():
-        raise params_mod.ParamsError(
-            f"{paths.task} tag '{paths.tag}' generation {generation} has no export"
-            f"{_export_hint(paths)}"
-        )
-    return generation
+    return pinned_generation(paths, generation, name, _export_hint(paths))
 
 
 def _export_hint(paths: TagPaths) -> str:

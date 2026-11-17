@@ -256,7 +256,7 @@ def test_resume_gate_refuses_another_format_or_leave_values(tmp_path, key):
 
 def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     spec = workloads.get(TASK)
-    assert {r.name for r in spec.roles} == {"generate", "train"}
+    assert {r.name for r in spec.roles} == {"generate", "train", "match_eval"}
     seen = {}
 
     def fake_generate(ctx, player_spec, face_up_leaves, random_opening_mean):
@@ -275,7 +275,13 @@ def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
 def test_the_layout_and_gpu_table_make_the_default_arms_queueable():
     params = deep_bot_leaf_eval.DeepBotLeafEvalParams()
     plan = deep_bot_leaf_eval.layout(params, 28, None)
-    assert [(p.role, p.threads) for p in plan] == [("train", None), ("generate", 28)]
+    assert [(p.role, p.threads) for p in plan] == [
+        ("train", None),
+        ("generate", 28),
+        ("match_eval", None),
+    ]
+    off = dataclasses.replace(params, match_every_generations=0)
+    assert [p.role for p in deep_bot_leaf_eval.layout(off, 28, None)] == ["train", "generate"]
     headroom = deep_bot_leaf_eval.TRAINER_GPU_HEADROOM_GB
     for trunk, peak in (("transformer", 1.76), ("conv", 1.01)):
         arm = dataclasses.replace(params, trunk=trunk, join_planes=False)

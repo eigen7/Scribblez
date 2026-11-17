@@ -7,19 +7,41 @@ hidden-leaves HastyBot self-play into staging, and the singleton trainer
 trains one epoch per generation over a sliding window, hosting the tag's data
 home. Self-play has no random openings, so every eligible turn's outcome
 follows the policy alone.
+
+The match_eval role (scribblez/match_eval) plays every
+`match_every_generations`th export as LeafBot (engine agent/leaf_bot.h, the
+leaf network valuing HastyBot's best moves with no search) against a fixed
+opponent, its opponent leaves drawn from a leave inference model pinned at
+task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 
 from cloud.runtime_abi import RUNTIME_TORCH
 
+from scribblez import params as params_mod
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
+from scribblez.match_eval import runner as match_runner
 from scribblez.params import param
+from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads.base import RoleSpec, SlotPlan, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import (
+    RoleSpec,
+    SlotPlan,
+    StatsSpec,
+    WorkerContext,
+    WorkloadSpec,
+    resolve_input,
+)
+from scribblez.workloads.pinned_exports import export_generation, pinned_generation
 from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
+
+LEAVE_INFERENCE = "leave_inference"
+# Where a remote match slot finds the pinned leave inference model.
+LEAVE_INPUT = "inputs/leave_inference.onnx"
 
 
 @dataclass(frozen=True)
@@ -95,6 +117,35 @@ class DeepBotLeafEvalParams:
     depth: int = param(4, "transformer layers, or conv residual blocks")
     num_heads: int = param(2, "transformer attention heads (head dim = width / heads)")
     normalize_scalar: bool = param(True, f"conv trunk: {NORMALIZE_SCALAR_HELP}")
+    # Match eval (the match_eval role): LeafBot against a fixed opponent.
+    match_every_generations: int = param(
+        10, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
+    )
+    match_opponent: str = param(
+        "--type=hastybot-endgame", "the fixed opponent's --player spec, e.g. --type=sim"
+    )
+    match_pairs: int = param(
+        5000, "mirrored game pairs per generation's match; every match plays all of them"
+    )
+    match_seed: int = param(
+        1,
+        "base game seed for matches, fixed per tag so every generation faces identical deals; "
+        "must be nonzero",
+    )
+    match_leave_inference_tag: str = param(
+        "",
+        "the leave_inference tag whose model draws LeafBot's opponent leaves; required while "
+        "matches are on",
+    )
+    match_leave_inference_generation: int = param(
+        -1,
+        "which generation of match_leave_inference_tag (-1: its latest export, pinned at task "
+        "creation), the same for every match of the tag",
+    )
+    match_candidates: int = param(10, "LeafBot's candidates: HastyBot's best by static equity")
+    match_opp_leaves: int = param(
+        16, "the opponent's leaves LeafBot values each candidate over, drawn from the belief"
+    )
 
 
 # The trainer's peak GPU memory in GiB, measured 2026-10-23 on the RTX 5000 Ada
@@ -112,12 +163,21 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 _MEASURED_GB = {TRUNK_TRANSFORMER: 1.76, TRUNK_CONV: 1.01}
 # The params the measurements held fixed, at their defaults.
 TRAINER_GPU_KEY = ("batch_size", "width", "depth", "num_heads")
+# Match eval: a 1000-pair match of LeafBot (a conv 64x4 leaf, a leave_inference
+# export) against HastyBot-endgame at 28 threads peaked at 1.77 GiB
+# (2026-11-17), its two TensorRT plans already cached. On a machine without
+# them each engine first builds its plan, whose scratch is capped at 1 GiB
+# (NeuralNet's workspace_bytes); that part is a bound from the cap, not a
+# measurement.
+MATCH_EVAL_GPU_GB = 1.77 + 1.0 + TRAINER_GPU_HEADROOM_GB
 
 
 def gpu_need(params, role: str) -> float | None:
     """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
     if role == "generate":
         return 0.0
+    if role == "match_eval":
+        return MATCH_EVAL_GPU_GB
     defaults = DeepBotLeafEvalParams()
     if any(getattr(params, k) != getattr(defaults, k) for k in TRAINER_GPU_KEY):
         return None
@@ -126,9 +186,64 @@ def gpu_need(params, role: str) -> float | None:
 
 def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
     """The WorkloadSpec.layout hook: a trainer and a generator per machine, the
-    generator on every vCPU (see position_eval's layout)."""
+    generator on every vCPU (see position_eval's layout), plus match eval when
+    its cadence is on."""
+    roles = ["train", "generate"] + (["match_eval"] if params.match_every_generations > 0 else [])
     threads = {"generate": generator_threads or vcpus}
-    return [SlotPlan(r, threads.get(r), gpu_need(params, r)) for r in ("train", "generate")]
+    return [SlotPlan(r, threads.get(r), gpu_need(params, r)) for r in roles]
+
+
+def _leave_paths(params, mount_root: Path) -> TagPaths:
+    return TagPaths(params.match_leave_inference_tag, LEAVE_INFERENCE, mount_root)
+
+
+def finalize(spec, paths: TagPaths, params):
+    """Pin the matches' leave inference model to a concrete generation at task
+    creation, failing here, where the operator sees it, if it has no export."""
+    if params.match_every_generations <= 0:
+        return params
+    if not params.match_leave_inference_tag:
+        raise params_mod.ParamsError(
+            "matches need match_leave_inference_tag (or match_every_generations=0)"
+        )
+    leave = pinned_generation(
+        _leave_paths(params, paths.mount_root),
+        params.match_leave_inference_generation,
+        "match_leave_inference",
+    )
+    return replace(params, match_leave_inference_generation=leave)
+
+
+def leave_model_path(params, mount_root: Path) -> Path:
+    """The matches' leave inference model on the controller's mount."""
+    paths = _leave_paths(params, mount_root)
+    return paths.onnx_path(
+        export_generation(paths, params.match_leave_inference_generation, "match_leave_inference")
+    )
+
+
+def inputs(params, mount_root: Path) -> dict[str, Path]:
+    """The match_eval role's out-of-tag input: the pinned leave inference
+    model."""
+    return {LEAVE_INPUT: leave_model_path(params, mount_root)}
+
+
+def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
+    """A leaf export as the match plays it (match_eval.runner.Player): LeafBot
+    with the endgame solved, under hidden leaves, as the leaf trained."""
+    p = ctx.params
+    leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(p, ctx.mount_root))
+    spec = (
+        f"--type=leafbot-endgame --leaf-model={model} --leave-inference={leave} "
+        f"--candidates={p.match_candidates} --opp-leaves={p.match_opp_leaves} --name=model"
+    )
+    return spec, False
+
+
+def run_match(ctx: WorkerContext) -> int:
+    """The match_eval role's runner: match_eval's, the exports playing as
+    LeafBot."""
+    return match_runner.run(ctx, leafbot_player)
 
 
 def run_generate(ctx: WorkerContext) -> int:
@@ -160,12 +275,25 @@ SPEC = WorkloadSpec(
             gpu=True,
             stats=TRAINER_STATS,
         ),
+        RoleSpec(
+            name="match_eval",
+            title="Match eval (GPU)",
+            runner="scribblez.workloads.deep_bot_leaf_eval:run_match",
+            deps="scribblez.workloads.selfplay_gen:fetch_deps",
+            dispatch="scribblez.match_eval.dispatch:tick",
+            inputs="scribblez.workloads.deep_bot_leaf_eval:inputs",
+            singleton=True,
+            kinds=("local", "ssh"),
+            gpu=True,
+            stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
+        ),
     ),
     scheduler=TICK_FOR_TASK,
     progress="scribblez.generational.scheduler:progress",
     complete="scribblez.generational.scheduler:complete",
     pace_role="train",
-    collected_dirs=(STAGING_DIR,),
+    collected_dirs=(STAGING_DIR, MATCH_RESULTS_DIR),
     layout="scribblez.workloads.deep_bot_leaf_eval:layout",
     gpu_need="scribblez.workloads.deep_bot_leaf_eval:gpu_need",
+    finalize="scribblez.workloads.deep_bot_leaf_eval:finalize",
 )
