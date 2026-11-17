@@ -90,6 +90,15 @@ def test_the_equity_baseline_metrics_by_set_size():
     assert (m["equity_eval_tail_recall_4"], m["equity_eval_tail_recall_16"]) == (0, 1)
 
 
+def test_the_equity_baseline_falls_back_to_the_best_ranked_candidate_a_pool_holds():
+    """A self-played pool whose blank pruning dropped equity's first three
+    moves: the baseline's set is the rank-3 candidate until N reaches it."""
+    pool = _pool([0.2, 0.8, 0.0], [0.4, 0.5, 0.0], [3, 7, -1])
+    assert metrics.equity_top(pool, 1).tolist() == [0]
+    assert metrics.equity_top(pool, 8).tolist() == [0, 1]
+    assert metrics.set_metrics([pool], metrics.equity_top, "")["eval_recall_1"] == 0
+
+
 def test_regret_compares_a_raced_out_member_on_the_rollouts_it_ran():
     # The race stopped the equity favourite after two easy deals, where it
     # won 0.8 to the leader's 0.9; over all eight the leader won 0.6. Its raw
