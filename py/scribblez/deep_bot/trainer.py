@@ -38,6 +38,7 @@ from scribblez.deep_bot import (
     belief_by_rank,
     kept_checkpoints,
     release,
+    release_positions,
     units,
 )
 from scribblez.deep_bot.seeds import seed_path
@@ -170,12 +171,14 @@ def export_provenance(kind: str, tag: str, number: int) -> dict:
 
 
 def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows: dict):
-    """Write release `number`: the three exports, then its manifest."""
+    """Write release `number`: the three exports, their analysis of the
+    known positions, then its manifest."""
     release.release_dir(paths, number).mkdir(parents=True, exist_ok=True)
     for kind, unit in by_kind.items():
         path = release.export_path(paths, number, kind)
         if unit.export(path, export_provenance(kind, tag, number)) is False:
             raise RuntimeError(f"the {kind} seed trains nothing a release can serve")
+    release_positions.write(paths, number)
     release.write_manifest(paths, number, tag, rows)
 
 

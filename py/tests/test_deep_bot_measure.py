@@ -282,23 +282,3 @@ def test_a_match_on_demand_is_filed_under_its_release(paths, monkeypatch, capsys
     with pytest.raises(SystemExit):
         match_script.main([*argv, "--opponent", "hastybot", "--player", spec])
     assert match_script.main([*argv[:3], "9", *argv[4:], "--opponent", "x", "--player", spec]) == 1
-
-
-def test_the_positions_tab_draws_a_panel_per_reply_model(paths):
-    conn = db.connect(paths.dashboard_db)
-    assert plots.release_pick_grid(conn) is None
-    for number, reading in ((1, "equity"), (2, "reference")):
-        rows = [{"id": "clinker", "pick": "x", "reading": reading, "seconds": 1.0}]
-        db.write_release_picks(conn, number, dict.fromkeys(matches.PICK_REPLIES, rows))
-    grid = plots.release_pick_grid(conn)
-    conn.close()
-    hasty, subtree = grid.children
-    assert "the generating agent" in hasty.title.text
-    assert "the subtree reply" in subtree.title.text
-    assert hasty.renderers[0].data_source.data["color"] == [
-        plots.PICK_COLORS["equity"], plots.PICK_COLORS["reference"]
-    ]  # fmt: skip
-    # Named rows on a numeric axis: the dashboard's bokehjs does not embed
-    # this figure with a categorical one.
-    assert hasty.y_range.start == -0.5
-    assert hasty.yaxis[0].major_label_overrides == {0: "clinker"}

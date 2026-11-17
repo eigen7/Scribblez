@@ -34,7 +34,7 @@ import torch
 
 from scribblez.ffi import gcg_sim_evidence, position_eval_board_json
 from scribblez.paths import ENGINE_DIR, REPO_ROOT
-from scribblez.sim_evidence.sobs import MOVE_EXCHANGE, glyph_char
+from scribblez.sim_evidence.sobs import move_notation
 from scribblez.transfer_test.corpus import CorpusFile, load_file
 from scribblez.transfer_test.evaluate import eval_row_config, reader_estimates, shuffled
 from scribblez.transfer_test.prior import compute_prior, load_teacher, prior_path, write_prior
@@ -81,33 +81,6 @@ EXHIBITS = (
 )
 
 
-def notation(move: np.void, board: list) -> str:
-    """A move's GCG notation on the pre-move `board` (the board JSON's rows):
-    position and word, through-tiles as '.', or '-TILES' for an exchange."""
-    if move["type"] == MOVE_EXCHANGE:
-        return "-" + "".join(glyph_char(int(g)) for g in move["glyphs"][: int(move["num_played"])])
-    horizontal, lane = bool(move["horizontal"]), int(move["start"])
-    placed, along, mask, i = {}, 0, int(move["square_mask"]), 0
-    while mask:
-        if mask & 1:
-            placed[along] = glyph_char(int(move["glyphs"][i]))
-            i += 1
-        mask >>= 1
-        along += 1
-
-    def occupied(a: int) -> bool:
-        return bool(board[lane][a] if horizontal else board[a][lane])
-
-    lo, hi = min(placed), max(placed)
-    while lo > 0 and occupied(lo - 1):
-        lo -= 1
-    while hi < 14 and occupied(hi + 1):
-        hi += 1
-    word = "".join(placed.get(a, ".") for a in range(lo, hi + 1))
-    where = f"{lane + 1}{chr(65 + lo)}" if horizontal else f"{chr(65 + lane)}{lo + 1}"
-    return f"{where} {word}"
-
-
 def decision_text(e: Exhibit) -> str:
     text = (REPO_ROOT / e.gcg).read_text().rstrip("\n") + "\n"
     return text + e.decision_line + "\n" if e.decision_line else text
@@ -120,7 +93,7 @@ def choose_candidates(e: Exhibit, text: str) -> tuple[np.ndarray, np.ndarray]:
     head = "\n".join(text.rstrip("\n").splitlines()[:-1])
     board = position_eval_board_json(head)["board"]
     records, _ = gcg_sim_evidence(text, top_k=LISTED_MOVES, rollouts=1, open_leaves=True)
-    names = [notation(r["move"], board) for r in records]
+    names = [move_notation(r["move"], board) for r in records]
     missing = set(e.blockers) - set(names)
     if missing:
         raise ValueError(f"{e.name}: blockers not among the top {LISTED_MOVES}: {sorted(missing)}")

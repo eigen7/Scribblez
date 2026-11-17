@@ -219,7 +219,9 @@ same units, so they still run, and their results stay bit-identical. The
    evaluation.
 2. **Train** each model one epoch over its own window of generations ending
    at `g` (`leave_window`, `leaf_window`, `policy_window`).
-3. **Publish.** The three exports, then the release manifest, then one
+3. **Publish.** The three exports, their outputs at the known positions
+   (`positions.json`, about 1 MB, for the dashboard's Positions tab), then
+   the release manifest, then one
    checkpoint holding the three models' and optimizers' state, the cursor,
    and last the generation's record. A release exists once its manifest
    does, so a generator never reads two models of different releases. Every
@@ -563,8 +565,10 @@ Each is a pull request.
    scripts.deep_bot.known_position_picks --player SPEC` reads any agent's
    picks at them. The measure slot takes those picks for each release it
    is assigned, under the generating agent and under `--reply subtree`, and
-   the Positions tab draws a cell per release and position: the reference
-   move, static equity's, or another. The blind spots' picks stay on demand
+   the Positions tab shows one position at a time under a release: the
+   board, the picks beside the position's answer, and the release's policy
+   and leave inference outputs there, which the trainer computes as it
+   publishes the release. The blind spots' picks stay on demand
    (`scripts.deep_bot.blind_spot_picks`): the worked ones are among the
    known positions, and the tag's thousand live on the controller's mount.
 7. **Queue placement:** the roles' measured GPU memory and the layout.

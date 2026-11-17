@@ -70,6 +70,36 @@ def glyph_char(code: int) -> str:
     return "?"
 
 
+def move_notation(move: np.void, board: list) -> str:
+    """A move's GCG notation on the pre-move `board` (the board JSON's rows):
+    position and word, through-tiles as '.', '-TILES' for an exchange, or '-'
+    for a pass (data/gcg_writer.h's move_notation)."""
+    if move["type"] == MOVE_PASS:
+        return "-"
+    if move["type"] == MOVE_EXCHANGE:
+        return "-" + "".join(glyph_char(int(g)) for g in move["glyphs"][: int(move["num_played"])])
+    horizontal, lane = bool(move["horizontal"]), int(move["start"])
+    placed, along, mask, i = {}, 0, int(move["square_mask"]), 0
+    while mask:
+        if mask & 1:
+            placed[along] = glyph_char(int(move["glyphs"][i]))
+            i += 1
+        mask >>= 1
+        along += 1
+
+    def occupied(a: int) -> bool:
+        return bool(board[lane][a] if horizontal else board[a][lane])
+
+    lo, hi = min(placed), max(placed)
+    while lo > 0 and occupied(lo - 1):
+        lo -= 1
+    while hi < 14 and occupied(hi + 1):
+        hi += 1
+    word = "".join(placed.get(a, ".") for a in range(lo, hi + 1))
+    where = f"{lane + 1}{chr(65 + lo)}" if horizontal else f"{chr(65 + lane)}{lo + 1}"
+    return f"{where} {word}"
+
+
 _FILE_HEADER = struct_dtype("SobsFileHeader")
 _POSITION_HEADER = struct_dtype("SobsPositionHeader")
 MOVE_DTYPE = struct_dtype("Move")

@@ -6,6 +6,7 @@ import subprocess
 import numpy as np
 import pytest
 from scribblez.ffi import position_eval_board_json, read_file_header
+from scribblez.sim_evidence.sobs import move_notation
 from scribblez.transfer_test import exhibits as ex
 from scribblez.transfer_test.probes import read_sprobe, replay
 from scribblez.transfer_test.rows import RowConfig, assemble_row
@@ -19,7 +20,7 @@ def test_every_blocker_is_among_the_exhibits_candidates(exhibit):
     assert len(moves) == ex.CANDIDATES
     head = "\n".join(text.rstrip("\n").splitlines()[:-1])
     board = position_eval_board_json(head)["board"]
-    names = {ex.notation(m, board) for m in moves[is_blocker]}
+    names = {move_notation(m, board) for m in moves[is_blocker]}
     assert names == set(exhibit.blockers)
 
 

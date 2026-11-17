@@ -241,6 +241,18 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
+    lib.scribblez_opp_rack_summary.restype = ctypes.c_int
+    lib.scribblez_opp_rack_summary.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_float),  # params, nullable
+        ctypes.c_int,  # length
+        ctypes.POINTER(ctypes.c_int32),  # leave_pool, nullable with params
+        ctypes.POINTER(ctypes.c_int32),  # unseen
+        ctypes.c_void_p,  # out_opp_rack (PoolOppRack)
+        ctypes.c_char_p,  # out_err
+        ctypes.c_int,  # err_cap
+    ]
+
     lib.scribblez_win_table_write.restype = ctypes.c_int
     lib.scribblez_win_table_write.argtypes = [
         ctypes.c_char_p,  # path
@@ -309,6 +321,18 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_void_p,  # opp_racks (PoolOppRack[n_positions])
         ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable
         ctypes.POINTER(_PolicySetOutputs),  # out
+    ]
+
+    lib.scribblez_policy_candidates.restype = ctypes.c_int64
+    lib.scribblez_policy_candidates.argtypes = [
+        ctypes.c_void_p,  # session
+        ctypes.c_char_p,  # .slog path
+        ctypes.c_int64,  # game_idx
+        ctypes.c_int64,  # turn_idx
+        ctypes.c_int,  # blank_prune_points
+        ctypes.c_void_p,  # out_moves (Move[cap])
+        ctypes.POINTER(ctypes.c_int32),  # out_equity_ranks
+        ctypes.c_int64,  # cap
     ]
 
     lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
@@ -754,6 +778,33 @@ class LeaveValueArrays:
             raise ValueError(err.value.decode())
         return log_z.value, log_probs, samples
 
+    def opp_rack_summary(
+        self, unseen: np.ndarray, params: np.ndarray | None, length: int, leave_pool: np.ndarray
+    ) -> np.void:
+        """The PoolOppRack record of the opponent-rack summary
+        (belief/opp_rack_summary.h) for a chooser whose unseen pool is the 27
+        tile counts `unseen`: the length-`length` leave a sampler query on
+        `params` draws from `leave_pool` plus a uniform refill, or with
+        `params` None a uniform full rack."""
+        out = np.zeros(1, dtype=struct_dtype("PoolOppRack"))
+        u = np.ascontiguousarray(unseen, dtype=np.int32)
+        p = None if params is None else np.ascontiguousarray(params, dtype=np.float32)
+        pool = np.ascontiguousarray(leave_pool, dtype=np.int32)
+        err = ctypes.create_string_buffer(_ERR_CAP)
+        rc = self._lib.scribblez_opp_rack_summary(
+            self._handle,
+            None if p is None else p.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
+            length,
+            pool.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            u.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            out.ctypes.data_as(ctypes.c_void_p),
+            err,
+            _ERR_CAP,
+        )
+        if rc != 0:
+            raise ValueError(err.value.decode())
+        return out[0]
+
 
 def win_table_write(path: str | Path, grid: np.ndarray, header: dict[str, object]):
     """Write a win table (engine sim/win_pct_table.h, which owns the format)
@@ -1054,6 +1105,41 @@ def policy_set_positions(
         "cells": cross["cells"],
         "letters_cross": cross["letters"],
     }
+
+
+# First-try capacity of policy_candidates' buffers; a larger pool retries at
+# the reported count.
+_POLICY_CANDIDATES_FIRST_CAP = 1024
+
+
+def policy_candidates(
+    path: str | Path, game: int, turn: int, blank_prune_points: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """The candidates PolicyBot chooses among at (game, turn) of a .slog, before
+    the move (training/policy_set_inputs.h pool_candidates): MOVE_DTYPE moves
+    (M,) and their static-equity ranks (M,) int32, -1 for a pass outside the
+    ranking. The session must be in the hidden-leaves arm."""
+    from scribblez.sim_evidence.sobs import MOVE_DTYPE
+
+    cap = _POLICY_CANDIDATES_FIRST_CAP
+    while True:
+        moves = np.zeros(cap, dtype=MOVE_DTYPE)
+        ranks = np.zeros(cap, dtype=np.int32)
+        n = _lib().scribblez_policy_candidates(
+            _session(),
+            str(path).encode("utf-8"),
+            game,
+            turn,
+            blank_prune_points,
+            moves.ctypes.data_as(ctypes.c_void_p),
+            ranks.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
+            cap,
+        )
+        if n < 0:
+            raise OSError(f"policy_candidates failed for {path} game {game} turn {turn}")
+        if n <= cap:
+            return moves[:n].copy(), ranks[:n].copy()
+        cap = n
 
 
 def gcg_cross_checks(

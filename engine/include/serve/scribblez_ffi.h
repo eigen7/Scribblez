@@ -145,6 +145,16 @@ int scribblez_leave_sampler_query(const LeaveValueArraysHandle* a, const float* 
                                   double* out_log_probs, int64_t* out_samples, char* out_err,
                                   int err_cap);
 
+// The opponent-rack summary a policy-set pool records (data/pool_log.h's
+// PoolOppRack, written to out_opp_rack) for a chooser whose unseen pool is the
+// 27 tile counts `unseen`: the leave a LeaveSampler query draws (arguments as
+// in scribblez_leave_sampler_query) plus a uniform refill, or with null
+// `params` a uniform full rack (belief/opp_rack_summary.h). Returns 0, or -1
+// with a message in `out_err`.
+int scribblez_opp_rack_summary(const LeaveValueArraysHandle* a, const float* params, int k,
+                               const int32_t* leave_pool, const int32_t* unseen, void* out_opp_rack,
+                               char* out_err, int err_cap);
+
 // Writes a scribblez win table (sim/win_pct_table.h) from `grid`, the
 // fitter's kRows x kCols floats in file order, and `header`, its provenance as
 // "key=value" lines separated by '\n'. Returns 0, or -1 with a message in
@@ -250,6 +260,18 @@ int scribblez_policy_set_positions(ScribblezSession* s, const char* path, const 
                                    const int64_t* turn_idx, const int64_t* move_counts,
                                    int64_t n_positions, const void* moves, const void* opp_racks,
                                    const uint8_t* transposes, const ScribblezPolicySetOutputs* out);
+
+// The candidates PolicyBot chooses among at turn `turn_idx` of game `game_idx`
+// of the .slog at `path`, before the move: the pool of the mover's legal moves
+// under `blank_prune_points` (training/policy_set_inputs.h pool_candidates).
+// Writes up to `cap` of them to out_moves (Move[cap]) and their static-equity
+// ranks (-1 for a pass outside the ranking) to out_equity_ranks (int32[cap]).
+// Returns the count, which exceeds `cap` when the buffers were too small, or
+// -1 on an I/O error or a turn out of range. The session must be in the
+// hidden-leaves arm.
+int64_t scribblez_policy_candidates(ScribblezSession* s, const char* path, int64_t game_idx,
+                                    int64_t turn_idx, int blank_prune_points, void* out_moves,
+                                    int32_t* out_equity_ranks, int64_t cap);
 
 // The cross-check outputs of scribblez_move_set_positions for the `n` moves of
 // one position-set GCG's decision point (read as scribblez_gcg_position_inputs

@@ -1758,3 +1758,66 @@ h1 {
   height: 100%;
   background: rgb(var(--survey-tint));
 }
+
+/* ---- deep_bot Positions tab (DeepBotPositions.tsx) ---------------------- */
+.dbp-header { font-size: 14px; color: #2c3540; margin: 4px 2px 10px; }
+.dbp-pending { color: #445063; margin-left: 8px; }
+.dbp-error { color: #c0392b; font-size: 13px; margin: 6px 2px; }
+.dbp-board { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.dbp-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.dbp-panel {
+  background: #f4f6f9;
+  border: 1px solid #d6dce4;
+  border-radius: 6px;
+  padding: 6px 10px 8px;
+  max-width: 560px;
+}
+.dbp-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #445063;
+  margin: 2px 0 6px;
+}
+.dbp-note { font-size: 12px; color: #445063; margin: 2px 0 6px; }
+.dbp-answer {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  column-gap: 10px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.dbp-answer:hover, .dbp-policy tbody tr:hover { background: #e6ecf3; }
+.dbp-answer.selected, .dbp-policy tbody tr.selected { background: #d4e4f6; border-color: #3a86d4; }
+.dbp-answer-label { color: #445063; }
+.dbp-answer-move { font-weight: 600; font-family: monospace; }
+.dbp-answer-policy { color: #445063; font-variant-numeric: tabular-nums; }
+/* The belief panel keeps its own dark surface (OppRackBelief.tsx); its text
+   is light on it here as in the survey viewer. */
+.dbp .belief-panel { color: #ecf0f1; }
+.dbp > .dbp-panel { margin-top: 16px; max-width: 900px; }
+.dbp-policy { border-collapse: collapse; font-size: 14px; width: 100%; }
+.dbp-policy th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: #445063;
+  padding: 2px 6px;
+  border-bottom: 1px solid #d6dce4;
+}
+.dbp-policy td { padding: 2px 6px; cursor: pointer; }
+.dbp-policy tr.gap td { border-top: 2px dashed #c3cbd6; }
+.dbp-policy td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dbp-policy td.mv { font-family: monospace; font-weight: 600; white-space: nowrap; }
+.dbp-policy td.bar { width: 160px; }
+.dbp-policy td.bar span { display: block; height: 10px; border-radius: 2px; }
+.dbp-policy td.tags { color: #2c7a2c; font-size: 12px; }

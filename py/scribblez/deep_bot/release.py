@@ -1,6 +1,8 @@
 """A release (docs/plans/deep_bot_generations.md, "Terms"): the three models'
 exports published together, under the tag at
-releases/release_<k>/{leave,leaf,policy}.onnx with a manifest written last.
+releases/release_<k>/{leave,leaf,policy}.onnx, beside the exports' analysis of
+the known positions (positions.json, release_positions.py), with a manifest
+written last.
 A release exists once its manifest does, so a reader never takes two models
 of different releases. Release 0 is the seeds'; release k has trained
 through generation k - 1.
@@ -21,6 +23,8 @@ from scribblez.deep_bot import KINDS
 from scribblez.paths import TagPaths
 
 MANIFEST = "manifest.json"
+# The exports' analysis of the known positions (release_positions.py).
+POSITIONS = "positions.json"
 
 # Where a remote trainer links each release for the controller to take.
 OUTBOX = "release_outbox"
@@ -60,10 +64,15 @@ def write_manifest(paths: TagPaths, release: int, tag: str, rows: dict[str, int]
     return path
 
 
+def read_manifest(paths: TagPaths, release: int) -> dict:
+    return json.loads((release_dir(paths, release) / MANIFEST).read_text())
+
+
 def files(release: int) -> list[str]:
     """Release `release`'s files, tag-relative, the manifest last."""
     exports = [export_rel(release, kind) for kind in KINDS]
-    return [*exports, f"releases/release_{release:06d}/{MANIFEST}"]
+    rel = f"releases/release_{release:06d}"
+    return [*exports, f"{rel}/{POSITIONS}", f"{rel}/{MANIFEST}"]
 
 
 def newest_files(paths: TagPaths, params) -> list[str]:
@@ -100,11 +109,15 @@ def exists(paths: TagPaths, release: int) -> bool:
     return (release_dir(paths, release) / MANIFEST).exists()
 
 
-def newest(paths: TagPaths) -> int | None:
-    """The newest complete release's number, or None before release 0."""
-    done = [
+def numbers(paths: TagPaths) -> list[int]:
+    """The complete releases' numbers, ascending."""
+    return sorted(
         int(d.name.removeprefix("release_"))
         for d in releases_dir(paths).glob("release_*")
         if (d / MANIFEST).exists()
-    ]
-    return max(done, default=None)
+    )
+
+
+def newest(paths: TagPaths) -> int | None:
+    """The newest complete release's number, or None before release 0."""
+    return max(numbers(paths), default=None)

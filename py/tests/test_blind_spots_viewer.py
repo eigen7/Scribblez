@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from scribblez.blind_spots_beliefs import BeliefWriter
 from scribblez.blind_spots_viewer import played_move, readable, viewer_data
+from scribblez.leave_inference.beliefs import LeaveBeliefs
 from scribblez.survey_viewer_server import survey_handler
 
 GCG = """#character-encoding UTF-8
@@ -137,6 +138,9 @@ class StubBeliefs:
 
     def sample_racks(self, b, n, rng):
         return [{"leave": "ABC", "refill": "D" * b.refill}][:n]
+
+    # The real chart, over the stubbed queries.
+    chart = LeaveBeliefs.chart
 
 
 def test_the_beliefs_sidecar_charts_each_kept_position_with_sample_racks(tag):

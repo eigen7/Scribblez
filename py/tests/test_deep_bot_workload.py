@@ -131,6 +131,7 @@ def test_the_controller_carries_seeds_to_a_trainer_and_the_newest_release_to_gen
     # The manifest goes last: a release exists once it does.
     assert tag_files["generate"](paths, PARAMS) == [
         *(f"releases/release_000001/{kind}.onnx" for kind in KINDS),
+        "releases/release_000001/positions.json",
         "releases/release_000001/manifest.json",
     ]
 

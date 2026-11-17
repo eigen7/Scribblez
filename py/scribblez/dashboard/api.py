@@ -34,7 +34,15 @@ from bokeh.embed import json_item
 
 from scribblez import lane_analysis, workloads
 from scribblez import params as params_mod
-from scribblez.dashboard import db, figure_delta, master_api, plots, tasks, trajectories_api
+from scribblez.dashboard import (
+    db,
+    deep_bot_api,
+    figure_delta,
+    master_api,
+    plots,
+    tasks,
+    trajectories_api,
+)
 from scribblez.dashboard.control_db import ShadowControl
 from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
@@ -70,7 +78,6 @@ VERSION_TABLES = (
     "control_event",
     "match_eval",
     "release_match",
-    "release_pick",
     "match_arm",
 )
 
@@ -161,10 +168,6 @@ def _release_matches(conn, params, mount_root):
     return plots.release_match_grid(conn)
 
 
-def _release_picks(conn, params, mount_root):
-    return plots.release_pick_grid(conn)
-
-
 def _match_arms(conn, params, mount_root):
     return plots.match_arms_grid(conn)
 
@@ -186,7 +189,6 @@ FIGURES = {
     "deep_bot_metrics": _deep_bot_metrics,
     "match_eval": _match_eval,
     "release_matches": _release_matches,
-    "release_picks": _release_picks,
     "match_arms": _match_arms,
 }
 
@@ -938,6 +940,7 @@ def make_app(
             (r"/api/position_eval/position", PositionEvalPositionHandler),
             (r"/api/position_eval/alt_leave", PositionEvalAltLeaveHandler),
             *trajectories_api.ROUTES,
+            *deep_bot_api.ROUTES,
         ],
         mount_root=mount_root,
         worker_manager=worker_manager,

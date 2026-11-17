@@ -3,6 +3,7 @@
 #include "agent/agent.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
+#include "belief/opp_rack_summary.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
@@ -50,7 +51,9 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -85,6 +88,9 @@ struct ScribblezSession {
                            const int64_t* move_counts, int64_t n_positions, const void* moves,
                            const void* opp_racks, const uint8_t* transposes,
                            const ScribblezPolicySetOutputs& out) const;
+  int64_t policy_candidates(const char* path, int64_t game_idx, int64_t turn_idx,
+                            int blank_prune_points, void* out_moves, int32_t* out_equity_ranks,
+                            int64_t cap) const;
   int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
                        int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
   int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
@@ -544,21 +550,52 @@ const char* scribblez_leave_value_arrays_content_hash(const LeaveValueArraysHand
   return a->arrays.content_hash().c_str();
 }
 
+namespace {
+
+scribblez::TileCounts tile_counts(const int32_t* counts) {
+  scribblez::TileCounts out;
+  for (int t = 0; t < scribblez::TILE_KINDS; ++t) out.add(scribblez::Tile::of(t), counts[t]);
+  return out;
+}
+
+scribblez::belief::LeaveSampler make_sampler(const LeaveValueArraysHandle* a, const float* params,
+                                             int k, const int32_t* leave_pool) {
+  scribblez::belief::LeaveParams p;
+  std::memcpy(&p, params, sizeof(p));
+  return scribblez::belief::LeaveSampler(p, k, tile_counts(leave_pool), a->arrays);
+}
+
+}  // namespace
+
 int scribblez_leave_sampler_query(const LeaveValueArraysHandle* a, const float* params, int k,
                                   const int32_t* leave_pool, const int64_t* rows, int64_t n_rows,
                                   const double* quantiles, int64_t n_quantiles, double* out_log_z,
                                   double* out_log_probs, int64_t* out_samples, char* out_err,
                                   int err_cap) {
   try {
-    scribblez::belief::LeaveParams p;
-    std::memcpy(&p, params, sizeof(p));
-    scribblez::TileCounts pool;
-    for (int t = 0; t < scribblez::TILE_KINDS; ++t) pool.add(scribblez::Tile::of(t), leave_pool[t]);
-    const scribblez::belief::LeaveSampler sampler(p, k, pool, a->arrays);
+    const scribblez::belief::LeaveSampler sampler = make_sampler(a, params, k, leave_pool);
     *out_log_z = sampler.log_z();
     for (int64_t i = 0; i < n_rows; ++i) out_log_probs[i] = sampler.log_prob(size_t(rows[i]));
     for (int64_t i = 0; i < n_quantiles; ++i)
       out_samples[i] = int64_t(sampler.sample(quantiles[i]));
+    return 0;
+  } catch (const std::exception& e) {
+    emit_string(e.what(), out_err, err_cap);
+    return -1;
+  }
+}
+
+int scribblez_opp_rack_summary(const LeaveValueArraysHandle* a, const float* params, int k,
+                               const int32_t* leave_pool, const int32_t* unseen, void* out_opp_rack,
+                               char* out_err, int err_cap) {
+  try {
+    std::unique_ptr<const scribblez::belief::LeaveSampler> leave;
+    if (params)
+      leave =
+        std::make_unique<scribblez::belief::LeaveSampler>(make_sampler(a, params, k, leave_pool));
+    const scribblez::PoolOppRack r = scribblez::pool_opp_rack(
+      scribblez::belief::summarize_opp_rack(tile_counts(unseen), leave.get()));
+    std::memcpy(out_opp_rack, &r, sizeof(r));
     return 0;
   } catch (const std::exception& e) {
     emit_string(e.what(), out_err, err_cap);
@@ -751,6 +788,41 @@ int scribblez_policy_set_positions(ScribblezSession* s, const char* path, const 
   if (!out) return -1;
   return s->policy_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves,
                                  opp_racks, transposes, *out);
+}
+
+int64_t ScribblezSession::policy_candidates(const char* path, int64_t game_idx, int64_t turn_idx,
+                                            int blank_prune_points, void* out_moves,
+                                            int32_t* out_equity_ranks, int64_t cap) const {
+  if ((cap > 0 && (!out_moves || !out_equity_ranks)) || game_idx < 0 || spec.opp_leave_input)
+    return -1;
+  std::vector<char> buf;
+  if (load_slog(path, game_idx, buf) != 0) return -1;
+  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
+  std::vector<scribblez::TurnRecord> scratch;
+  const scribblez::GameLog g =
+    scribblez::binlog::make_game_view(buf.data(), uint32_t(game_idx), scratch, nullptr);
+  if (turn_idx < 0 || turn_idx >= g.num_records) return -1;
+  scribblez::binlog::PositionEncoder encoder(spec);
+  const int mover = encoder.replay_to_sampled(g, int(turn_idx), /*post_move=*/false);
+  const scribblez::GameStateEncoder& pos = encoder.enc();
+  const scribblez::Rack hidden;
+  const scribblez::MoveRequest req{
+    pos.board(),      *spec.dict,           encoder.rack(mover), hidden,
+    pos.score(mover), pos.score(1 - mover), encoder.bag_size()};
+  const scribblez::policy_set::PoolCandidates pool = scribblez::policy_set::pool_candidates(
+    scribblez::equity_top_k(req, std::numeric_limits<int>::max()), blank_prune_points);
+  const int64_t n = pool.moves.size();
+  const int64_t kept = std::min(n, cap);
+  std::memcpy(out_moves, pool.moves.data(), size_t(kept) * sizeof(scribblez::Move));
+  std::memcpy(out_equity_ranks, pool.equity_ranks.data(), size_t(kept) * sizeof(int32_t));
+  return n;
+}
+
+int64_t scribblez_policy_candidates(ScribblezSession* s, const char* path, int64_t game_idx,
+                                    int64_t turn_idx, int blank_prune_points, void* out_moves,
+                                    int32_t* out_equity_ranks, int64_t cap) {
+  return s->policy_candidates(path, game_idx, turn_idx, blank_prune_points, out_moves,
+                              out_equity_ranks, cap);
 }
 
 int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,
