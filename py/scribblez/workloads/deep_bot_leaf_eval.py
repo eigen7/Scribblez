@@ -13,6 +13,8 @@ The match_eval role (scribblez/match_eval) plays every
 leaf network valuing HastyBot's best moves with no search) against a fixed
 opponent, its opponent leaves drawn from a leave inference model pinned at
 task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
+After each match the slot analyzes the known positions under the same export
+(deep_bot_leaf_eval/positions.py), which the Positions tab shows.
 """
 
 from dataclasses import dataclass, replace
@@ -21,6 +23,8 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
+from scribblez.deep_bot import known_positions
+from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.match_eval import runner as match_runner
@@ -40,8 +44,10 @@ from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 LEAVE_INFERENCE = "leave_inference"
-# Where a remote match slot finds the pinned leave inference model.
+# Where a remote match slot finds the pinned leave inference model, and the
+# known positions it analyzes.
 LEAVE_INPUT = "inputs/leave_inference.onnx"
+POSITIONS_INPUT_DIR = "inputs/known-positions"
 
 
 @dataclass(frozen=True)
@@ -223,9 +229,21 @@ def leave_model_path(params, mount_root: Path) -> Path:
 
 
 def inputs(params, mount_root: Path) -> dict[str, Path]:
-    """The match_eval role's out-of-tag input: the pinned leave inference
-    model."""
-    return {LEAVE_INPUT: leave_model_path(params, mount_root)}
+    """The match_eval role's out-of-tag inputs: the pinned leave inference
+    model and the known positions."""
+    out = {LEAVE_INPUT: leave_model_path(params, mount_root)}
+    for f in known_positions.files():
+        out[f"{POSITIONS_INPUT_DIR}/{f.name}"] = f
+    return out
+
+
+def _known_positions(ctx: WorkerContext) -> list[known_positions.Position]:
+    """The known positions where the slot reads them: in place beside the
+    controller, else from the copies staged under the tag."""
+    staged = [
+        resolve_input(ctx, f"{POSITIONS_INPUT_DIR}/{f.name}", f) for f in known_positions.files()
+    ]
+    return known_positions.load(staged[-1].parent)  # the manifest, last
 
 
 def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
@@ -240,10 +258,31 @@ def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
     return spec, False
 
 
+def analyze_positions(ctx: WorkerContext, model: Path, gen: int) -> list[tuple[Path, str]]:
+    """The match_eval.runner.AfterMatch of the slot: the export's analysis of
+    the known positions, as the matches' LeafBot sees them."""
+    p = ctx.params
+    leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(p, ctx.mount_root))
+    work = ctx.tag_paths().work_dir(ctx.worker_id) / "positions"
+    doc = leaf_positions.analyze(
+        _known_positions(ctx),
+        model,
+        leave,
+        p.match_opp_leaves,
+        p.match_candidates,
+        work,
+        ctx.threads,
+    )
+    path = work.parent / f"positions_gen_{gen:06d}.json"
+    leaf_positions.write({"generation": gen, **doc}, path)
+    return [(path, leaf_positions.rel(gen))]
+
+
 def run_match(ctx: WorkerContext) -> int:
     """The match_eval role's runner: match_eval's, the exports playing as
-    LeafBot."""
-    return match_runner.run(ctx, leafbot_player)
+    LeafBot, each one's analysis of the known positions delivered with its
+    result."""
+    return match_runner.run(ctx, leafbot_player, analyze_positions)
 
 
 def run_generate(ctx: WorkerContext) -> int:
@@ -292,7 +331,7 @@ SPEC = WorkloadSpec(
     progress="scribblez.generational.scheduler:progress",
     complete="scribblez.generational.scheduler:complete",
     pace_role="train",
-    collected_dirs=(STAGING_DIR, MATCH_RESULTS_DIR),
+    collected_dirs=(STAGING_DIR, MATCH_RESULTS_DIR, leaf_positions.POSITIONS_DIR),
     layout="scribblez.workloads.deep_bot_leaf_eval:layout",
     gpu_need="scribblez.workloads.deep_bot_leaf_eval:gpu_need",
     finalize="scribblez.workloads.deep_bot_leaf_eval:finalize",

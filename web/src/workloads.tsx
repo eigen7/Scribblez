@@ -3,6 +3,7 @@ import ControlsTab from './components/ControlsTab';
 import DeepBotPositions from './components/DeepBotPositions';
 import EvidenceTrajectories from './components/EvidenceTrajectories';
 import InfoTab from './components/InfoTab';
+import LeafEvalPositions from './components/LeafEvalPositions';
 import LaneAnalysis from './components/LaneAnalysis';
 import PositionEvalAnalysis from './components/PositionEvalAnalysis';
 import { FigureTab, LossTab } from './components/TrainingTabs';
@@ -65,6 +66,7 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('leaf_eval_metrics', 'metrics', 'No per-generation metrics yet.'),
     figureTab('Match', 'match_eval', 'match_eval', 'No match results yet.'),
+    { name: 'Positions', render: (w, t) => <LeafEvalPositions task={w} tag={t} /> },
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
