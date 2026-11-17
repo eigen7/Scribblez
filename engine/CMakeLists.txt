@@ -82,6 +82,7 @@ add_library(scribblez_core STATIC
   src/sim/grouped_pools.cpp
   src/agent/best_bot.cpp
   src/agent/deep_bot.cpp
+  src/agent/leaf_bot.cpp
   src/agent/policy_bot.cpp
   src/agent/policy_scorer.cpp
   src/agent/belief_truth.cpp
@@ -252,6 +253,7 @@ add_library(scribblez_neural_agents STATIC
   src/agent/ultimate_bot_agent.cpp
   src/agent/ultimate_bot_agent_factory.cpp
   src/agent/deep_bot_factory.cpp
+  src/agent/leaf_bot_factory.cpp
   src/agent/policy_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
@@ -548,6 +550,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_map_residuals.cpp
     tests/test_grouped_pools.cpp
     tests/test_endgame.cpp
+    tests/test_leaf_bot.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp
     tests/test_monte_carlo_sim.cpp
