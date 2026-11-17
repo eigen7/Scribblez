@@ -28,16 +28,23 @@ from scribblez.sim_evidence import slog_meta
 BANDS = {"0": (0, 0), "1_9": (1, 9), "10_up": (10, np.iinfo(np.int32).max)}
 
 
+def has_leave_row(meta, turn: int) -> bool:
+    """Whether `turn` of the game `meta` describes has a leave inference
+    row: the rows cover the game's training-eligible turns, which stop short
+    of its end."""
+    return int(meta["eligible_begin"]) <= turn < int(meta["eligible_end"])
+
+
 def played_ranks(pool_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """For each pool of `pool_path` whose game's move is one of its ranked
-    candidates and is not the game's last: (games, turns, ranks), the turn
-    the move was played at and its static-equity rank."""
+    candidates and whose next turn has a leave inference row: (games, turns,
+    ranks), the turn the move was played at and its static-equity rank."""
     slog = slog_meta.read_slog_bytes(pool_path.with_suffix(".slog"))
     metas = slog_meta.game_metas(slog)
     out = []
     for pool in pools.read_pools(pool_path)[1]:
         meta = metas[pool.game]
-        if pool.turn + 1 >= int(meta["num_turns"]):
+        if not has_leave_row(meta, pool.turn + 1):
             continue
         played = np.flatnonzero(pool.moves == slog_meta.move_at(slog, meta, pool.turn))
         if len(played) == 1 and pool.equity_rank[played[0]] >= 0:

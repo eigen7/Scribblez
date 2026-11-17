@@ -277,3 +277,12 @@ def test_the_leave_inference_score_is_broken_down_by_the_played_moves_rank(tag, 
     slog = pool_path.with_suffix(".slog")
     gaps = belief_by_rank.nll_vs_uniform(unit, slog, games, turns + 1)
     assert np.nanmean(gaps) == pytest.approx(scores["eval_nll_vs_uniform_rank_0"])
+
+
+def test_a_move_is_ranked_only_where_the_next_turn_has_a_leave_inference_row():
+    """A self-played game's pools reach turns past its eligible region,
+    which the row decoder refuses."""
+    meta = {"eligible_begin": 1, "eligible_end": 19, "num_turns": 22}
+    assert [belief_by_rank.has_leave_row(meta, t) for t in (0, 1, 18, 19)] == [
+        False, True, True, False
+    ]  # fmt: skip
