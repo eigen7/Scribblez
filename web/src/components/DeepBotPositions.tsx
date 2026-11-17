@@ -14,8 +14,9 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // at a time under one of the tag's releases. The board before the move, the
 // position's answer beside the release's picks there, and two of the release's
 // models: the policy over PolicyBot's candidates and the leave inference
-// model's belief about the opponent's rack (py/scribblez/deep_bot/position_view.py).
-// Clicking a move draws it on the board.
+// model's belief about the opponent's rack, as the trainer computed them when it
+// published the release (py/scribblez/deep_bot/release_positions.py). Clicking a
+// move draws it on the board.
 
 const NOOP = () => {};
 const DIM = 15;
@@ -45,6 +46,12 @@ interface Candidate extends MoveRef {
   policy_rank: number;
 }
 
+interface Policy {
+  num_candidates: number;
+  inferred: boolean;
+  candidates: Candidate[];
+}
+
 interface Payload {
   id: string;
   title: string;
@@ -62,8 +69,9 @@ interface Payload {
   static_equity_best: MoveRef;
   release: number;
   picks: Record<string, Pick>;
-  belief: RackBeliefChart;
-  policy: { num_candidates: number; inferred: boolean; candidates: Candidate[] };
+  // Null for a release published before the trainer analyzed the positions.
+  belief: RackBeliefChart | null;
+  policy: Policy | null;
 }
 
 interface Release {
@@ -116,13 +124,20 @@ function moveTags(p: Payload, move: string): string[] {
   return tags;
 }
 
+// Where the policy puts a move; nothing without the release's policy.
+function policyText(byMove: Map<string, Candidate> | null, move: string): string {
+  if (byMove == null) return '';
+  const c = byMove.get(move);
+  return c ? `policy #${c.policy_rank} · ${pct(c.prob)}` : 'not a policy candidate';
+}
+
 function AnswerRow({
-  label, move, color, candidate, selected, onSelect,
+  label, move, color, policy, selected, onSelect,
 }: {
   label: string;
   move: MoveRef;
   color?: string;
-  candidate: Candidate | undefined;
+  policy: string;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -130,9 +145,7 @@ function AnswerRow({
     <button className={`dbp-answer${selected ? ' selected' : ''}`} onClick={onSelect}>
       <span className="dbp-answer-label">{label}</span>
       <span className="dbp-answer-move" style={color ? { color } : undefined}>{move.display}</span>
-      <span className="dbp-answer-policy">
-        {candidate ? `policy #${candidate.policy_rank} · ${pct(candidate.prob)}` : 'not a policy candidate'}
-      </span>
+      <span className="dbp-answer-policy">{policy}</span>
     </button>
   );
 }
@@ -141,7 +154,7 @@ function Answers({
   p, byMove, selected, onSelect,
 }: {
   p: Payload;
-  byMove: Map<string, Candidate>;
+  byMove: Map<string, Candidate> | null;
   selected: string | null;
   onSelect: (m: string) => void;
 }) {
@@ -151,15 +164,15 @@ function Answers({
       <div className="dbp-panel-title">The position&apos;s answer and release {p.release}&apos;s picks</div>
       {p.reference.map((r) => (
         <AnswerRow key={`ref-${r.move}`} label="reference" move={r} color={READING_COLOR.reference}
-          candidate={byMove.get(r.move)} selected={selected === r.move} onSelect={() => onSelect(r.move)} />
+          policy={policyText(byMove, r.move)} selected={selected === r.move} onSelect={() => onSelect(r.move)} />
       ))}
-      <AnswerRow label="static equity" move={p.static_equity_best} candidate={byMove.get(p.static_equity_best.move)}
+      <AnswerRow label="static equity" move={p.static_equity_best} policy={policyText(byMove, p.static_equity_best.move)}
         selected={selected === p.static_equity_best.move} onSelect={() => onSelect(p.static_equity_best.move)} />
       {replies.map((reply) => {
         const pick = p.picks[reply];
         return (
           <AnswerRow key={reply} label={`pick · ${REPLY_LABEL[reply] ?? reply}`} move={pick}
-            color={READING_COLOR[pick.reading] ?? READING_COLOR.other} candidate={byMove.get(pick.move)}
+            color={READING_COLOR[pick.reading] ?? READING_COLOR.other} policy={policyText(byMove, pick.move)}
             selected={selected === pick.move} onSelect={() => onSelect(pick.move)} />
         );
       })}
@@ -169,13 +182,14 @@ function Answers({
 }
 
 function PolicyTable({
-  p, selected, onSelect,
+  p, policy, selected, onSelect,
 }: {
   p: Payload;
+  policy: Policy;
   selected: string | null;
   onSelect: (m: string) => void;
 }) {
-  const { candidates, num_candidates: total, inferred } = p.policy;
+  const { candidates, num_candidates: total, inferred } = policy;
   const top = candidates.length ? candidates[0].prob : 1;
   return (
     <div className="dbp-panel">
@@ -281,7 +295,7 @@ function Unseen({ p }: { p: Payload }) {
 // Every move the position's lists name, by notation, for the board preview.
 function namedMoves(p: Payload): Map<string, MoveRef> {
   const out = new Map<string, MoveRef>();
-  for (const m of [...p.policy.candidates, ...p.reference, p.static_equity_best, ...Object.values(p.picks)])
+  for (const m of [...(p.policy?.candidates ?? []), ...p.reference, p.static_equity_best, ...Object.values(p.picks)])
     if (!out.has(m.move)) out.set(m.move, m);
   return out;
 }
@@ -290,8 +304,9 @@ function PositionView({ p, modelPending }: { p: Payload; modelPending: boolean }
   // Opens on the policy's choice; kept across releases while the move exists.
   const [selected, setSelected] = useState<string | null>(null);
   const moves = useMemo(() => namedMoves(p), [p]);
-  const byMove = useMemo(() => new Map(p.policy.candidates.map((c) => [c.move, c])), [p]);
-  const shownMove = selected != null && moves.has(selected) ? selected : (p.policy.candidates[0]?.move ?? null);
+  const byMove = useMemo(() => (p.policy ? new Map(p.policy.candidates.map((c) => [c.move, c])) : null), [p]);
+  const opening = p.policy?.candidates[0]?.move ?? null;
+  const shownMove = selected != null && moves.has(selected) ? selected : opening;
   const preview = shownMove != null ? moves.get(shownMove)! : null;
   return (
     <>
@@ -307,13 +322,19 @@ function PositionView({ p, modelPending }: { p: Payload; modelPending: boolean }
         <BoardColumn p={p} preview={preview} />
         <div className="dbp-side">
           <Answers p={p} byMove={byMove} selected={shownMove} onSelect={setSelected} />
-          {!modelPending && <OppRackBelief chart={p.belief} />}
+          {!modelPending && p.belief && <OppRackBelief chart={p.belief} />}
           <div style={{ width: 320 }}>
             <Unseen p={p} />
           </div>
         </div>
       </div>
-      {!modelPending && <PolicyTable p={p} selected={shownMove} onSelect={setSelected} />}
+      {!modelPending && p.policy && <PolicyTable p={p} policy={p.policy} selected={shownMove} onSelect={setSelected} />}
+      {!modelPending && !p.policy && (
+        <div className="dbp-panel dbp-note">
+          Release {p.release} was published before the trainer analyzed the known positions, so it has no
+          model outputs to show.
+        </div>
+      )}
     </>
   );
 }

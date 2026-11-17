@@ -39,6 +39,8 @@ function payload(release: number) {
 }
 
 let releaseGen0: (() => void) | null = null;
+// Serve release 1 as one published before the trainer analyzed the positions.
+let unanalyzed = false;
 
 function fakeFetch(url: string): Promise<Response> {
   const json = (body: unknown) =>
@@ -56,7 +58,7 @@ function fakeFetch(url: string): Promise<Response> {
   if (url.startsWith('/api/deep_bot/position?')) {
     const r = new URLSearchParams(url.split('?')[1]).get('release');
     if (r === '0') return new Promise((resolve) => { releaseGen0 = () => resolve(json(payload(0)) as never); });
-    return json(payload(1));
+    return json(unanalyzed ? { ...payload(1), belief: null, policy: null } : payload(1));
   }
   return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'nope' }) } as Response);
 }
@@ -64,6 +66,7 @@ function fakeFetch(url: string): Promise<Response> {
 describe('DeepBotPositions', () => {
   beforeEach(() => {
     releaseGen0 = null;
+    unanalyzed = false;
     vi.stubGlobal('fetch', vi.fn(fakeFetch));
   });
   afterEach(() => {
@@ -97,5 +100,14 @@ describe('DeepBotPositions', () => {
     releaseGen0!();
     await waitFor(() => expect(screen.getByText('Policy · release 0')).toBeTruthy());
     expect(screen.queryByText(/loading release/)).toBeNull();
+  });
+
+  it('shows the board and picks, without model outputs, for an unanalyzed release', async () => {
+    unanalyzed = true;
+    render(<DeepBotPositions task="deep_bot" tag="v1" />);
+    await waitFor(() => expect(screen.getByText(/published before the trainer analyzed/)).toBeTruthy());
+    expect(screen.getByText('pick · hasty reply')).toBeTruthy();
+    expect(screen.queryByText(/not a policy candidate/)).toBeNull();
+    expect(screen.queryByText('Policy · release 1')).toBeNull();
   });
 });

@@ -1,10 +1,11 @@
-"""deep_bot's Positions tab (scribblez.deep_bot.position_view,
-dashboard/deep_bot_api.py): PolicyBot's candidates and opponent-rack input
-at a known position through the FFI, and one position's payload under a
-release of tiny seeds."""
+"""deep_bot's Positions tab: PolicyBot's candidates and opponent-rack input
+at a known position through the FFI, the analysis a release of tiny seeds
+publishes (deep_bot/release_positions.py), and the tab's payload of it
+(deep_bot/position_view.py, dashboard/deep_bot_api.py)."""
 
 import dataclasses
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -21,8 +22,15 @@ if not LEAVES.exists():
 
 from scribblez import ffi  # noqa: E402
 from scribblez.dashboard import db, deep_bot_api  # noqa: E402
-from scribblez.deep_bot import KINDS, position_view, release, trainer, units  # noqa: E402
-from scribblez.deep_bot.position_view import KnownPositionsReplay, ReleaseModels  # noqa: E402
+from scribblez.deep_bot import (  # noqa: E402
+    KINDS,
+    position_view,
+    release,
+    release_positions,
+    trainer,
+    units,
+)
+from scribblez.deep_bot.release_positions import KnownPositionsReplay, ReleaseModels  # noqa: E402
 from scribblez.leave_inference.beliefs import NUM_PARAMS  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.sim_evidence.sobs import move_notation  # noqa: E402
@@ -33,13 +41,14 @@ CLINKER = 2  # the manifest's third position
 
 @pytest.fixture(scope="module")
 def replay() -> KnownPositionsReplay:
-    return KnownPositionsReplay()
+    return release_positions._replay()
 
 
 @pytest.fixture(scope="module")
 def tag(tmp_path_factory) -> TagPaths:
-    """A tag holding release 0 of tiny seeds, the trainer's own export: one
-    ONNX export of each model, a few seconds the module shares."""
+    """A tag holding release 0 of tiny seeds as the trainer publishes it: one
+    ONNX export of each model and their analysis, a few seconds the module
+    shares."""
     paths = TagPaths("t", "deep_bot", tmp_path_factory.mktemp("mount"))
     torch.manual_seed(0)
     for kind in KINDS:
@@ -72,7 +81,7 @@ def test_the_opp_rack_input_is_the_engines_summary_of_the_belief(replay, tag):
     """The engine's summary reads the same rack the Python belief does: under
     the model's parameters and under its no-information prior."""
     models = ReleaseModels.load(tag, 0)
-    b = position_view.belief_at(models, replay, CLINKER, _view(replay, CLINKER))
+    b = release_positions.belief_at(models, replay, CLINKER, _view(replay, CLINKER))
     assert b.modelled
     table = models.beliefs.table
     inferred = table.opp_rack_summary(b.unseen, b.params, b.leave_length, b.leave_pool)
@@ -88,16 +97,31 @@ def test_the_opp_rack_input_is_the_engines_summary_of_the_belief(replay, tag):
     assert uniform["modelled"] == 0 and uniform["leave_value_mean"] == 0
 
 
-def test_a_positions_payload_under_a_release(replay, tag, monkeypatch):
-    monkeypatch.setattr(deep_bot_api, "_replay", lambda: replay)
+def test_a_release_publishes_its_analysis_of_every_position(replay, tag):
+    doc = json.loads(release_positions.path(tag, 0).read_text())
+    assert doc["inferred"] is True  # the release's policy reads its own beliefs
+    assert list(doc["positions"]) == [p.id for p in replay.positions]
+    clinker = doc["positions"][replay.positions[CLINKER].id]
+    probs = [c["prob"] for c in clinker["candidates"]]
+    assert probs == sorted(probs, reverse=True) and sum(probs) == pytest.approx(1, abs=1e-4)
+    moves = [c["move"] for c in clinker["candidates"]]
+    assert replay.positions[CLINKER].static_equity_best in moves
+    assert clinker["belief"]["modelled"] and len(clinker["belief"]["presence"]) == 27
+
+
+def _payload(tag: TagPaths, number: int, index: int) -> dict:
+    key = (tag.tag, tag.task, str(tag.mount_root))
+    return json.loads(json.dumps(deep_bot_api.position_payload(key, number, index)))
+
+
+def test_a_positions_payload_under_a_release(replay, tag):
     p = replay.positions[CLINKER]
     conn = db.connect(tag.dashboard_db)
     db.write_release_picks(
         conn, 0, {"hasty": [{"id": p.id, "pick": "F6 JILTE.", "reading": "equity", "seconds": 1.0}]}
     )
     conn.close()
-    key = (tag.tag, tag.task, str(tag.mount_root))
-    out = json.loads(json.dumps(deep_bot_api.position_payload(key, 0, CLINKER)))
+    out = _payload(tag, 0, CLINKER)
 
     assert (out["id"], out["release"], out["rack"]) == (p.id, 0, "EIJLRST")
     assert out["picks"]["hasty"]["display"] == "F6 JILTE(R)"
@@ -117,3 +141,12 @@ def test_a_positions_payload_under_a_release(replay, tag, monkeypatch):
     assert position_view.release_list(tag, {0}) == [
         {"release": 0, "rows_trained": rows, "picked": True}
     ]
+
+
+def test_a_release_without_an_analysis_shows_no_model_outputs(tag):
+    """A release published before the trainer wrote its analysis."""
+    shutil.copytree(release.release_dir(tag, 0), release.release_dir(tag, 1))
+    release_positions.path(tag, 1).unlink()
+    out = _payload(tag, 1, CLINKER)
+    assert out["release"] == 1 and out["belief"] is None and out["policy"] is None
+    assert out["board"] == _payload(tag, 0, CLINKER)["board"]

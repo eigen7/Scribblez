@@ -2293,7 +2293,7 @@ def _write_release(paths, number: int):
 
 
 RELEASE_1 = [f"releases/release_000001/{name}" for name in (
-    "leave.onnx", "leaf.onnx", "policy.onnx", "manifest.json"
+    "leave.onnx", "leaf.onnx", "policy.onnx", "positions.json", "manifest.json"
 )]  # fmt: skip
 
 

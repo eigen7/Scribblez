@@ -165,7 +165,7 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
     assert state.leave_rows > 0 and state.leaf_rows > 0 and state.policy_rows == 2
     assert release.newest(tag) == 1
     names = sorted(p.name for p in release.release_dir(tag, 1).iterdir())
-    assert names == ["leaf.onnx", "leave.onnx", "manifest.json", "policy.onnx"]
+    assert names == ["leaf.onnx", "leave.onnx", "manifest.json", "policy.onnx", "positions.json"]
     (record,) = [s.record["metrics"] for s in staged]
     for key in (
         "leave_eval_nll",
@@ -224,6 +224,7 @@ def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tm
     for kind in KINDS:
         release.export_path(tag, 2, kind).parent.mkdir(parents=True, exist_ok=True)
         release.export_path(tag, 2, kind).write_text(kind)
+    (release.release_dir(tag, 2) / release.POSITIONS).write_text("{}")
     release.write_manifest(tag, 2, "t", {})
     tag.rolling_checkpoint.parent.mkdir(parents=True, exist_ok=True)
     tag.rolling_checkpoint.write_text("state 2")
@@ -238,7 +239,7 @@ def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tm
     shutil.move(tag.root / kept_checkpoints.OUTBOX, home.root / kept_checkpoints.OUTBOX)
     release.install(pulled / "release_000002", home)
     kept_checkpoints.install(home.root / kept_checkpoints.OUTBOX / "gen_000002", home)
-    assert [(home.root / rel).is_file() for rel in release.newest_files(home, None)] == [True] * 4
+    assert [(home.root / rel).is_file() for rel in release.newest_files(home, None)] == [True] * 5
     assert release.export_path(home, 2, LEAF).read_text() == LEAF
     assert home.checkpoint_path(2).read_text() == "state 2"
     assert not any(pulled.iterdir())

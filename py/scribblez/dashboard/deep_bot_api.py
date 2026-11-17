@@ -8,47 +8,40 @@ Routes (all but the first take task + tag):
   /api/deep_bot/position    ?position=&release= -> the board, the release's
                             picks there, and its models' outputs
 
-A release's files never change, so its models load once and each position's
-analysis is memoized by (tag, release, position); the picks are read from the
-tag's database every request, since the measure role records them after the
-release exists. A position's analysis takes well under a second on the CPU.
+The models' outputs are the release's positions.json, which the trainer wrote
+as it published the release (deep_bot/release_positions.py); a release's files
+never change, so each is read once. The picks are read from the tag's
+database every request, since the measure role records them after the release
+exists.
 """
 
 import functools
-import subprocess
-from concurrent.futures import ThreadPoolExecutor
+import json
 
-import tornado.ioloop
 import tornado.web
 
 from scribblez.dashboard import db
-from scribblez.deep_bot import known_positions, position_view, release
-from scribblez.deep_bot.position_view import Analysis, KnownPositionsReplay, ReleaseModels
+from scribblez.deep_bot import known_positions, position_view, release, release_positions
 from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
 
-# The model work runs off the IOLoop on one thread, which also serializes
-# access to the caches and the onnxruntime sessions.
-_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
+# Keyed by the tag's (tag, task, mount_root): TagPaths hashes by identity, and
+# every request makes its own. A missing file raises, which is not cached.
+@functools.lru_cache(maxsize=16)
+def _analysis_file(tag_key: tuple[str, str, str], number: int) -> dict:
+    return json.loads(release_positions.path(TagPaths(*tag_key), number).read_text())
 
 
-@functools.cache
-def _replay() -> KnownPositionsReplay:
-    return KnownPositionsReplay()
-
-
-# The caches key a tag by its (tag, task, mount_root): TagPaths hashes by
-# identity, and every request makes its own.
-@functools.lru_cache(maxsize=4)
-def _models(tag_key: tuple[str, str, str], number: int) -> ReleaseModels:
-    return ReleaseModels.load(TagPaths(*tag_key), number)
-
-
-@functools.lru_cache(maxsize=256)
-def _analysis(tag_key: tuple[str, str, str], number: int, index: int) -> Analysis:
-    replay = _replay()
-    view = position_view.board_view(replay.positions[index])
-    return position_view.analyze(_models(tag_key, number), replay, index, view)
+def _analysis(tag_key: tuple[str, str, str], number: int, position_id: str) -> dict | None:
+    """Release `number`'s analysis of the position, as position_view.payload
+    takes it; None for a release published before the trainer wrote one."""
+    try:
+        doc = _analysis_file(tag_key, number)
+    except FileNotFoundError:
+        return None
+    entry = doc["positions"].get(position_id)
+    return None if entry is None else {**entry, "inferred": doc["inferred"]}
 
 
 def _pick_rows(paths: TagPaths) -> list[dict]:
@@ -74,13 +67,13 @@ def _picks(paths: TagPaths, number: int, position_id: str) -> dict[str, dict]:
 
 def position_payload(tag_key: tuple[str, str, str], number: int, index: int) -> dict:
     paths = TagPaths(*tag_key)
-    p = _replay().positions[index]
+    p = known_positions.load()[index]
     return {
         **position_view.payload(
             position_view.board_view(p),
             number,
             _picks(paths, number, p.id),
-            _analysis(tag_key, number, index),
+            _analysis(tag_key, number, p.id),
         ),
         "bonuses": bonuses(),
         "tile_scores": TILE_SCORES,
@@ -88,25 +81,21 @@ def position_payload(tag_key: tuple[str, str, str], number: int, index: int) -> 
 
 
 class _Base(tornado.web.RequestHandler):
-    @property
-    def mount_root(self) -> str:
-        return self.settings["mount_root"]
-
     def tag_key(self) -> tuple[str, str, str]:
-        return self.get_query_argument("tag"), self.get_query_argument("task"), self.mount_root
+        return (
+            self.get_query_argument("tag"),
+            self.get_query_argument("task"),
+            self.settings["mount_root"],
+        )
 
     def tag_paths(self) -> TagPaths:
         return TagPaths(*self.tag_key())
 
-    def fail(self, status: int, message: str):
-        self.set_status(status)
-        self.write({"error": message})
-
 
 class PositionsHandler(_Base):
-    async def get(self):
-        replay = await tornado.ioloop.IOLoop.current().run_in_executor(_EXECUTOR, _replay)
-        self.write({"positions": [{"id": p.id, "title": p.title} for p in replay.positions]})
+    def get(self):
+        positions = known_positions.load()
+        self.write({"positions": [{"id": p.id, "title": p.title} for p in positions]})
 
 
 class ReleasesHandler(_Base):
@@ -120,25 +109,20 @@ class PositionHandler(_Base):
     """One known position under one release; `release` defaults to the
     newest."""
 
-    async def get(self):
-        paths = self.tag_paths()
-        numbers = release.numbers(paths)
+    def get(self):
+        numbers = release.numbers(self.tag_paths())
         arg = self.get_query_argument("release", "latest")
         number = (numbers[-1] if numbers else None) if arg in ("", "latest") else int(arg)
         if number not in numbers:
-            self.fail(404, "no such release" if numbers else "no release yet")
+            self.set_status(404)
+            self.write({"error": "no such release" if numbers else "no release yet"})
             return
         index = int(self.get_query_argument("position", "0"))
         if not 0 <= index < len(known_positions.load()):
-            self.fail(404, "position out of range")
+            self.set_status(404)
+            self.write({"error": "position out of range"})
             return
-        try:
-            build = functools.partial(position_payload, self.tag_key(), number, index)
-            self.write(await tornado.ioloop.IOLoop.current().run_in_executor(_EXECUTOR, build))
-        except ValueError as e:  # a model the engine refuses, a belief it cannot summarize
-            self.fail(400, str(e))
-        except (OSError, subprocess.CalledProcessError) as e:  # engine unavailable
-            self.fail(503, str(e))
+        self.write(position_payload(self.tag_key(), number, index))
 
 
 ROUTES = [

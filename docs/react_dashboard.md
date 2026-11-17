@@ -132,20 +132,24 @@ at a time under one of the tag's releases: what the release played there and
 what two of its models read in it (`scribblez.deep_bot.position_view`, routes
 in `dashboard/deep_bot_api.py`).
 
-- **Positions.** The manifest's GCGs, each cut after the move made at the
-  position, become one .slog with its .forgone sidecar, once per process.
-- **Picks** are the measure role's `release_pick` rows: the release's move
-  under each reply model, read against the position's reference move and
-  static equity's.
-- **Model outputs** are computed on demand on the CPU from the release's
-  exports under onnxruntime. The leave inference model gives the mover's
-  belief about the opponent's rack (the blind-spots viewer's panel). The
-  policy scores the candidates PolicyBot chooses among
+- **Model outputs** are computed once, by the trainer as it publishes the
+  release (`scribblez.deep_bot.release_positions`), and kept beside its
+  exports as `positions.json`, so the dashboard runs no model and the file
+  travels with the release from a remote trainer. The manifest's GCGs, each
+  cut after the move made at the position, become one .slog with its
+  .forgone sidecar, once per trainer process; the exports run on it on the
+  CPU under onnxruntime, about 2 s a release. The leave inference model gives
+  the mover's belief about the opponent's rack (the blind-spots viewer's
+  panel). The policy scores every candidate PolicyBot chooses among
   (`ffi.policy_candidates`), its opponent-rack input summarized from the same
   belief (`LeaveValueArrays.opp_rack_summary`), as PolicyBot reads it: a
   probability and a value per candidate. The leaf network values rollout
   leaves two plies on, so a position has no output of its own and the tab
-  shows none.
+  shows none. A release published before the trainer wrote the file shows
+  its board and picks only.
+- **Picks** are the measure role's `release_pick` rows: the release's move
+  under each reply model, read against the position's reference move and
+  static equity's.
 - **UI.** Release slider and position picker; the board with the selected
   move drawn on it; the reference, static equity's move and the picks, each
   with its policy rank; the opponent-rack belief; and the policy table, the
