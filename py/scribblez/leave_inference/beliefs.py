@@ -31,6 +31,9 @@ DISTRIBUTION = np.array(
     dtype=np.int64,
 )
 OUTPUT = "leave_params"
+TILE_NAMES = [chr(ord("A") + i) for i in range(26)] + ["?"]
+# The sample racks a chart (LeaveBeliefs.chart) shows.
+SAMPLE_RACKS = 10
 CAUSE_VALID = ffi.format_layout()["constants"]["leave_inference"]["cause"]["valid"]
 
 
@@ -179,6 +182,24 @@ class LeaveBeliefs:
                 seen.add(rack)
                 out.append({"leave": rack[0], "refill": rack[1]})
         return out
+
+    def chart(self, b: RackBelief, rng: np.random.Generator) -> dict:
+        """The viewers' opponent-rack panel (web OppRackBelief's
+        RackBeliefChart, less its model name): per tile the chance the rack
+        holds one under the model and under no information, and SAMPLE_RACKS
+        sample racks."""
+        inferred = self.rack_presence(b)
+        uniform = self.rack_presence(b, uniform=True)
+        return {
+            "modelled": b.modelled,
+            "leave_length": b.leave_length,
+            "refill": b.refill,
+            "presence": [
+                {"tile": name, "inferred": float(i), "uniform": float(u)}
+                for name, i, u in zip(TILE_NAMES, inferred, uniform, strict=True)
+            ],
+            "racks": self.sample_racks(b, SAMPLE_RACKS, rng),
+        }
 
     def _sample_leaves(self, b: RackBelief, m: int, rng: np.random.Generator) -> list[list[int]]:
         """`m` leaves drawn from the belief, as tile indices."""

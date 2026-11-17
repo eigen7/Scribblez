@@ -2,9 +2,9 @@
 rather than by the viewer: a <stem>.beliefs.json sidecar beside each
 .blindspots.json report holds, for each kept position, what the mover
 believes about the opponent's rack under a leave inference model
-(leave_inference/beliefs.py). Per tile, the chance the rack holds one under
-the model and under no information, and SAMPLE_RACKS distinct sample racks,
-the kept leave apart from the refill.
+(leave_inference/beliefs.py): its LeaveBeliefs.chart, per tile the chance
+the rack holds one under the model and under no information, and distinct
+sample racks, the kept leave apart from the refill.
 
 The hidden_blind_spots generator writes it under the model its pools were
 labeled with. py/tools/one_off/backfill_blind_spots_beliefs.py writes it for
@@ -20,9 +20,6 @@ import numpy as np
 
 from scribblez.blind_spots_viewer import BELIEFS_SUFFIX, REPORT_SUFFIX, report_entries
 from scribblez.leave_inference.beliefs import LeaveBeliefs, RackBelief, unseen_pool
-
-SAMPLE_RACKS = 10
-TILE_NAMES = [chr(ord("A") + i) for i in range(26)] + ["?"]
 
 
 class BeliefWriter:
@@ -58,17 +55,4 @@ class BeliefWriter:
         game, turn = entry["game"], entry["turn"] - 1
         # Seeded by the position, so a rewrite draws the same racks.
         rng = np.random.default_rng([zlib.crc32(stem.encode()), game, turn])
-        inferred = self.model.rack_presence(b)
-        uniform = self.model.rack_presence(b, uniform=True)
-        return {
-            "game": game,
-            "turn": turn,
-            "modelled": b.modelled,
-            "leave_length": b.leave_length,
-            "refill": b.refill,
-            "presence": [
-                {"tile": name, "inferred": float(i), "uniform": float(u)}
-                for name, i, u in zip(TILE_NAMES, inferred, uniform, strict=True)
-            ],
-            "racks": self.model.sample_racks(b, SAMPLE_RACKS, rng),
-        }
+        return {"game": game, "turn": turn, **self.model.chart(b, rng)}
