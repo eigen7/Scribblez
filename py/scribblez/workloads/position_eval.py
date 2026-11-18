@@ -36,7 +36,14 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads.base import RoleSpec, SlotPlan, StatsSpec, WorkerContext, WorkloadSpec
+from scribblez.workloads.base import (
+    TRT_WORKSPACE_GB,
+    RoleSpec,
+    SlotPlan,
+    StatsSpec,
+    WorkerContext,
+    WorkloadSpec,
+)
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 TRAINER_STATS = StatsSpec(
@@ -222,9 +229,9 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 # Match eval: a 40-pair match of a transformer-clipped export against
 # HastyBot-endgame at 28 threads peaked at 1.06 GiB, with the TensorRT plan
 # already cached. On a machine without the cached plan the engine first builds
-# one, whose scratch is capped at 1 GiB (NeuralNet's workspace_bytes); that part
-# is a bound from the cap, not a measurement.
-MATCH_EVAL_GPU_GB = 1.06 + 1.0 + TRAINER_GPU_HEADROOM_GB
+# one, whose scratch is capped at TRT_WORKSPACE_GB; that part is a bound from
+# the cap, not a measurement.
+MATCH_EVAL_GPU_GB = 1.06 + TRT_WORKSPACE_GB + TRAINER_GPU_HEADROOM_GB
 _MEASURED_GB = {
     (TRUNK_TRANSFORMER, False): 10.53,
     (TRUNK_TRANSFORMER, True): 4.99,

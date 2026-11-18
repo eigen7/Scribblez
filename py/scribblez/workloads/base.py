@@ -127,6 +127,13 @@ class RoleSpec:
     stats: StatsSpec | None = None
 
 
+# The default TensorRT scratch cap in GiB: NeuralNetParamsBase::workspace_bytes
+# (engine/include/nn/neural_net.h), mirrored here for the GPU-need estimates. A
+# slot on a machine without a cached plan builds one first, and the build may
+# take up to the cap on top of what the slot then serves with.
+TRT_WORKSPACE_GB = 1.0
+
+
 def uses_gpu(role: RoleSpec, gpu_gb: float | None) -> bool:
     """Whether a slot of `role` whose tag needs `gpu_gb` GiB (None when
     unmeasured) uses a GPU: the role may, and the tag's configuration does not

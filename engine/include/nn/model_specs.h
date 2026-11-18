@@ -571,6 +571,11 @@ class LeafEvalSpec {
   static constexpr const char* kChannelsTensor = nullptr;
   static constexpr int kDefaultMaxRows = 1024;
   static constexpr int kOptRows = 1024;
+  // A transformer leaf's fused attention needs more than the default 1 GiB at
+  // kDefaultMaxRows: at 1 GiB TensorRT finds no tactic for it at all, and at
+  // 2 GiB it builds a plan that plays ~1.7x slower than this cap's.
+  // py/scribblez/workloads/deep_bot_leaf_eval.py's LEAF_TRT_WORKSPACE_GB mirrors it.
+  static constexpr uint64_t kWorkspaceBytes = uint64_t{8} << 30;
   static constexpr VersionRequirement kVersions[] = {
     {"leaf_eval_format_version", kLeafEvalFormatVersion, -1}};
   using Inputs = TensorList<SpatialInput, ScalarInput>;

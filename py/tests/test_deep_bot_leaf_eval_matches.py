@@ -14,6 +14,7 @@ from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.match_eval import runner
 from scribblez.match_eval.harness import RoundResult
 from scribblez.paths import TagPaths
+from scribblez.trunk_arms import TRUNK_CONV, TRUNK_TRANSFORMER
 from scribblez.workloads import deep_bot_leaf_eval
 from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot_leaf_eval import (
@@ -137,5 +138,9 @@ def test_the_match_role_plays_the_assigned_export_as_leafbot(tmp_path, monkeypat
     assert json.loads(delivered.read_text())["generation"] == 20
 
 
-def test_a_match_slot_needs_its_measured_gpu_memory():
-    assert deep_bot_leaf_eval.gpu_need(PARAMS, "match_eval") == deep_bot_leaf_eval.MATCH_EVAL_GPU_GB
+def test_a_match_slot_needs_its_trunks_measured_gpu_memory_plus_the_build_scratch():
+    need = {
+        trunk: deep_bot_leaf_eval.gpu_need(replace(PARAMS, trunk=trunk), "match_eval")
+        for trunk in (TRUNK_CONV, TRUNK_TRANSFORMER)
+    }
+    assert deep_bot_leaf_eval.LEAF_TRT_WORKSPACE_GB < need[TRUNK_CONV] < need[TRUNK_TRANSFORMER]

@@ -169,13 +169,18 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 _MEASURED_GB = {TRUNK_TRANSFORMER: 1.76, TRUNK_CONV: 1.01}
 # The params the measurements held fixed, at their defaults.
 TRAINER_GPU_KEY = ("batch_size", "width", "depth", "num_heads")
-# Match eval: a 1000-pair match of LeafBot (a conv 64x4 leaf, a leave_inference
-# export) against HastyBot-endgame at 28 threads peaked at 1.77 GiB
-# (2026-11-17), its two TensorRT plans already cached. On a machine without
-# them each engine first builds its plan, whose scratch is capped at 1 GiB
-# (NeuralNet's workspace_bytes); that part is a bound from the cap, not a
-# measurement.
-MATCH_EVAL_GPU_GB = 1.77 + 1.0 + TRAINER_GPU_HEADROOM_GB
+# Match eval: LeafBot (a 64x4 leaf, a leave_inference export) against
+# HastyBot-endgame, its two TensorRT plans already cached, on the RTX 5000 Ada
+# (2026-11-17): the conv leaf at 28 threads over 1000 pairs peaked at 1.77 GiB,
+# the transformer leaf at 8 and at 28 threads over 100 pairs at 3.31 GiB. On a
+# machine without the plans each engine first builds its plan, whose scratch is
+# capped: the leave inference plan at TRT_WORKSPACE_GB, the leaf plan at
+# LEAF_TRT_WORKSPACE_GB (LeafEvalSpec::kWorkspaceBytes,
+# engine/include/nn/model_specs.h). The leaf plan's cap, the larger, bounds
+# that part: a bound, not a measurement (a cold transformer run peaked at
+# 7.86 GiB in all).
+LEAF_TRT_WORKSPACE_GB = 8.0
+_MATCH_EVAL_MEASURED_GB = {TRUNK_TRANSFORMER: 3.31, TRUNK_CONV: 1.77}
 
 
 def gpu_need(params, role: str) -> float | None:
@@ -183,7 +188,9 @@ def gpu_need(params, role: str) -> float | None:
     if role == "generate":
         return 0.0
     if role == "match_eval":
-        return MATCH_EVAL_GPU_GB
+        return (
+            _MATCH_EVAL_MEASURED_GB[params.trunk] + LEAF_TRT_WORKSPACE_GB + TRAINER_GPU_HEADROOM_GB
+        )
     defaults = DeepBotLeafEvalParams()
     if any(getattr(params, k) != getattr(defaults, k) for k in TRAINER_GPU_KEY):
         return None
