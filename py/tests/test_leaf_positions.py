@@ -99,7 +99,7 @@ def test_the_table_lists_the_best_and_every_named_move(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "SHOWN_VALUES", 1)
     paths = _tag(tmp_path)
     values = [
-        {**_v("15D .ROTIC", 0.40, 1), "leaf_rank": 1},
+        {**_v("15D .ROTIC", 0.40, 1), "points": 36, "leaf_rank": 1},
         {**_v("8H ZZZ", 0.30, 7), "leaf_rank": 2},
         {**_v("G11 TORI", 0.20, 31), "leaf_rank": 3},
     ]
@@ -109,7 +109,22 @@ def test_the_table_lists_the_best_and_every_named_move(tmp_path, monkeypatch):
     # The best, and the reference; not the unnamed second.
     assert [v["move"] for v in p["values"]] == ["15D .ROTIC", "G11 TORI"]
     assert p["values"][1]["display"] == "G11 TORI"
+    assert p["values"][0]["points"] == 36  # the pick tool's, passed through
     assert p["num_values"] == 3
     assert (p["pick"]["move"], p["pick"]["reading"]) == ("15D .ROTIC", "equity")
     assert p["match"] is None
     json.dumps(p)  # the handler writes it as JSON
+
+
+def test_a_moves_history_runs_over_every_analyzed_generation(tmp_path):
+    paths = _tag(tmp_path)
+    _write_analysis(paths, 10, [{**_v("G11 TORI", 0.30, 2), "leaf_rank": 1}], "G11 TORI")
+    # Generation 20 did not value it: a move that would empty the bag.
+    _write_analysis(paths, 20, [{**_v("8H ZZZ", 0.50, 1), "leaf_rank": 1}], "8H ZZZ")
+    _write_analysis(paths, 30, [{**_v("G11 TORI", 0.45, 1), "leaf_rank": 1}], "G11 TORI")
+    key = (paths.tag, paths.task, str(tmp_path))
+    assert api.history(key, "tori", "G11 TORI") == [
+        {"generation": 10, "value": 0.30},
+        {"generation": 20, "value": None},
+        {"generation": 30, "value": 0.45},
+    ]

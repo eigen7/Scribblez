@@ -4,19 +4,23 @@ match slot delivered after that generation's match. Registered with the rest
 of the data plane by api.make_app(). The known positions themselves come from
 /api/deep_bot/positions.
 
-Routes (both take task + tag):
+Routes (all take task + tag):
   /api/deep_bot_leaf_eval/generations  the analyzed generations (the slider),
                                        with their rows trained and match score
   /api/deep_bot_leaf_eval/position     ?position=&generation= -> the board,
                                        the matches' pick there, and the leaf's
                                        value of the moves worth listing
+  /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
+                                       one move under every analyzed generation
 
 A delivered analysis never changes, so each is read once.
 """
 
 import functools
 import json
+from concurrent.futures import ThreadPoolExecutor
 
+import tornado.ioloop
 import tornado.web
 
 from scribblez.dashboard import db
@@ -29,6 +33,9 @@ from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
 # The likeliest moves under the leaf the table lists, besides any that the
 # reference, static equity or the pick names.
 SHOWN_VALUES = 25
+# A history's first request for a position reads every analysis, so it runs
+# off the IOLoop; one thread, as the caches are shared.
+_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
 def analyzed_generations(paths: TagPaths) -> list[int]:
@@ -43,6 +50,26 @@ def analyzed_generations(paths: TagPaths) -> list[int]:
 def _analysis(tag_key: tuple[str, str, str], generation: int) -> dict:
     path = TagPaths(*tag_key).data_dir / leaf_positions.rel(generation)
     return json.loads(path.read_text())
+
+
+# One position's values out of one generation's analysis, kept apart from
+# _analysis so a history's sweep over every generation does not evict the
+# slider's. A position's values over 80 generations are ~12 MB.
+@functools.lru_cache(maxsize=1024)
+def _position_values(tag_key: tuple[str, str, str], generation: int, position: str) -> dict:
+    path = TagPaths(*tag_key).data_dir / leaf_positions.rel(generation)
+    entry = json.loads(path.read_text())["positions"][position]
+    return {v["move"]: v["value"] for v in entry["values"]}
+
+
+def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dict]:
+    """The leaf's value of `move` at `position` under each analyzed
+    generation, ascending; null under one that did not value it (it would
+    empty the bag)."""
+    return [
+        {"generation": g, "value": _position_values(tag_key, g, position).get(move)}
+        for g in analyzed_generations(TagPaths(*tag_key))
+    ]
 
 
 def _matches(paths: TagPaths) -> dict[int, dict]:
@@ -153,7 +180,23 @@ class PositionHandler(_Base):
         self.write(position_payload(self.tag_key(), generation, index))
 
 
+class HistoryHandler(_Base):
+    """One move's value at one known position over the analyzed generations."""
+
+    async def get(self):
+        index = int(self.get_query_argument("position", "0"))
+        positions = known_positions.load()
+        if not 0 <= index < len(positions):
+            self.set_status(404)
+            self.write({"error": "position out of range"})
+            return
+        args = (self.tag_key(), positions[index].id, self.get_query_argument("move"))
+        series = await tornado.ioloop.IOLoop.current().run_in_executor(_EXECUTOR, history, *args)
+        self.write({"history": series})
+
+
 ROUTES = [
     (r"/api/deep_bot_leaf_eval/generations", GenerationsHandler),
     (r"/api/deep_bot_leaf_eval/position", PositionHandler),
+    (r"/api/deep_bot_leaf_eval/history", HistoryHandler),
 ]

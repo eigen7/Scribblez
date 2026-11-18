@@ -14,9 +14,9 @@
 // mover's "rack" and the "bag" there, the "pick" in the notation of the
 // reports (data/gcg_writer.h's move_notation), and the "seconds" the agent
 // took; for an agent that values its candidates (MoveDecision::values),
-// "values" too: each move's "move", its "value" and its static "equity_rank"
-// at the position (1 for HastyBot's move). One agent plays every position,
-// one at a time, on the process's threads.
+// "values" too: each move's "move", its "points", its "value" and its static
+// "equity_rank" at the position (1 for HastyBot's move). One agent plays every
+// position, one at a time, on the process's threads.
 
 #include "agent/player_factory.h"
 #include "arena/recorded_turn.h"
@@ -87,8 +87,10 @@ json::array values_json(const RecordedPick& p, const Dictionary& dict) {
   for (const CandidateValue& v : p.values) {
     const std::string move = move_notation(p.board, v.move);
     const auto r = rank.find(move);
-    out.push_back(json::object{
-      {"move", move}, {"value", v.value}, {"equity_rank", r == rank.end() ? 0 : r->second}});
+    out.push_back(json::object{{"move", move},
+                               {"points", v.move.score()},
+                               {"value", v.value},
+                               {"equity_rank", r == rank.end() ? 0 : r->second}});
   }
   return out;
 }

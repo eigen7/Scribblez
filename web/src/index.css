@@ -1815,6 +1815,10 @@ h1 {
   border-bottom: 1px solid #d6dce4;
 }
 .dbp-policy td { padding: 2px 6px; cursor: pointer; }
+.dbp-policy th.num { text-align: right; }
+.dbp-history { width: 320px; box-sizing: border-box; }
+.dbp-history svg { display: block; }
+.dbp-history-readout { font-size: 12px; color: #445063; font-variant-numeric: tabular-nums; }
 .dbp-policy tr.gap td { border-top: 2px dashed #c3cbd6; }
 .dbp-policy td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dbp-policy td.mv { font-family: monospace; font-weight: 600; white-space: nowrap; }

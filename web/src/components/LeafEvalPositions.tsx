@@ -1,6 +1,7 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { TabActiveContext } from './TabActiveContext';
 import GenerationSlider from './GenerationSlider';
+import LeafEvalHistory from './LeafEvalHistory';
 import {
   AnswerRow, BoardColumn, BoardView, MoveRef, PositionHeader, PositionPicker, READING_COLOR, Unseen, pct,
   useKnownPositions,
@@ -14,12 +15,14 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // value of every move that keeps the bag (the leaf's win value after the
 // move, its mean over opponent leaves from the leave inference model), and
 // the move the matches' LeafBot plays: the best of HastyBot's top candidates.
-// Clicking a move draws it on the board.
+// Clicking a move draws it on the board and charts its value over the
+// generations.
 
 const LEAF_COLOR = '#3a86d4';
 
 interface Valued extends MoveRef {
   value: number; // the leaf's win value, 0..1
+  points?: number; // what the move scores; absent from analyses written before the pick tool reported it
   equity_rank: number;
   leaf_rank: number;
 }
@@ -97,7 +100,8 @@ function ValueTable({
       <table className="dbp-policy">
         <thead>
           <tr>
-            <th>#</th><th>move</th><th colSpan={2}>leaf</th><th>equity</th><th />
+            <th className="num">#</th><th>move</th><th className="num">points</th><th className="num">leaf eval</th>
+            <th /><th className="num">equity rank</th><th />
           </tr>
         </thead>
         <tbody>
@@ -108,6 +112,7 @@ function ValueTable({
                 onClick={() => onSelect(v.move)}>
                 <td className="num">{v.leaf_rank}</td>
                 <td className="mv">{v.display}</td>
+                <td className="num">{v.points ?? '—'}</td>
                 <td className="num">{pct(v.value)}</td>
                 <td className="bar">
                   <span style={{ width: `${Math.max(1, (v.value / Math.max(top, 1e-9)) * 100)}%`, background: LEAF_COLOR }} />
@@ -130,7 +135,15 @@ function namedMoves(p: Payload): Map<string, MoveRef> {
   return out;
 }
 
-function PositionView({ p, pending }: { p: Payload; pending: boolean }) {
+// Where the tab's data comes from, for the history chart's fetch.
+interface Source {
+  task: string;
+  tag: string;
+  position: number;
+  newest: number | null;
+}
+
+function PositionView({ p, pending, source }: { p: Payload; pending: boolean; source: Source }) {
   // Opens on the pick; kept across generations while the move exists.
   const [selected, setSelected] = useState<string | null>(null);
   const moves = useMemo(() => namedMoves(p), [p]);
@@ -153,6 +166,10 @@ function PositionView({ p, pending }: { p: Payload; pending: boolean }) {
           <div style={{ width: 320 }}>
             <Unseen p={p} />
           </div>
+          {!pending && preview && (
+            <LeafEvalHistory task={source.task} tag={source.tag} position={source.position} move={preview.move}
+              display={preview.display} generation={p.generation} newest={source.newest} />
+          )}
         </div>
       </div>
       {!pending && <ValueTable p={p} selected={shownMove} onSelect={setSelected} />}
@@ -246,7 +263,8 @@ export default function LeafEvalPositions({ task, tag }: { task: string; tag: st
       <PositionPicker positions={positions} index={posIdx} onChange={setPosIdx} />
       {error && <div className="dbp-error">{error}</div>}
       {current ? (
-        <PositionView key={current.id} p={current} pending={pending} />
+        <PositionView key={current.id} p={current} pending={pending}
+          source={{ task, tag, position: posIdx, newest: generations[generations.length - 1]?.generation ?? null }} />
       ) : (
         !error && <div className="muted" style={{ padding: 20 }}>Loading position…</div>
       )}

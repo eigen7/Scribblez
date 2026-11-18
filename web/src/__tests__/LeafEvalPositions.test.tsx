@@ -4,8 +4,8 @@ import LeafEvalPositions from '../components/LeafEvalPositions';
 
 // deep_bot_leaf_eval's Positions tab against a canned data API: the leaf's
 // values and the matches' pick are the selected generation's, the slider
-// labels a generation with its match score, a click draws a move, and a move
-// the leaf did not value says why.
+// labels a generation with its match score, a click draws a move and charts
+// its value over the generations, and a move the leaf did not value says why.
 
 const empty15 = () => Array.from({ length: 15 }, () => Array<null>(15).fill(null));
 
@@ -22,7 +22,7 @@ function payload(generation: number) {
     pick: { ...move('15D .ROTIC', 14), reading: 'equity' },
     num_values: 296,
     values: [
-      { ...move('15D .ROTIC', 14), value: 0.404, equity_rank: 1, leaf_rank: 1 },
+      { ...move('15D .ROTIC', 14), points: 36, value: 0.404, equity_rank: 1, leaf_rank: 1 },
       { ...move('G11 TORI', 10), value: 0.202, equity_rank: 31, leaf_rank: 53 },
     ],
     match: { score: 0.545, ci_half_width: 0.012, games: 10000, opponent: '--type=hastybot-endgame' },
@@ -47,6 +47,15 @@ function fakeFetch(url: string): Promise<Response> {
     const g = Number(new URLSearchParams(url.split('?')[1]).get('generation'));
     return json(payload(g));
   }
+  if (url.startsWith('/api/deep_bot_leaf_eval/history?')) {
+    const m = new URLSearchParams(url.split('?')[1]).get('move');
+    return json({
+      history: [
+        { generation: 10, value: m === 'G11 TORI' ? 0.25 : 0.38 },
+        { generation: 20, value: m === 'G11 TORI' ? 0.202 : 0.404 },
+      ],
+    });
+  }
   return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'nope' }) } as Response);
 }
 
@@ -66,11 +75,22 @@ describe('LeafEvalPositions', () => {
     expect(screen.getByText(/296 moves that keep the bag/)).toBeTruthy();
   });
 
-  it('draws a clicked move on the board', async () => {
+  it("lists each move's points beside its leaf eval and equity rank", async () => {
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getAllByText('G11 TORI').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText('leaf eval')).toBeTruthy());
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['#', 'move', 'points', 'leaf eval', '', 'equity rank', '']);
+    const row = screen.getAllByRole('row')[1];
+    expect([...row.querySelectorAll('td')].map((td) => td.textContent).slice(0, 4))
+      .toEqual(['1', '15D .ROTIC', '36', '40.4%']);
+  });
+
+  it('draws a clicked move on the board and charts its leaf eval', async () => {
+    render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
+    await waitFor(() => expect(screen.getByText('generation 20 · 40.4%')).toBeTruthy());
     fireEvent.click(screen.getAllByText('G11 TORI')[0]);
     expect(screen.getByText('On the board: G11 TORI')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('generation 20 · 20.2%')).toBeTruthy());
   });
 
   it('says why a move has no value', async () => {
