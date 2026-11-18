@@ -1,6 +1,6 @@
 [
   {
-    "id": "richards-eellt",
+    "id": "EELLT-exch",
     "title": "Nigel Richards's EELLT exchange",
     "gcg": "richards-eellt.gcg",
     "source": "docs/analysis/richards-johnson-exchange/README.md",
@@ -14,8 +14,8 @@
     "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's."
   },
   {
-    "id": "aceta",
-    "title": "ACETA: a double-Z setup",
+    "id": "ACETA",
+    "title": "double Z setup",
     "gcg": "aceta.gcg",
     "source": "positions/NWL23/interesting-positions/README.md",
     "origin": "Joshua vs. Will, move 2",
@@ -28,8 +28,8 @@
     "note": ""
   },
   {
-    "id": "clinker",
-    "title": "CLINKER: an S hook on the triple-word square",
+    "id": "CLINKER",
+    "title": "S hook setup",
     "gcg": "clinker.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#clinker-an-s-hook-on-the-triple-word-square",
     "origin": "hidden_blind_spots v1 1792935124661189568-local-0-g125-turn14",
@@ -42,8 +42,8 @@
     "note": ""
   },
   {
-    "id": "oi-fish",
-    "title": "O(I): fish one tile to bingo out",
+    "id": "O(I)",
+    "title": "try to bingo out",
     "gcg": "oi-fish.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#oi-fish-one-tile-to-bingo-out",
     "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g166-turn22",
@@ -56,8 +56,8 @@
     "note": ""
   },
   {
-    "id": "aim-fish",
-    "title": "A(I)M: the same fish",
+    "id": "A(I)M",
+    "title": "try to bingo out",
     "gcg": "aim-fish.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#aim-the-same-fish",
     "origin": "hidden_blind_spots v1 1792939480730359398-local-0-g4-turn18",
@@ -70,8 +70,8 @@
     "note": ""
   },
   {
-    "id": "nim",
-    "title": "NIM: a private lane",
+    "id": "NIM",
+    "title": "set up private TW lane",
     "gcg": "nim.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#nim-a-private-lane",
     "origin": "hidden_blind_spots v1 1792939586653428488-local-0-g26-turn18",
@@ -84,8 +84,8 @@
     "note": ""
   },
   {
-    "id": "given",
-    "title": "GIVEN: a spot for the X",
+    "id": "GIVEN",
+    "title": "X setup",
     "gcg": "given.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#given-a-spot-for-the-x",
     "origin": "hidden_blind_spots v1 1792939885730522277-local-0-g116-turn17",
@@ -98,8 +98,8 @@
     "note": ""
   },
   {
-    "id": "oil",
-    "title": "OIL: a Y hook on the triple-word square",
+    "id": "OIL",
+    "title": "OILY setup",
     "gcg": "oil.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#oil-a-y-hook-on-the-triple-word-square",
     "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g55-turn16",
@@ -112,8 +112,8 @@
     "note": ""
   },
   {
-    "id": "ad",
-    "title": "AD: two hook squares on the triple-word row",
+    "id": "AD",
+    "title": "key tiles for TW play mostly ours",
     "gcg": "ad.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#ad-two-hook-squares-on-the-triple-word-row",
     "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g81-turn17",
@@ -126,8 +126,8 @@
     "note": ""
   },
   {
-    "id": "pitch",
-    "title": "PITCH: the last Y",
+    "id": "PITCH",
+    "title": "PITCHY setup",
     "gcg": "pitch.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#pitch-the-last-y",
     "origin": "hidden_blind_spots v1 1792940041679790342-ssh-0-g111-turn16",
@@ -140,8 +140,8 @@
     "note": ""
   },
   {
-    "id": "rouche",
-    "title": "ROUCHE: both ends of a triple-triple",
+    "id": "ROUCHE",
+    "title": "triple-triple setup",
     "gcg": "rouche.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#rouche-both-ends-of-a-triple-triple",
     "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g51-turn16",
@@ -154,8 +154,8 @@
     "note": ""
   },
   {
-    "id": "than",
-    "title": "THAN: declining a 76-point bingo",
+    "id": "THAN",
+    "title": "THAN: decline bingo",
     "gcg": "than.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#than-declining-a-76-point-bingo",
     "origin": "hidden_blind_spots v1 1792942025771220660-local-0-g37-turn12",
@@ -168,8 +168,8 @@
     "note": ""
   },
   {
-    "id": "tori",
-    "title": "TORI: a square where the Q counts twice",
+    "id": "TORI",
+    "title": "QI setup",
     "gcg": "tori.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#tori-a-square-where-the-q-counts-twice",
     "origin": "hidden_blind_spots v1 1792942635811056326-local-0-g133-turn17",
@@ -182,8 +182,8 @@
     "note": ""
   },
   {
-    "id": "vig",
-    "title": "VIG: the same Q setup, and why the G matters",
+    "id": "VIG",
+    "title": "Q setup",
     "gcg": "vig.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#vig-the-same-q-setup-and-why-the-g-matters",
     "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g44-turn15",
@@ -196,8 +196,8 @@
     "note": ""
   },
   {
-    "id": "qi",
-    "title": "Q(I): play one tile, leave one in the bag",
+    "id": "Q(I)",
+    "title": "defense against outbingo",
     "gcg": "qi.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#qi-play-one-tile-leave-one-in-the-bag",
     "origin": "hidden_blind_spots v1 1792943897352376103-local-0-g167-turn23",
@@ -210,8 +210,8 @@
     "note": ""
   },
   {
-    "id": "exchange-seven",
-    "title": "Exchange seven, with seven in the bag",
+    "id": "exch-all",
+    "title": "poisoning opponent draw",
     "gcg": "exchange-seven.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#exchange-seven-with-seven-in-the-bag",
     "origin": "hidden_blind_spots v1 1792940249407138500-local-0-g161-turn17",
