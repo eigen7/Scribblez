@@ -1,10 +1,10 @@
 """A leaf export's view of the known positions (deep_bot/known_positions.py),
 what deep_bot_leaf_eval's Positions tab shows: LeafBot's value of every legal
 move at each position (engine agent/leaf_bot.h, its opponent leaves drawn from
-the matches' leave inference model), the move's rank under that value and
-under static equity, and the pick the matches would make there: the best of
-HastyBot's top `candidates`, or HastyBot's move where one of those would empty
-the bag.
+the matches' leave inference model), the move's points, its rank under that
+value and under static equity, and the pick the matches would make there: the
+best of HastyBot's top `candidates`, or HastyBot's move where one of those
+would empty the bag.
 
 The match slot computes it after each match (workloads/deep_bot_leaf_eval.py)
 and delivers it as data/leaf_positions/gen_NNNNNN.json, apart from the match
