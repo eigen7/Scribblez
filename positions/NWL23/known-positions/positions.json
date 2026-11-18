@@ -183,7 +183,7 @@
   },
   {
     "id": "VIG",
-    "title": "Q setup",
+    "title": "QAT setup",
     "gcg": "vig.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#vig-the-same-q-setup-and-why-the-g-matters",
     "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g44-turn15",
