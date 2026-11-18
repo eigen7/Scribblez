@@ -96,6 +96,28 @@ function removalWarning(workers: WorkerInfo[], diskLost = false): string | null 
 const IN_FLIGHT = new Set(['starting', 'stopping', 'removing']);
 // Mirrors IDLE_STOP_SECONDS in py/scribblez/dashboard/workers.py.
 const IDLE_STOP_MINUTES = 10;
+// Why the server would refuse to remove slot `w` now (workers.py
+// remove_worker), as the Remove button's tooltip, or null when it would not.
+// A slot on a stopped rental is removed with its machine, which terminates the
+// instance; one the dashboard cannot reach is never removed, since its
+// container may still be running.
+function removeBlocker(w: WorkerInfo, machines: MachineInfo[]): string | null {
+  if (w.observed_running) return 'pause the worker before removing it';
+  if (IN_FLIGHT.has(w.state)) return `wait until it is no longer ${w.state}`;
+  const m = machines.find((x) => x.name === w.machine);
+  if (m?.state === 'stopping') {
+    return `machine ${m.name} is stopping; once it has stopped, remove the machine (Machines card)`;
+  }
+  if (m?.state === 'stopped') {
+    return `machine ${m.name} is stopped; remove the machine (Machines card), which terminates it `
+      + 'with its slots, or start a slot on it first';
+  }
+  if (w.state === 'unreachable' && m?.state !== 'gone') {
+    return `${w.host} is unreachable; bring it online (or clean up its container by hand) first`;
+  }
+  return null;
+}
+
 type ProfileChange = { name: string; profile: number | boolean | string; task: number | boolean | string };
 type TaskInfo = {
   workload: string; tag: string; has_task: boolean; params: Record<string, number | boolean | string> | null;
@@ -511,8 +533,8 @@ function AddWorkerForms({ workload, role, tag, taken, machines, onError, onChang
   );
 }
 
-function WorkersTable({ workers, taskBundle, onAction }: {
-  workers: WorkerInfo[]; taskBundle: string | null;
+function WorkersTable({ workers, machines, taskBundle, onAction }: {
+  workers: WorkerInfo[]; machines: MachineInfo[]; taskBundle: string | null;
   onAction: (workerId: string, action: string) => void;
 }) {
   const onRemove = (w: WorkerInfo) => {
@@ -542,6 +564,7 @@ function WorkersTable({ workers, taskBundle, onAction }: {
           // whose container creation keeps failing (stuck `starting`) it is the only
           // way back to a removable state.
           const desiredRunning = w.desired_state === 'running';
+          const blocker = removeBlocker(w, machines);
           return (
             <tr key={w.worker_id} style={{ borderTop: '1px solid #e2e8ee' }}>
               <td style={{ padding: '6px 14px 6px 0', fontWeight: 600 }}>{w.worker_id}</td>
@@ -595,9 +618,9 @@ function WorkersTable({ workers, taskBundle, onAction }: {
                   ? <Button label="Pause" onClick={() => onAction(w.worker_id, 'pause')} />
                   : <Button label="Start" disabled={inFlight} onClick={() => onAction(w.worker_id, 'start')} />}
                 {inFlight && <span className="scz-spinner" title={w.state} aria-label={w.state} />}
-                <span title={w.observed_running ? 'pause the worker before removing it' : undefined}>
+                <span title={blocker ?? undefined}>
                   <Button
-                    label="Remove" tone="danger" disabled={w.observed_running || inFlight}
+                    label="Remove" tone="danger" disabled={blocker !== null}
                     onClick={() => onRemove(w)}
                   />
                 </span>
@@ -663,8 +686,9 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
   const cloudCost = info.machines.reduce((s, m) => s + (BILLING.has(m.state) ? m.cost_per_hr ?? 0 : 0), 0);
   const anyStartable = info.workers.some((w) => w.desired_state !== 'running');
   const anyPausable = info.workers.some((w) => w.desired_state === 'running');
-  // A worker can only be removed once it is truly stopped (no live process/container).
-  const anyAlive = info.workers.some((w) => w.observed_running || IN_FLIGHT.has(w.state));
+  const removeAllBlocker = info.workers
+    .map((w) => { const b = removeBlocker(w, info.machines); return b && `${w.worker_id}: ${b}`; })
+    .find((b) => b !== null);
 
   return (
     <>
@@ -707,10 +731,10 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
             <Button label="Start all" disabled={!anyStartable} onClick={() => act({ action: 'start' })} />
             <Button label="Pause all" disabled={!anyPausable} onClick={() => act({ action: 'pause' })} />
-            <span title={anyAlive ? 'pause all workers before removing them' : undefined}>
+            <span title={removeAllBlocker ?? undefined}>
               <Button
                 label="Remove all" tone="danger"
-                disabled={anyAlive || info.workers.length === 0}
+                disabled={removeAllBlocker !== undefined || info.workers.length === 0}
                 onClick={() => removeAll()}
               />
             </span>
@@ -719,7 +743,7 @@ function OverviewTab({ workload, tag }: { workload: Workload; tag: string }) {
             <QueuePanel workload={workload} tag={tag} queued={info.queued} onChanged={refresh} />
           )}
           <WorkersTable
-            workers={info.workers} taskBundle={info.bundle_id}
+            workers={info.workers} machines={info.machines} taskBundle={info.bundle_id}
             onAction={(workerId, action) => act({ worker_id: workerId, action })}
           />
           {workload.roles.map((role) => (
