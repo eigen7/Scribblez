@@ -96,9 +96,15 @@ std::vector<CandidateValue> LeafBot::valued(const MoveRequest& req, const std::v
 }
 
 std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) const {
+  const std::vector<Rack> draws = opp_draws(q);
+  return backend_.values->noisy() ? equal_weights(draws) : weighted_leaves(draws);
+}
+
+std::vector<Rack> LeafBot::opp_draws(const belief::LeaveQuery& q) const {
   // Before the opponent's first move, and after a move that kept nothing, the
-  // leave is empty, as the leaf's training rows have it.
-  if (ply_ == 0 || q.length == 0) return {{Rack{}, 1.0}};
+  // leave is empty, as the leaf's training rows have it. It is still drawn
+  // opp_leaves times: a noisy leaf plays each draw out apart.
+  if (ply_ == 0 || q.length == 0) return std::vector<Rack>(size_t(params_.opp_leaves));
   const std::shared_ptr<const belief::LeaveSampler> b = belief(q);
   // Stratified quantiles, jittered by the turn: each draw stands for an equal
   // share of the belief's mass, so the mean has far less spread than over
@@ -108,7 +114,7 @@ std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) cons
   draws.reserve(size_t(params_.opp_leaves));
   for (int i = 0; i < params_.opp_leaves; ++i)
     draws.push_back(b->leave(b->sample((double(i) + jitter) / double(params_.opp_leaves))));
-  return backend_.values->noisy() ? equal_weights(draws) : weighted_leaves(draws);
+  return draws;
 }
 
 std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQuery& q) const {
