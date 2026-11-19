@@ -16,7 +16,8 @@ leaf network valuing HastyBot's best moves with no search) against a fixed
 opponent, its opponent leaves drawn from a leave inference model pinned at
 task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
 After each match the slot analyzes the known positions under the same export
-(deep_bot_leaf_eval/positions.py), which the Positions tab shows.
+(deep_bot_leaf_eval/positions.py), which the Positions tab shows, over more
+opponent leaves (`analysis_opp_leaves`) than the matches can afford.
 """
 
 from dataclasses import dataclass, replace
@@ -152,6 +153,13 @@ class DeepBotLeafEvalParams:
     match_opp_leaves: int = param(
         16, "the opponent's leaves LeafBot values each candidate over, drawn from the belief"
     )
+    # 128 draws over every legal move of the known positions are ~3.7M leaf
+    # network calls a generation, an estimated 80 s at the ~48K a second
+    # measured in October for LeafBot's host path; 16 sample the belief too
+    # coarsely to tell a leaf's error from its draws'.
+    analysis_opp_leaves: int = param(
+        128, "the opponent's leaves the Positions tab's analysis values each move over"
+    )
 
 
 # The trainer's peak GPU memory in GiB, measured 2026-10-23 on the RTX 5000 Ada
@@ -263,7 +271,7 @@ def analyze_positions(ctx: WorkerContext, model: Path, gen: int) -> list[tuple[P
         known_position_inputs.load(ctx),
         model,
         leave,
-        p.match_opp_leaves,
+        p.analysis_opp_leaves,
         p.match_candidates,
         work,
         ctx.threads,

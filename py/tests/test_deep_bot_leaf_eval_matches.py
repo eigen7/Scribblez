@@ -125,7 +125,7 @@ def test_the_match_role_plays_the_assigned_export_as_leafbot(tmp_path, monkeypat
 
     monkeypatch.setattr(runner.harness, "play_round", fake_round)
     monkeypatch.setattr(deep_bot_leaf_eval.leaf_positions, "analyze", fake_analyze)
-    ctx = _ctx(tmp_path, sink=LocalSink(paths.root), match_pairs=3)
+    ctx = _ctx(tmp_path, sink=LocalSink(paths.root), match_pairs=3, analysis_opp_leaves=64)
     assert deep_bot_leaf_eval.run_match(ctx) == 0
     ((spec0, spec1, pairs, face_up),) = played
     assert spec0.startswith(f"--type=leafbot-endgame --leaf-model={model} ")
@@ -133,7 +133,7 @@ def test_the_match_role_plays_the_assigned_export_as_leafbot(tmp_path, monkeypat
     assert [p.name for p in paths.match_results_dir.glob("*.json")] == ["gen_000020-w0.json"]
     # The same export analyzed the known positions, delivered apart from the
     # results the controller ingests.
-    assert analyzed == [(len(known_positions.load()), model, 16, 10)]
+    assert analyzed == [(len(known_positions.load()), model, 64, 10)]
     delivered = paths.data_dir / leaf_positions.rel(20)
     assert json.loads(delivered.read_text())["generation"] == 20
 
