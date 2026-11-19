@@ -19,9 +19,9 @@ const HEIGHT = 170;
 const PAD = { left: 40, right: 12, top: 10, bottom: 22 };
 const PLOT_W = WIDTH - PAD.left - PAD.right;
 const PLOT_H = HEIGHT - PAD.top - PAD.bottom;
-// The narrowest value range drawn, so a flat series is not magnified into noise.
-const MIN_SPAN = 0.02;
-const Y_TICKS = 4;
+// The whole win-probability range, so every move and generation reads on the
+// same absolute scale.
+const Y_TICKS = [0, 0.25, 0.5, 0.75, 1];
 
 interface Scale {
   x: (generation: number) => number;
@@ -30,22 +30,14 @@ interface Scale {
   xTicks: number[];
 }
 
-function scale(points: HistoryPoint[], truth: number | null): Scale {
-  const values = points.flatMap((p) => (p.value == null ? [] : [p.value]));
-  if (truth != null) values.push(truth);
+function scale(points: HistoryPoint[]): Scale {
   const gens = points.map((p) => p.generation);
   const g0 = gens[0];
   const g1 = Math.max(gens[gens.length - 1], g0 + 1);
-  let lo = Math.min(...values);
-  let hi = Math.max(...values);
-  const pad = Math.max((hi - lo) * 0.1, (MIN_SPAN - (hi - lo)) / 2, 0);
-  lo -= pad;
-  hi += pad;
-  const yTicks = Array.from({ length: Y_TICKS }, (_, i) => lo + ((hi - lo) * i) / (Y_TICKS - 1));
   return {
     x: (g) => PAD.left + ((g - g0) / (g1 - g0)) * PLOT_W,
-    y: (v) => PAD.top + (1 - (v - lo) / (hi - lo)) * PLOT_H,
-    yTicks,
+    y: (v) => PAD.top + (1 - v) * PLOT_H,
+    yTicks: Y_TICKS,
     xTicks: [...new Set([g0, gens[Math.floor(gens.length / 2)], gens[gens.length - 1]])],
   };
 }
@@ -91,7 +83,7 @@ function Axes({ s }: { s: Scale }) {
       {s.yTicks.map((v) => (
         <g key={`y${v}`}>
           <line x1={PAD.left} x2={PAD.left + PLOT_W} y1={s.y(v)} y2={s.y(v)} stroke="#e1e6ec" />
-          <text x={PAD.left - 4} y={s.y(v) + 3} textAnchor="end">{pctText(v)}</text>
+          <text x={PAD.left - 4} y={s.y(v) + 3} textAnchor="end">{`${v * 100}%`}</text>
         </g>
       ))}
       {s.xTicks.map((g, i) => (
@@ -121,7 +113,7 @@ export function HistoryChart({
 }) {
   const [hover, setHover] = useState<HistoryPoint | null>(null);
   if (!points.some((p) => p.value != null)) return <div className="muted">No generation valued this move.</div>;
-  const s = scale(points, truth);
+  const s = scale(points);
   const current = points.find((p) => p.generation === generation);
   const onMove = (e: MouseEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
