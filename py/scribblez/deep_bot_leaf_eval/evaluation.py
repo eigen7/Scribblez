@@ -3,7 +3,9 @@
 The win table is what DeepBot's sims value a leaf with today (docs/plans/
 deep_bot.md, "The leaf: a win table"), so it is the baseline the model has to
 beat. Both are scored by the log loss of the mover's expected score (a win 1,
-a draw 1/2) against the outcome, overall and by pool size. The model's
+a draw 1/2) against the outcome, overall, by pool size, and apart on the rows
+whose two refills empty the bag, where the rest of the game is an endgame the
+self-play solved. The model's
 three-way WLD cross-entropy and its score-differential error are recorded too,
 and the per-square heads' reads over the rows' empty squares: the ownership
 cross-entropy, the points mean's RMSE in points, and the ratio of the
@@ -30,9 +32,11 @@ from scribblez.deep_bot_leaf_eval.model import FILLED, LAYOUT, POINTS_SCALE, UNL
 
 RACK_SIZE = 7
 SCORE_DIFF_SCALE = 100.0  # the row's score differential scale (input_encoder.h)
-# Pool-size bands the log loss is broken down by: (name, lowest, highest). A
-# leaf's pool is never empty: its bag outlasts both refills.
-POOL_BANDS = (("1_20", 1, 20), ("21_40", 21, 40), ("41_60", 41, 60), ("61_100", 61, 100))
+# Pool-size bands the log loss is broken down by: (name, lowest, highest).
+POOL_BANDS = (("0_20", 0, 20), ("21_40", 21, 40), ("41_60", 41, 60), ("61_100", 61, 100))
+# The bag splits it is broken down by too: (name, whether both refills empty
+# the bag).
+BAG_SPLITS = (("bag_empty", True), ("bag_left", False))
 EPS = 1e-6
 
 
@@ -48,6 +52,12 @@ def _seat_sizes(scalar: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         _seat_size(scalar, "opp_leave0"),
         _seat_size(scalar, "pool0"),
     )
+
+
+def refills_empty_bag(scalar: np.ndarray) -> np.ndarray:
+    """Per row, whether the pool holds no more than both refills take."""
+    my_size, opp_size, pool = _seat_sizes(scalar)
+    return pool <= (RACK_SIZE - my_size) + (RACK_SIZE - opp_size)
 
 
 def win_table_features(scalar: np.ndarray) -> np.ndarray:
@@ -126,6 +136,7 @@ def _model_rows(model, raw: dict, device) -> dict[str, np.ndarray]:
         ),
         "outcome": wld[:, 0] + 0.5 * wld[:, 1],
         "pool": _seat_sizes(raw["input_scalar"].numpy())[2],
+        "bag_empty": refills_empty_bag(raw["input_scalar"].numpy()),
         "features": win_table_features(raw["input_scalar"].numpy()),
         **_square_sums(out, raw),
         **_end_rows(out, raw),
@@ -158,6 +169,15 @@ def evaluate(
     return eval_metrics(rows, expected)
 
 
+def _row_subsets(rows: dict[str, np.ndarray]) -> list[tuple[str, np.ndarray]]:
+    """The named row subsets the reads are broken down by: each pool band
+    (`pool_<band>`), then each bag split."""
+    pool = rows["pool"]
+    out = [(f"pool_{band}", (pool >= lo) & (pool <= hi)) for band, lo, hi in POOL_BANDS]
+    out += [(name, rows["bag_empty"] == empty) for name, empty in BAG_SPLITS]
+    return out
+
+
 def eval_metrics(rows: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -> dict[str, float]:
     squares = max(float(rows["empty_squares"].sum()), 1.0)
     sq_err = float(rows["points_sq_err_sum"].sum())
@@ -174,15 +194,14 @@ def eval_metrics(rows: dict[str, np.ndarray], expected: dict[str, np.ndarray]) -
         "eval_end_points_rmse": (end_sq_err / ends) ** 0.5,
         "eval_end_points_var_ratio": float(rows["end_var"].sum()) / max(end_sq_err, 1e-9),
     }
-    for band, lo, hi in POOL_BANDS:
-        sel = labelled & (rows["pool"] >= lo) & (rows["pool"] <= hi)
-        if sel.any():
-            m[f"eval_going_out_nll_pool_{band}"] = float(rows["going_out_nll"][sel].mean())
+    subsets = _row_subsets(rows)
+    for subset, sel in subsets:
+        if (labelled & sel).any():
+            m[f"eval_going_out_nll_{subset}"] = float(rows["going_out_nll"][labelled & sel].mean())
     for name, e in expected.items():
         loss = expected_score_logloss(e, rows["outcome"])
         m[f"eval_{name}_logloss"] = float(loss.mean())
-        for band, lo, hi in POOL_BANDS:
-            sel = (rows["pool"] >= lo) & (rows["pool"] <= hi)
+        for subset, sel in subsets:
             if sel.any():
-                m[f"eval_{name}_logloss_pool_{band}"] = float(loss[sel].mean())
+                m[f"eval_{name}_logloss_{subset}"] = float(loss[sel].mean())
     return m
