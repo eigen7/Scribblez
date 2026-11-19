@@ -20,10 +20,10 @@ from scribblez.workloads.base import WorkerContext
 from scribblez.workloads.deep_bot_leaf_eval import (
     LEAVE_INFERENCE,
     LEAVE_INPUT,
-    POSITIONS_INPUT_DIR,
     SPEC,
     DeepBotLeafEvalParams,
 )
+from scribblez.workloads.known_position_inputs import INPUT_DIR as POSITIONS_INPUT_DIR
 
 LEAVE_TAG = "li"
 PARAMS = DeepBotLeafEvalParams(match_leave_inference_tag=LEAVE_TAG)
