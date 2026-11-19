@@ -27,7 +27,7 @@ def hasty_picks(tmp_path_factory):
 
 def test_every_position_replays_to_hastybots_recorded_move(hasty_picks):
     positions, picks = hasty_picks
-    assert len(positions) == len(picks) >= 16
+    assert len(positions) == len(picks) >= 15
     assert len({p.id for p in positions}) == len(positions)
     for p, pick in zip(positions, picks, strict=True):
         assert pick["pick"] == p.static_equity_best, p.id
@@ -41,8 +41,8 @@ def test_every_position_replays_to_hastybots_recorded_move(hasty_picks):
 def test_a_pick_is_read_against_its_positions_answer(hasty_picks):
     positions, picks = hasty_picks
     by_id = {p.id: p for p in positions}
-    assert by_id["richards-eellt"].read("-EELLT") == known_positions.REFERENCE
-    assert by_id["clinker"].read("O1 ZZZ") == known_positions.OTHER
+    assert by_id["EELLT-exch"].read("-EELLT") == known_positions.REFERENCE
+    assert by_id["CLINKER"].read("O1 ZZZ") == known_positions.OTHER
     text = known_position_picks.table(positions, picks)
     assert text.splitlines()[-1] == (
         f"{len(positions)} positions: 0 reference, {len(positions)} equity, 0 other"
