@@ -15,8 +15,9 @@
 // reports (data/gcg_writer.h's move_notation), and the "seconds" the agent
 // took; for an agent that values its candidates (MoveDecision::values),
 // "values" too: each move's "move", its "points", its "value" and its static
-// "equity_rank" at the position (1 for HastyBot's move). One agent plays every
-// position, one at a time, on the process's threads.
+// "equity_rank" at the position (1 for HastyBot's move). The positions are
+// asked one at a time on the process's threads, each of a fresh agent, so a
+// position's answer does not depend on the others the file names.
 
 #include "agent/player_factory.h"
 #include "arena/recorded_turn.h"
@@ -121,7 +122,6 @@ void run(const Options& opt) {
   const std::map<std::string, std::vector<char>> slogs = load_recorded_slogs(asked);
   const Dictionary& dict = load_dictionary_or_throw();
   HastyEquity::ensure_initialized(Lexicon::instance().name());
-  const std::unique_ptr<Agent> agent = PlayerFactory::make_player(opt.player, /*thread_id=*/0);
   std::ofstream file;
   if (!opt.out.empty()) {
     file.open(opt.out);
@@ -129,6 +129,7 @@ void run(const Options& opt) {
   }
   std::ostream& out = opt.out.empty() ? std::cout : file;
   for (size_t i = 0; i < asked.size(); ++i) {
+    const std::unique_ptr<Agent> agent = PlayerFactory::make_player(opt.player, /*thread_id=*/0);
     out << json::serialize(ask(*agent, asked[i], slogs.at(asked[i].slog), dict)) << "\n"
         << std::flush;
     if ((i + 1) % 25 == 0 || i + 1 == asked.size())

@@ -21,6 +21,10 @@ POSITIONS_DIR = "leaf_positions"
 # LeafBot's candidates in the analysis: more than any position's legal moves,
 # so it values every move.
 ALL_MOVES = 1_000_000
+# LeafBot's seed in the analysis, which jitters its draws of the opponent's
+# leaves. Fixed, so every generation's analysis, and the truth
+# (deep_bot_leaf_eval/truth.py), value a position over the same leaves.
+ANALYSIS_SEED = 1
 
 
 def rel(generation: int) -> str:
@@ -33,11 +37,15 @@ def generation_of(path: Path) -> int:
     return int(path.stem.removeprefix("gen_"))
 
 
-def player_spec(model: Path, leave: Path, opp_leaves: int) -> str:
-    """LeafBot valuing every legal move."""
+def player_spec(
+    model: Path | str, leave: Path, opp_leaves: int, candidates: int = ALL_MOVES
+) -> str:
+    """LeafBot valuing static equity's best `candidates` moves (by default
+    every legal move) with leaf `model`, an export or LeafBot's monte-carlo
+    leaf."""
     return (
         f"--type=leafbot --leaf-model={model} --leave-inference={leave} "
-        f"--candidates={ALL_MOVES} --opp-leaves={opp_leaves}"
+        f"--candidates={candidates} --opp-leaves={opp_leaves} --seed={ANALYSIS_SEED}"
     )
 
 
