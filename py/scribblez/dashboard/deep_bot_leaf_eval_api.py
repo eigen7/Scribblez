@@ -9,7 +9,9 @@ Routes (all take task + tag):
                                        with their rows trained and match score
   /api/deep_bot_leaf_eval/position     ?position=&generation= -> the board,
                                        the matches' pick there, and the leaf's
-                                       value of the moves worth listing
+                                       value of the moves worth listing, beside
+                                       the truth's (deep_bot_leaf_eval/truth.py)
+                                       where the repo holds one
   /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
                                        one move under every analyzed generation
 
@@ -23,16 +25,20 @@ from concurrent.futures import ThreadPoolExecutor
 import tornado.ioloop
 import tornado.web
 
-from scribblez.dashboard import db
+from scribblez import workloads
+from scribblez.dashboard import db, tasks
 from scribblez.deep_bot import known_positions
 from scribblez.deep_bot.position_view import board_view, move_json
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
+from scribblez.deep_bot_leaf_eval import truth
 from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
 
 # The likeliest moves under the leaf the table lists, besides any that the
 # reference, static equity or the pick names.
 SHOWN_VALUES = 25
+# The truth's best moves the table lists too.
+SHOWN_TRUTH = 10
 # A history's first request for a position reads every analysis, so it runs
 # off the IOLoop; one thread, as the caches are shared.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -100,20 +106,61 @@ def generation_list(paths: TagPaths) -> list[dict]:
     return out
 
 
-def values_json(values: list[dict], named: set[str], board) -> list[dict]:
+def truth_ranks(values: list[dict], truths: dict[str, float]) -> dict[str, int]:
+    """Each move's rank under the truth `truths`, the better static equity
+    first on ties, over the leaf's `values` the truth covers."""
+    covered = sorted(
+        (v for v in values if v["move"] in truths),
+        key=lambda v: (-truths[v["move"]], v["equity_rank"]),
+    )
+    return {v["move"]: i + 1 for i, v in enumerate(covered)}
+
+
+def values_json(values: list[dict], named: set[str], board, truths: dict[str, float]) -> list[dict]:
     """The value table's rows, best first: the SHOWN_VALUES best under the
-    leaf and any move in `named`, each drawn on the pre-move `board`."""
+    leaf, the SHOWN_TRUTH best under the truth and any move in `named`, each
+    drawn on the pre-move `board` and with its truth (null where it has none)."""
+    ranks = truth_ranks(values, truths)
     return [
-        {**v, **move_json(v["move"], board)}
+        {
+            **v,
+            **move_json(v["move"], board),
+            "truth": truths.get(v["move"]),
+            "truth_rank": ranks.get(v["move"]),
+        }
         for v in values
-        if v["leaf_rank"] <= SHOWN_VALUES or v["move"] in named
+        if v["leaf_rank"] <= SHOWN_VALUES
+        or ranks.get(v["move"], SHOWN_TRUTH + 1) <= SHOWN_TRUTH
+        or v["move"] in named
     ]
 
 
-def payload(view: dict, generation: int, analysis: dict, match: dict | None) -> dict:
+def truth_json(doc: dict | None, truths: dict | None, leaf_params: dict | None) -> dict | None:
+    """What the table says about the position's truth, from the repo's file
+    `doc`: whose it is and how it was run, whether its opponent leaves are the
+    tag's analysis's, and how many moves it covers; None without one."""
+    if truths is None:
+        return None
+    return {
+        "tag": doc["tag"],
+        "run": doc["run"],
+        "same_leaves": truth.same_leaves(doc["run"], leaf_params or {}),
+        "num_values": len(truths),
+    }
+
+
+def payload(
+    view: dict,
+    generation: int,
+    analysis: dict,
+    match: dict | None,
+    truths: dict[str, float] | None = None,
+    truth_about: dict | None = None,
+) -> dict:
     """The tab's view of a known position under one generation: its
     board_view, the matches' pick there and how it reads against the answer,
-    and the leaf's values of the moves worth listing."""
+    and the leaf's values of the moves worth listing beside their truth
+    `truths` (truth.of_position), which `truth_about` (truth_json) describes."""
     entry = analysis["positions"][view["id"]]
     board = view["board"]
     named = {m["move"] for m in [*view["reference"], view["static_equity_best"]]} | {entry["pick"]}
@@ -123,7 +170,8 @@ def payload(view: dict, generation: int, analysis: dict, match: dict | None) -> 
         "candidates": analysis["candidates"],
         "pick": {**move_json(entry["pick"], board), "reading": entry["reading"]},
         "num_values": len(entry["values"]),
-        "values": values_json(entry["values"], named, board),
+        "values": values_json(entry["values"], named, board, truths or {}),
+        "truth": truth_about,
         "match": None
         if match is None
         else {k: match[k] for k in ("score", "ci_half_width", "games", "opponent")},
@@ -131,14 +179,20 @@ def payload(view: dict, generation: int, analysis: dict, match: dict | None) -> 
 
 
 def position_payload(tag_key: tuple[str, str, str], generation: int, index: int) -> dict:
+    tag, task, mount_root = tag_key
     paths = TagPaths(*tag_key)
     p = known_positions.load()[index]
+    doc = truth.load()
+    truths = truth.of_position(doc, p)
+    leaf_params = tasks.read_params(workloads.get(task), tag, mount_root)
     return {
         **payload(
             board_view(p),
             generation,
             _analysis(tag_key, generation),
             _matches(paths).get(generation),
+            truths,
+            truth_json(doc, truths, leaf_params),
         ),
         "bonuses": bonuses(),
         "tile_scores": TILE_SCORES,

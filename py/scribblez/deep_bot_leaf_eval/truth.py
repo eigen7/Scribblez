@@ -96,3 +96,32 @@ def collect(data_dir: Path, positions: list[Position]) -> tuple[dict, list[str]]
         doc["run"] = truth["run"]
         doc["positions"][p.id] = {"gcg_hash": truth["gcg_hash"], "values": truth["values"]}
     return doc, skipped
+
+
+def load() -> dict | None:
+    """The repo's truth file, or None before any truth was copied in."""
+    return json.loads(TRUTH_FILE.read_text()) if TRUTH_FILE.is_file() else None
+
+
+def of_position(doc: dict | None, position: Position) -> dict[str, float] | None:
+    """`position`'s truth values by move out of the repo's file, or None when
+    it holds none for the position's current GCG."""
+    entry = (doc or {}).get("positions", {}).get(position.id)
+    if entry is None or entry["gcg_hash"] != gcg_hash(position):
+        return None
+    return entry["values"]
+
+
+def same_leaves(run: dict, leaf_params: dict) -> bool:
+    """Whether a truth's opponent leaves are those a deep_bot_leaf_eval tag's
+    analysis draws (its frozen params `leaf_params`): the same leave inference
+    model, count and seed."""
+    return (
+        run["leave_inference"]
+        == {
+            "tag": leaf_params.get("match_leave_inference_tag"),
+            "generation": leaf_params.get("match_leave_inference_generation"),
+        }
+        and run["opp_leaves"] == leaf_params.get("match_opp_leaves")
+        and run["seed"] == leaf_positions.ANALYSIS_SEED
+    )

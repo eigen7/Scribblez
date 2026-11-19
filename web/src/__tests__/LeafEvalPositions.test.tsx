@@ -103,4 +103,46 @@ describe('LeafEvalPositions', () => {
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
     await waitFor(() => expect(screen.getByText('not valued')).toBeTruthy());
   });
+
+  const withTruth = (sameLeaves: boolean) => {
+    const p = payload(20);
+    return {
+      ...p,
+      values: [
+        { ...p.values[0], truth: 0.3, truth_rank: 2 },
+        { ...p.values[1], truth: 0.5, truth_rank: 1 },
+      ],
+      truth: {
+        tag: 't1',
+        run: { leave_inference: { tag: 'li', generation: 292 }, opp_leaves: 16, games: 64, candidates: 600 },
+        same_leaves: sameLeaves,
+        num_values: 296,
+      },
+    };
+  };
+  const serveTruth = (sameLeaves: boolean) =>
+    vi.stubGlobal('fetch', vi.fn((url: string) =>
+      url.startsWith('/api/deep_bot_leaf_eval/position?')
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(withTruth(sameLeaves)) } as Response)
+        : fakeFetch(url),
+    ));
+
+  it("lists each move's truth beside its leaf eval and charts it", async () => {
+    serveTruth(true);
+    render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
+    await waitFor(() => expect(screen.getByText('leaf #53 · 20.2% · truth #1 · 50.0%')).toBeTruthy());
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['#', 'move', 'points', 'leaf eval', '', 'truth', 'truth rank', 'equity rank', '']);
+    const row = screen.getAllByRole('row')[1];
+    expect([...row.querySelectorAll('td')].map((td) => td.textContent).slice(5, 7)).toEqual(['30.0%', '#2']);
+    expect(screen.getByText(/Truth \(tag t1\)/)).toBeTruthy();
+    expect(screen.queryByText(/not this tag/)).toBeNull();
+    await waitFor(() => expect(screen.getByText('· truth 30.0%')).toBeTruthy());
+  });
+
+  it("warns when the truth's opponent leaves are not the analysis's", async () => {
+    serveTruth(false);
+    render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
+    await waitFor(() => expect(screen.getByText(/not this tag/)).toBeTruthy());
+  });
 });

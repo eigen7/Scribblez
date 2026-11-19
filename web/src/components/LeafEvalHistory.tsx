@@ -5,7 +5,9 @@ import { getJSON } from '../lib/api';
 // The leaf's value of one move at one known position over every analyzed
 // generation (/api/deep_bot_leaf_eval/history), for the Positions tab's
 // selected move. The slider's generation is marked; a generation that did not
-// value the move breaks the line.
+// value the move breaks the line. Where the move has a truth (what a perfect
+// leaf would value it at), a dashed line marks it: the level the leaf's line
+// should approach.
 
 export interface HistoryPoint {
   generation: number;
@@ -28,8 +30,9 @@ interface Scale {
   xTicks: number[];
 }
 
-function scale(points: HistoryPoint[]): Scale {
+function scale(points: HistoryPoint[], truth: number | null): Scale {
   const values = points.flatMap((p) => (p.value == null ? [] : [p.value]));
+  if (truth != null) values.push(truth);
   const gens = points.map((p) => p.generation);
   const g0 = gens[0];
   const g1 = Math.max(gens[gens.length - 1], g0 + 1);
@@ -100,10 +103,25 @@ function Axes({ s }: { s: Scale }) {
   );
 }
 
-export function HistoryChart({ points, generation }: { points: HistoryPoint[]; generation: number }) {
+const TRUTH_COLOR = '#c2410c';
+
+function TruthLine({ s, truth }: { s: Scale; truth: number }) {
+  return (
+    <line x1={PAD.left} x2={PAD.left + PLOT_W} y1={s.y(truth)} y2={s.y(truth)} stroke={TRUTH_COLOR}
+      strokeWidth={1.5} strokeDasharray="5 3" />
+  );
+}
+
+export function HistoryChart({
+  points, generation, truth = null,
+}: {
+  points: HistoryPoint[];
+  generation: number;
+  truth?: number | null;
+}) {
   const [hover, setHover] = useState<HistoryPoint | null>(null);
   if (!points.some((p) => p.value != null)) return <div className="muted">No generation valued this move.</div>;
-  const s = scale(points);
+  const s = scale(points, truth);
   const current = points.find((p) => p.generation === generation);
   const onMove = (e: MouseEvent<SVGRectElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
@@ -114,9 +132,11 @@ export function HistoryChart({ points, generation }: { points: HistoryPoint[]; g
     <>
       <div className="dbp-history-readout">
         {shown ? `generation ${shown.generation} · ${pctText(shown.value)}` : ' '}
+        {truth != null && <span style={{ color: TRUTH_COLOR }}> · truth {pctText(truth)}</span>}
       </div>
       <svg width={WIDTH} height={HEIGHT} role="img" aria-label="leaf eval over generations">
         <Axes s={s} />
+        {truth != null && <TruthLine s={s} truth={truth} />}
         <path d={linePath(points, s)} fill="none" stroke="#3a86d4" strokeWidth={2} strokeLinejoin="round" />
         {current && <Marker p={current} s={s} dashed={false} />}
         {hover && hover !== current && <Marker p={hover} s={s} dashed />}
@@ -146,7 +166,7 @@ function useHistory(task: string, tag: string, position: number, move: string, n
 }
 
 export default function LeafEvalHistory({
-  task, tag, position, move, display, generation, newest,
+  task, tag, position, move, display, generation, newest, truth,
 }: {
   task: string;
   tag: string;
@@ -155,13 +175,14 @@ export default function LeafEvalHistory({
   display: string;
   generation: number;
   newest: number | null; // the newest analyzed generation; a new one refetches
+  truth: number | null; // the move's truth, null without one
 }) {
   const { points, error } = useHistory(task, tag, position, move, newest);
   return (
     <div className="dbp-panel dbp-history">
       <div className="dbp-panel-title">Leaf eval of <span className="dbp-answer-move">{display}</span> by generation</div>
       {error && <div className="dbp-error">{error}</div>}
-      {!error && (points ? <HistoryChart points={points} generation={generation} /> : (
+      {!error && (points ? <HistoryChart points={points} generation={generation} truth={truth} /> : (
         <div className="muted"><span className="scz-spinner" style={{ verticalAlign: 'middle' }} /> reading every generation…</div>
       ))}
     </div>
