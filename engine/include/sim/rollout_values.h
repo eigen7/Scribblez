@@ -58,6 +58,10 @@ class LeafValues {
 
   // out[i] for *leaves[i].
   virtual std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) = 0;
+
+  // Whether a leaf's value is one random outcome (a playout) rather than a
+  // prediction, so that repeats of a leaf each need a value of their own.
+  virtual bool noisy() const { return false; }
 };
 
 class RolloutValues : public LeafValues {

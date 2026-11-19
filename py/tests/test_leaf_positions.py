@@ -128,7 +128,7 @@ def _tori() -> known_positions.Position:
 
 def _with_truth(tmp_path, monkeypatch, values: dict, gcg_hash: str | None = None):
     """A repo truth file for TORI, and the leaf tag's frozen params."""
-    run = truth.run_settings("li", 292, 16, 64, 600)
+    run = truth.run_settings("li", 292, 1024, 600)
     doc = {
         "tag": "t1",
         "run": run,
@@ -165,13 +165,13 @@ def test_the_table_lists_each_moves_truth_and_the_truths_best(tmp_path, monkeypa
     assert rows == {"15D .ROTIC": (0.3, 3), "8H ZZZ": (0.6, 1), "G11 TORI": (0.5, 2)}
     assert p["truth"] == {
         "tag": "t1",
-        "run": truth.run_settings("li", 292, 16, 64, 600),
-        "same_leaves": True,
+        "run": truth.run_settings("li", 292, 1024, 600),
+        "same_belief": True,
         "num_values": 3,
     }
 
 
-def test_a_truth_of_another_gcg_or_other_leaves_is_flagged(tmp_path, monkeypatch):
+def test_a_truth_of_another_gcg_or_belief_is_flagged(tmp_path, monkeypatch):
     paths = _with_truth(tmp_path, monkeypatch, {"15D .ROTIC": 0.3}, gcg_hash="stale")
     p = _truth_payload(tmp_path, paths)
     assert p["truth"] is None and all(v["truth"] is None for v in p["values"])
@@ -179,7 +179,7 @@ def test_a_truth_of_another_gcg_or_other_leaves_is_flagged(tmp_path, monkeypatch
     (paths.root / "task.json").write_text(
         json.dumps({"params": {**LEAF_PARAMS, "match_leave_inference_generation": 300}})
     )
-    assert _truth_payload(tmp_path, paths)["truth"]["same_leaves"] is False
+    assert _truth_payload(tmp_path, paths)["truth"]["same_belief"] is False
 
 
 def test_a_moves_history_runs_over_every_analyzed_generation(tmp_path):

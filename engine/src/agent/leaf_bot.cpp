@@ -28,6 +28,13 @@ std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
   return out;
 }
 
+std::vector<WeightedLeave> equal_weights(const std::vector<Rack>& draws) {
+  std::vector<WeightedLeave> out;
+  out.reserve(draws.size());
+  for (const Rack& d : draws) out.push_back({d, 1.0 / double(draws.size())});
+  return out;
+}
+
 size_t best_value(const std::vector<CandidateValue>& values) {
   size_t best = 0;
   for (size_t i = 1; i < values.size(); ++i)
@@ -100,7 +107,7 @@ std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) cons
   draws.reserve(size_t(params_.opp_leaves));
   for (int i = 0; i < params_.opp_leaves; ++i)
     draws.push_back(b->leave(b->sample((double(i) + jitter) / double(params_.opp_leaves))));
-  return weighted_leaves(draws);
+  return backend_.values->noisy() ? equal_weights(draws) : weighted_leaves(draws);
 }
 
 std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQuery& q) const {

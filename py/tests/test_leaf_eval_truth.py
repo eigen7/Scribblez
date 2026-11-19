@@ -49,7 +49,7 @@ def test_the_leave_model_pins_its_latest_export(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "changes", [{"leave_inference_tag": ""}, {"leave_inference_generation": 4}, {"games": 0}]
+    "changes", [{"leave_inference_tag": ""}, {"leave_inference_generation": 4}, {"playouts": 0}]
 )
 def test_a_tag_without_a_usable_setup_is_refused_at_creation(tmp_path, changes):
     _leave_exports(tmp_path, [3, 5])
@@ -168,6 +168,6 @@ def test_the_copy_keeps_the_truths_of_the_current_gcgs(tmp_path):
 def test_the_copy_refuses_truths_of_different_runs(tmp_path):
     a, b = known_positions.load()[:2]
     _write_truth(tmp_path, a, leaf_eval_truth.run_settings(PARAMS))
-    _write_truth(tmp_path, b, leaf_eval_truth.run_settings(replace(PARAMS, games=8)))
+    _write_truth(tmp_path, b, leaf_eval_truth.run_settings(replace(PARAMS, playouts=8)))
     with pytest.raises(ValueError):
         truth.collect(tmp_path, [a, b])

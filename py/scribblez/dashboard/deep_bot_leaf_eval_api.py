@@ -137,14 +137,15 @@ def values_json(values: list[dict], named: set[str], board, truths: dict[str, fl
 
 def truth_json(doc: dict | None, truths: dict | None, leaf_params: dict | None) -> dict | None:
     """What the table says about the position's truth, from the repo's file
-    `doc`: whose it is and how it was run, whether its opponent leaves are the
-    tag's analysis's, and how many moves it covers; None without one."""
+    `doc`: whose it is and how it was run, whether it drew the opponent's
+    leaves from the tag's analysis's belief, and how many moves it covers;
+    None without one."""
     if truths is None:
         return None
     return {
         "tag": doc["tag"],
         "run": doc["run"],
-        "same_leaves": truth.same_leaves(doc["run"], leaf_params or {}),
+        "same_belief": truth.same_belief(doc["run"], leaf_params or {}),
         "num_values": len(truths),
     }
 

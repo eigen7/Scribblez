@@ -32,16 +32,15 @@ interface Valued extends MoveRef {
 }
 
 // The position's truth: whose it is, how it was run, and whether it drew the
-// opponent's leaves this tag's analysis draws.
+// opponent's leaves from the belief this tag's analysis draws from.
 interface TruthInfo {
   tag: string;
   run: {
     leave_inference: { tag: string; generation: number };
-    opp_leaves: number;
-    games: number;
+    playouts: number;
     candidates: number;
   };
-  same_leaves: boolean;
+  same_belief: boolean;
   num_values: number;
 }
 
@@ -75,13 +74,13 @@ function TruthNote({ t }: { t: TruthInfo }) {
   const r = t.run;
   return (
     <div className="dbp-note">
-      Truth (tag {t.tag}): what a perfect leaf would value the move at, from {r.games} playouts to the
-      game&apos;s end per opponent leave, over {r.opp_leaves} leaves from leave inference{' '}
-      {r.leave_inference.tag} generation {r.leave_inference.generation}; {t.num_values} moves
-      {r.candidates > 0 ? `, static equity's best ${r.candidates}` : ''}.
-      {!t.same_leaves && (
-        <span className="dbp-error"> Its opponent leaves are not this tag&apos;s analysis&apos;s, so the two
-          columns differ by more than the leaf&apos;s error.</span>
+      Truth (tag {t.tag}): what a perfect leaf would value the move at over the whole belief, from
+      {' '}{r.playouts} playouts to the game&apos;s end, each against its own opponent leave drawn from
+      leave inference {r.leave_inference.tag} generation {r.leave_inference.generation};{' '}
+      {t.num_values} moves{r.candidates > 0 ? `, static equity's best ${r.candidates}` : ''}.
+      {!t.same_belief && (
+        <span className="dbp-error"> Its opponent leaves are drawn from another leave inference model
+          than this tag&apos;s analysis&apos;s.</span>
       )}
     </div>
   );

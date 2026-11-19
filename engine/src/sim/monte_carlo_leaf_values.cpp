@@ -37,19 +37,13 @@ EndgameAgent<HastyBot>::Params agent_params(size_t lane, const std::string& name
 }  // namespace
 
 std::vector<Wld> MonteCarloLeafValues::predict_wld(std::span<const CpuLeaf* const> leaves) {
-  const size_t games = size_t(games_);
-  std::vector<int> diffs(leaves.size() * games);
-  util::parallel_lanes(diffs.size(), [&](util::LaneCursor& cursor) {
+  std::vector<Wld> out(leaves.size());
+  util::parallel_lanes(leaves.size(), [&](util::LaneCursor& cursor) {
     EndgameAgent<HastyBot> a0(agent_params(cursor.lane(), "P0"));
     EndgameAgent<HastyBot> a1(agent_params(cursor.lane(), "P1"));
     for (size_t i; cursor.next(i);)
-      diffs[i] = playout(*leaves[i / games], dict_, a0, a1, uint64_t(i % games + 1));
+      out[i] = terminal_wld(playout(*leaves[i], dict_, a0, a1, uint64_t(i + 1)));
   });
-  std::vector<Wld> out(leaves.size(), Wld{});
-  for (size_t i = 0; i < diffs.size(); ++i) {
-    const Wld w = terminal_wld(diffs[i]);
-    for (size_t k = 0; k < w.size(); ++k) out[i / games][k] += w[k] / float(games);
-  }
   return out;
 }
 

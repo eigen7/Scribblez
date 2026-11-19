@@ -104,7 +104,7 @@ describe('LeafEvalPositions', () => {
     await waitFor(() => expect(screen.getByText('not valued')).toBeTruthy());
   });
 
-  const withTruth = (sameLeaves: boolean) => {
+  const withTruth = (sameBelief: boolean) => {
     const p = payload(20);
     return {
       ...p,
@@ -114,16 +114,16 @@ describe('LeafEvalPositions', () => {
       ],
       truth: {
         tag: 't1',
-        run: { leave_inference: { tag: 'li', generation: 292 }, opp_leaves: 16, games: 64, candidates: 600 },
-        same_leaves: sameLeaves,
+        run: { leave_inference: { tag: 'li', generation: 292 }, playouts: 1024, candidates: 600 },
+        same_belief: sameBelief,
         num_values: 296,
       },
     };
   };
-  const serveTruth = (sameLeaves: boolean) =>
+  const serveTruth = (sameBelief: boolean) =>
     vi.stubGlobal('fetch', vi.fn((url: string) =>
       url.startsWith('/api/deep_bot_leaf_eval/position?')
-        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(withTruth(sameLeaves)) } as Response)
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(withTruth(sameBelief)) } as Response)
         : fakeFetch(url),
     ));
 
@@ -136,13 +136,13 @@ describe('LeafEvalPositions', () => {
     const row = screen.getAllByRole('row')[1];
     expect([...row.querySelectorAll('td')].map((td) => td.textContent).slice(5, 7)).toEqual(['30.0%', '#2']);
     expect(screen.getByText(/Truth \(tag t1\)/)).toBeTruthy();
-    expect(screen.queryByText(/not this tag/)).toBeNull();
+    expect(screen.queryByText(/another leave inference model/)).toBeNull();
     await waitFor(() => expect(screen.getByText('· truth 30.0%')).toBeTruthy());
   });
 
-  it("warns when the truth's opponent leaves are not the analysis's", async () => {
+  it("warns when the truth's opponent leaves are not drawn from the analysis's belief", async () => {
     serveTruth(false);
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getByText(/not this tag/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/another leave inference model/)).toBeTruthy());
   });
 });

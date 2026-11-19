@@ -4,14 +4,14 @@ the column the deep_bot_leaf_eval Positions tab compares the network's values
 with.
 
 Its one role takes each known position in turn: LeafBot over the monte-carlo
-leaf plays every (move, opponent leave) out `games` times, the leaves drawn
-from the pinned leave inference model as the network's analysis draws them,
-and the slot delivers data/truth/<gcg stem>.json. A restarted slot skips the
-positions it already delivered. The leave inference model runs on TensorRT,
-so the slot needs a GPU, though the playouts are all CPU. Once every position
-is in, the slot idles until the controller, which sees the collected files,
-finishes it. py/scripts/deep_bot_leaf_eval/copy_truth.py then copies the
-tag's truth into the repo.
+leaf plays every move out `playouts` times, each against its own opponent
+leave drawn from the pinned leave inference model, and the slot delivers
+data/truth/<gcg stem>.json. A restarted slot skips the positions it already
+delivered. The leave inference model runs on TensorRT, so the slot needs a
+GPU, though the playouts are all CPU. Once every position is in, the slot
+idles until the controller, which sees the collected files, finishes it.
+py/scripts/deep_bot_leaf_eval/copy_truth.py then copies the tag's truth into
+the repo.
 """
 
 import time
@@ -48,22 +48,18 @@ class LeafEvalTruthParams:
     leave_inference_tag: str = param(
         "",
         "the leave_inference tag whose model draws the opponent's leaves: the one the "
-        "deep_bot_leaf_eval tag's match_leave_inference_tag names, for the same leaves",
+        "deep_bot_leaf_eval tag's match_leave_inference_tag names, for the same belief",
     )
     leave_inference_generation: int = param(
         -1, "which generation of leave_inference_tag (-1: its latest export, pinned at creation)"
     )
-    opp_leaves: int = param(
-        16,
-        "the opponent's leaves each move is valued over: the deep_bot_leaf_eval tag's "
-        "match_opp_leaves, for the same leaves",
+    playouts: int = param(
+        1024, "playouts per move to the game's end, each against its own opponent leave drawn"
     )
-    games: int = param(64, "playouts per (move, opponent leave)")
-    # A move costs opp_leaves x games playouts, about 12 thread-seconds at the
-    # defaults (12 ms a playout, measured 2026-11-19 with monte_carlo_sim_tool
-    # over the known positions), so the known positions' 28,835 legal moves
-    # cost about 98 thread-hours, 70% of them THAN's, and their best 600 each
-    # about 23.
+    # About 12 thread-seconds a move at the default (12 ms a playout, measured
+    # 2026-11-19 with monte_carlo_sim_tool over the known positions), so the
+    # known positions' 28,835 legal moves cost about 98 thread-hours, 70% of
+    # them THAN's, and their best 600 each about 23.
     candidates: int = param(
         600,
         "static equity's best N moves of each position that get a truth (0: every legal move). "
@@ -77,8 +73,8 @@ def _leave_paths(params, mount_root: Path) -> TagPaths:
 
 def finalize(spec, paths: TagPaths, params):
     """Pin the leave inference model to a concrete generation at task creation."""
-    if params.opp_leaves < 1 or params.games < 1 or params.candidates < 0:
-        raise params_mod.ParamsError("opp_leaves and games must be positive, candidates >= 0")
+    if params.playouts < 1 or params.candidates < 0:
+        raise params_mod.ParamsError("playouts must be positive, candidates >= 0")
     leave = pinned_generation(
         _leave_paths(params, paths.mount_root), params.leave_inference_generation, LEAVE_INFERENCE
     )
@@ -103,8 +99,7 @@ def run_settings(params) -> dict:
     return truth.run_settings(
         params.leave_inference_tag,
         params.leave_inference_generation,
-        params.opp_leaves,
-        params.games,
+        params.playouts,
         params.candidates,
     )
 
@@ -177,6 +172,6 @@ SPEC = WorkloadSpec(
     progress="scribblez.workloads.leaf_eval_truth:progress",
     complete="scribblez.workloads.leaf_eval_truth:complete",
     finalize="scribblez.workloads.leaf_eval_truth:finalize",
-    primary_params=("leave_inference_tag", "leave_inference_generation", "games", "candidates"),
+    primary_params=("leave_inference_tag", "leave_inference_generation", "playouts", "candidates"),
     collected_dirs=(truth.TRUTH_DIR,),
 )
