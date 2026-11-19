@@ -12,12 +12,22 @@ from scribblez.workloads.base import WorkerContext, resolve_input
 INPUT_DIR = "inputs/known-positions"
 
 
+def _rel(f: Path) -> str:
+    return f"{INPUT_DIR}/{f.name}"
+
+
 def inputs() -> dict[str, Path]:
     """Every file a reader of the positions needs, keyed as the slot finds it."""
-    return {f"{INPUT_DIR}/{f.name}": f for f in known_positions.files()}
+    return {_rel(f): f for f in known_positions.files()}
 
 
 def load(ctx: WorkerContext) -> list[Position]:
-    """The positions where the slot reads them."""
-    staged = [resolve_input(ctx, rel, source) for rel, source in inputs().items()]
-    return known_positions.load(staged[-1].parent)  # the manifest, last
+    """The positions where the slot reads them. The manifest comes first,
+    since only it names the GCGs: a remote slot has no repo copy to list them
+    from."""
+    source = known_positions.DIRECTORY / known_positions.MANIFEST
+    manifest = resolve_input(ctx, _rel(source), source)
+    positions = known_positions.load(manifest.parent)
+    for p in positions:
+        resolve_input(ctx, _rel(p.gcg), known_positions.DIRECTORY / p.gcg.name)
+    return positions
