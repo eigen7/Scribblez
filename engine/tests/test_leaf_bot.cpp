@@ -3,8 +3,8 @@
 // candidate the leaf values best, whatever its static equity; values each at
 // the position after it, over opponent leaves of the length the opponent
 // kept, empty before the opponent's first move; asks the leave inference
-// model at each modelled turn; and plays HastyBot's move where a candidate
-// would empty the bag. Skips without the NWL23 lexicon and HastyBot's leave
+// model at each modelled turn; and values a candidate that empties the bag
+// like any other. Skips without the NWL23 lexicon and HastyBot's leave
 // values.
 
 #include "agent/hasty_bot.h"
@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -248,44 +249,21 @@ TEST(LeafBot, ItsDecisionReportsEachCandidatesValue) {
   EXPECT_EQ(d.move, ranked[2]);
 }
 
-// Where a candidate would empty the bag, an analysis that asks still gets the
-// values of those that keep it; the move is still HastyBot's.
-TEST(LeafBot, ReportsTheValuesOfTheCandidatesThatKeepTheBagWhereAsked) {
-  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
-  const Board board;
-  const Rack rack = Rack::from_string("AEINRST");
-  const Rack hidden;
-  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 4};
-  LeafBot::Params p = small_params(1);
-  p.candidates = 200;
-  auto values = std::make_shared<RecordingValues>();
-  LeafBot quiet(small_params(1), backend(values));
-  EXPECT_TRUE(quiet.make_move(req).values.empty());
-  p.report_values = true;
-  LeafBot asked(p, backend(values));
-  const MoveDecision d = asked.make_move(req);
-  EXPECT_EQ(d.move, hasty_best_move_wmp(req));
-  ASSERT_FALSE(d.values.empty());
-  for (const CandidateValue& v : d.values) EXPECT_LT(v.move.num_glyphs(), 4);
-}
-
-// The leaf never trained on a turn whose refill empties the bag.
-TEST(LeafBot, PlaysHastyBotsMoveWhereACandidateWouldEmptyTheBag) {
+// A candidate that empties the bag is valued like any other.
+TEST(LeafBot, ValuesTheCandidatesThatEmptyTheBag) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
   const Rack hidden;
   const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 3};
-  auto values = std::make_shared<RecordingValues>();
-  LeafBot bot(small_params(1), backend(values));
-  EXPECT_EQ(bot.make_move(req).move, hasty_best_move_wmp(req));
-  EXPECT_TRUE(values->seen.empty());
-}
-
-TEST(LeafBot, AMoveEmptiesTheBagIffItPlaysAtLeastTheBagsTiles) {
-  const Move exchange = Move::exchange(Rack::from_string("AB").counts());
-  EXPECT_FALSE(empties_bag(exchange, 7));
-  EXPECT_FALSE(empties_bag(Move::pass(), 1));
+  const std::vector<Move> ranked = equity_top_k(req, 4);
+  ASSERT_TRUE(std::ranges::any_of(ranked, [](const Move& m) { return m.num_glyphs() >= 3; }));
+  Board favoured = board;
+  favoured.apply(ranked[1]);
+  LeafBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
+  const MoveDecision d = bot.make_move(req);
+  ASSERT_EQ(d.values.size(), ranked.size());
+  EXPECT_EQ(d.move, ranked[1]);
 }
 
 // A value is the leaf's weighted mean over the leaves: with a leaf that wins

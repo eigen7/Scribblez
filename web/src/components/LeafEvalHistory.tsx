@@ -5,7 +5,7 @@ import { getJSON } from '../lib/api';
 // The leaf's value of one move at one known position over every analyzed
 // generation (/api/deep_bot_leaf_eval/history), for the Positions tab's
 // selected move. The slider's generation is marked; a generation that did not
-// value the move (it would empty the bag) breaks the line.
+// value the move breaks the line.
 
 export interface HistoryPoint {
   generation: number;

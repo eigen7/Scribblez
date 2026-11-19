@@ -72,7 +72,7 @@ describe('LeafEvalPositions', () => {
     await waitFor(() => expect(screen.getByText('On the board: 15D .ROTIC')).toBeTruthy());
     expect(screen.getByText(/generation 20 \(8,000,000 rows\) · match 0\.545 ± 0\.012/)).toBeTruthy();
     expect(screen.getByText('leaf #53 · 20.2%')).toBeTruthy();
-    expect(screen.getByText(/296 moves that keep the bag/)).toBeTruthy();
+    expect(screen.getByText(/296 moves, best first/)).toBeTruthy();
   });
 
   it("lists each move's points beside its leaf eval and equity rank", async () => {
@@ -93,7 +93,7 @@ describe('LeafEvalPositions', () => {
     await waitFor(() => expect(screen.getByText('generation 20 · 20.2%')).toBeTruthy());
   });
 
-  it('says why a move has no value', async () => {
+  it('says when a move has no value', async () => {
     const unvalued = { ...payload(20), values: payload(20).values.slice(0, 1) };
     vi.stubGlobal('fetch', vi.fn((url: string) =>
       url.startsWith('/api/deep_bot_leaf_eval/position?')
@@ -101,6 +101,6 @@ describe('LeafEvalPositions', () => {
         : fakeFetch(url),
     ));
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getByText('not valued (it would empty the bag)')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('not valued')).toBeTruthy());
   });
 });

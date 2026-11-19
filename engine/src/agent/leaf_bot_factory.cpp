@@ -39,9 +39,6 @@ po::options_description leafbot_options(LeafBot::Params& p) {
      "HastyBot's best moves by static equity that the leaf values")  //
     ("opp-leaves", po::value<int>(&p.opp_leaves)->default_value(p.opp_leaves),
      "the opponent's leaves each candidate is valued over")  //
-    ("report-values", po::bool_switch(&p.report_values),
-     "also value and report the candidates that keep the bag where another would empty it "
-     "(an analysis; play is HastyBot's move there either way)")  //
     ("seed", po::value<uint64_t>(&p.seed), "the leaves' quantile jitter (default: SeedProducer)");
   return desc;
 }
@@ -106,9 +103,8 @@ std::string LeafBot::options_help() {
   return agent_options_help(
     "  LeafBot: the leaf network as a player, no search. Values HastyBot's best moves by\n"
     "  static equity at the position after each, over the opponent's leaves drawn from the\n"
-    "  leave inference model's belief, and plays the best. Plays HastyBot's move where a\n"
-    "  candidate would empty the bag. Hidden leaves only; leafbot-endgame solves the\n"
-    "  endgame.\n",
+    "  leave inference model's belief, and plays the best. Hidden leaves only;\n"
+    "  leafbot-endgame solves the endgame.\n",
     leafbot_options(defaults));
 }
 

@@ -12,14 +12,11 @@
 // empty), and a candidate's value is its leaf win value's mean over them;
 // draws that land on the same leave are valued once, weighted by their
 // count. It plays the best value, the earlier candidate (the better static
-// equity) on ties.
-//
-// The leaf trained only on turns whose mover's refill leaves the bag
-// non-empty, so at a turn where a candidate would empty the bag LeafBot plays
-// HastyBot's move. Its decision reports the candidates' values
-// (MoveDecision::values); with `report_values`, also those of the candidates
-// that do not empty the bag at such a turn, for an analysis that asks. Hidden leaves only, before
-// the endgame: EndgameAgent<LeafBot> solves the turns with the bag empty.
+// equity) on ties, and its decision reports the candidates' values
+// (MoveDecision::values). A candidate that empties the bag is valued like any
+// other, since the leaf trains on every turn the game did not end at. Hidden
+// leaves only, before the endgame: EndgameAgent<LeafBot> solves the turns
+// with the bag empty.
 
 #include "agent/agent.h"
 #include "belief/leave_history_recorder.h"
@@ -67,9 +64,6 @@ class LeafBot : public Agent {
     std::string leave_inference{};
     int candidates = 10;  // HastyBot's best by static equity
     int opp_leaves = 16;  // the opponent's leaves each candidate is valued over
-    // Value the candidates that keep the bag, and report them, also at a turn
-    // where another would empty it and HastyBot's move is played.
-    bool report_values = false;
     uint64_t seed = 0;
   };
 
@@ -129,9 +123,6 @@ class LeafBot : public Agent {
   int ply_ = 0;         // moves observed this game
   uint64_t games_ = 0;  // games begun
 };
-
-// Whether `move` would leave the bag of `bag` tiles empty after its refill.
-bool empties_bag(const Move& move, int bag);
 
 // The index of the best of `values`, the earliest on ties.
 size_t best_value(const std::vector<CandidateValue>& values);

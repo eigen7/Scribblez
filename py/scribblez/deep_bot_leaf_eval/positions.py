@@ -3,8 +3,7 @@ what deep_bot_leaf_eval's Positions tab shows: LeafBot's value of every legal
 move at each position (engine agent/leaf_bot.h, its opponent leaves drawn from
 the matches' leave inference model), the move's points, its rank under that
 value and under static equity, and the pick the matches would make there: the
-best of HastyBot's top `candidates`, or HastyBot's move where one of those
-would empty the bag.
+best of HastyBot's top `candidates`.
 
 The match slot computes it after each match (workloads/deep_bot_leaf_eval.py)
 and delivers it as data/leaf_positions/gen_NNNNNN.json, apart from the match
@@ -35,22 +34,20 @@ def generation_of(path: Path) -> int:
 
 
 def player_spec(model: Path, leave: Path, opp_leaves: int) -> str:
-    """LeafBot valuing every legal move that keeps the bag."""
+    """LeafBot valuing every legal move."""
     return (
         f"--type=leafbot --leaf-model={model} --leave-inference={leave} "
-        f"--candidates={ALL_MOVES} --opp-leaves={opp_leaves} --report-values"
+        f"--candidates={ALL_MOVES} --opp-leaves={opp_leaves}"
     )
 
 
 def match_pick(record: dict, candidates: int) -> str:
     """The move the matches' LeafBot (its `candidates` best by static equity)
     plays at the position the pick tool's `record` (of LeafBot over every
-    move) is of: the best valued of those candidates when all of them keep the
-    bag. Otherwise the record's own pick is the matches' too: one of them
-    empties the bag, so both played HastyBot's move, or the position has fewer
-    legal moves than that, so both chose among them all."""
+    move) is of: the best valued of those candidates. A position with a single
+    legal move has no values, and its record's pick is the matches' too."""
     top = [v for v in record.get("values", []) if 1 <= v["equity_rank"] <= candidates]
-    if {v["equity_rank"] for v in top} != set(range(1, candidates + 1)):
+    if not top:
         return record["pick"]
     return max(top, key=lambda v: (v["value"], -v["equity_rank"]))["move"]
 
