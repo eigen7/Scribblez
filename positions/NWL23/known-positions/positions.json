@@ -42,20 +42,6 @@
     "note": ""
   },
   {
-    "id": "O(I)",
-    "title": "try to bingo out",
-    "gcg": "oi-fish.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#oi-fish-one-tile-to-bingo-out",
-    "origin": "hidden_blind_spots v1 1792939424901615146-ssh-0-g166-turn22",
-    "reference": [
-      "M14 O."
-    ],
-    "reference_equity_rank": 114,
-    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 15.2 +- 0.5 points of win %",
-    "static_equity_best": "O9 COINERs",
-    "note": ""
-  },
-  {
     "id": "A(I)M",
     "title": "try to bingo out",
     "gcg": "aim-fish.gcg",
