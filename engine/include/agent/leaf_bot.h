@@ -49,14 +49,19 @@ std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws);
 class LeafBot : public Agent {
  public:
   static constexpr const char* kType = "leafbot";
+  // The --leaf-model that values leaves by playouts instead of a network:
+  // what a perfect network would predict (sim/monte_carlo_leaf_values.h).
+  static constexpr const char* kMonteCarloLeaf = "monte-carlo";
   static constexpr bool kPreEndgameByDefault = false;
 
   struct Params {
     int thread_id = 0;
     std::string name;
-    // The leaf network (a deep_bot_leaf_eval ONNX export), or "synthetic" for
-    // the CPU reference's logistic leaf (tests). Read by the factory.
+    // The leaf network (a deep_bot_leaf_eval ONNX export), "synthetic" for
+    // the CPU reference's logistic leaf (tests), or kMonteCarloLeaf for the
+    // leaf's target computed by playouts. Read by the factory.
     std::string leaf_model{};
+    int monte_carlo_games = 64;  // kMonteCarloLeaf's playouts per leaf
     std::string leaf_precision = "fp16";
     int leaf_rows = 4096;  // rows per leaf network call, as games' leaves are gathered
     // The leave inference model (ONNX) the opponent's leaves are drawn from.
@@ -73,7 +78,7 @@ class LeafBot : public Agent {
   // its beliefs are over. An empty `predict` draws the opponent's leaves from
   // the unseen tiles uniformly (tests).
   struct Backend {
-    std::shared_ptr<RolloutValues> values;
+    std::shared_ptr<LeafValues> values;
     belief::LeaveParamsFn predict;
     std::shared_ptr<const LeaveValueArrays> table;
   };

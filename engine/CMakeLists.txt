@@ -60,6 +60,7 @@ add_library(scribblez_core STATIC
   src/lexicon/lexicon.cpp
   src/agent/hasty_bot.cpp
   src/agent/endgame_turn_policy.cpp
+  src/sim/monte_carlo_leaf_values.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
   src/sim/reply_blocking.cpp

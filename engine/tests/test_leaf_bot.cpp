@@ -15,6 +15,7 @@
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/leave_values.h"
 #include "nwl23_equity.h"
+#include "sim/monte_carlo_leaf_values.h"
 #include "sim/rollout_values.h"
 #include "sim/sim_runner.h"
 
@@ -296,4 +297,25 @@ TEST(LeafBot, TheBestValueIsTheEarliestOnTies) {
   const Move m = Move::pass();
   EXPECT_EQ(best_value({{m, 0.2}, {m, 0.5}, {m, 0.5}, {m, 0.1}}), 1u);
   EXPECT_EQ(best_value({{m, 0.7}}), 0u);
+}
+
+// The monte-carlo leaf (sim/monte_carlo_leaf_values.h) plays each leaf out:
+// its values are probabilities, the same on every call, and follow a lead no
+// game can overturn.
+TEST(MonteCarloLeafValues, PlaysEachLeafOutToItsOutcome) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEINRST");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
+  const Move opening = equity_top_k(req, 1).front();
+  const RolloutStart s = make_rollout_start(board, rack, 0, 0, opening, 0);
+  const CpuLeaf ahead{s.board, {s.leave, Rack{}}, {1000, 0}};
+  const CpuLeaf behind{s.board, {s.leave, Rack{}}, {0, 1000}};
+  const std::vector<const CpuLeaf*> leaves{&ahead, &behind};
+  MonteCarloLeafValues values(nwl23(), /*games=*/2);
+  const std::vector<Wld> first = values.predict_wld(leaves);
+  EXPECT_EQ(values.predict_wld(leaves), first);
+  EXPECT_EQ(first[0], (Wld{1.0f, 0.0f, 0.0f}));
+  EXPECT_EQ(first[1], (Wld{0.0f, 0.0f, 1.0f}));
 }

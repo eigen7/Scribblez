@@ -49,10 +49,19 @@ struct BatchValues {
   std::vector<rollout_abi::SimMaps> maps;
 };
 
-class RolloutValues {
+// A value at rollout leaves: the win/draw/loss probabilities at each, from
+// player 0's side. The narrow face of RolloutValues that LeafBot needs, which
+// a backend with no network (sim/monte_carlo_leaf_values.h) also offers.
+class LeafValues {
  public:
-  virtual ~RolloutValues() = default;
+  virtual ~LeafValues() = default;
 
+  // out[i] for *leaves[i].
+  virtual std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) = 0;
+};
+
+class RolloutValues : public LeafValues {
+ public:
   virtual BatchValues run(const RolloutBatch& batch) = 0;
   // The leaf's prediction at each of `leaves`, as the sims' leaf would be
   // valued there: the prior a sim's maps are read against when `leaves` are
@@ -64,7 +73,7 @@ class RolloutValues {
   virtual std::vector<LeafPrediction> predict_leaves(std::span<const CpuLeaf* const> leaves) = 0;
   // The value alone of predict_leaves(): a backend may skip what it costs to
   // bring the continuation heads back.
-  virtual std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves);
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
 };
 
 // A leaf network's prediction at a rollout's leaf, from player 0's side (the
