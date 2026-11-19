@@ -16,6 +16,8 @@ from pathlib import Path
 from scribblez.paths import ENGINE_DIR, REPO_ROOT
 
 DIRECTORY = REPO_ROOT / "positions" / "NWL23" / "known-positions"
+# The manifest, which names each position's GCG, in a positions directory.
+MANIFEST = "positions.json"
 
 # How a pick reads against its position's manifest entry.
 REFERENCE = "reference"  # the move the analysis favours
@@ -48,7 +50,7 @@ class Position:
 
 def load(directory: Path = DIRECTORY) -> list[Position]:
     """The manifest's positions, in its order."""
-    entries = json.loads((directory / "positions.json").read_text())
+    entries = json.loads((directory / MANIFEST).read_text())
     return [
         Position(
             id=e["id"],
@@ -65,7 +67,7 @@ def load(directory: Path = DIRECTORY) -> list[Position]:
 def files(directory: Path = DIRECTORY) -> list[Path]:
     """The directory's files a reader of the positions needs, the manifest
     last."""
-    return [*(p.gcg for p in load(directory)), directory / "positions.json"]
+    return [*(p.gcg for p in load(directory)), directory / MANIFEST]
 
 
 def write_slog(positions: list[Position], work: Path) -> Path:
