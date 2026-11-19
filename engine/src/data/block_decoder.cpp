@@ -60,8 +60,8 @@ EligibleSpan BlockDecoder::row_turns(DecodeTask task, const GameMetadata& meta) 
     case DecodeTask::kMaxMovePerLane:
       return {0, int(meta.num_turns)};
     case DecodeTask::kLeafEval:
-      // Turn t's draw leaves tiles in the bag iff turn t + 1 began with some.
-      return {meta.eligible_begin, std::max(int(meta.eligible_begin), meta.eligible_end - 1)};
+      // The game's last turn ended it.
+      return {meta.eligible_begin, std::max(int(meta.eligible_begin), int(meta.num_turns) - 1)};
     case DecodeTask::kPositionEval:
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:

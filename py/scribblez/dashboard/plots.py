@@ -308,13 +308,13 @@ LEAVE_INFERENCE_QUALITY = [
 ]
 # The leaf eval read (deep_bot_leaf_eval/evaluation.py): on the held-out games'
 # rows, the model's log loss of the mover's expected score beside the win
-# tables' (the one fitted from the window, and Macondo's), overall and by pool
-# size, the model's own WLD and score-differential errors, and its per-square
-# and end-of-game heads' errors.
-# deep_bot_leaf_eval/evaluation.py's POOL_BANDS, copied: importing it would
-# load the engine library. A leaf's pool is never empty (its bag outlasts both
-# refills), so the first band starts at 1.
-LEAF_EVAL_POOL_BANDS = ("1_20", "21_40", "41_60", "61_100")
+# tables' (the one fitted from the window, and Macondo's), overall, by pool
+# size and by whether both refills empty the bag, the model's own WLD and
+# score-differential errors, and its per-square and end-of-game heads' errors.
+# deep_bot_leaf_eval/evaluation.py's POOL_BANDS and BAG_SPLITS, copied:
+# importing it would load the engine library.
+LEAF_EVAL_POOL_BANDS = ("0_20", "21_40", "41_60", "61_100")
+LEAF_EVAL_BAG_SPLITS = (("bag_empty", "refills empty the bag"), ("bag_left", "bag left"))
 LEAF_EVAL_SOURCES = ("model", "wintable", "wintable_macondo")
 LEAF_EVAL_QUALITY = [
     (
@@ -328,14 +328,25 @@ LEAF_EVAL_QUALITY = [
         )
         for band in LEAF_EVAL_POOL_BANDS
     ),
+    *(
+        (
+            f"Held-out log loss, {label}",
+            [f"eval_{source}_logloss_{split}" for source in LEAF_EVAL_SOURCES],
+        )
+        for split, label in LEAF_EVAL_BAG_SPLITS
+    ),
     ("Held-out WLD cross-entropy", ["eval_wld_nll"]),
     ("Held-out score-differential MAE (points)", ["eval_sd_mean_mae"]),
     ("Held-out ownership cross-entropy per empty square", ["eval_ownership_nll"]),
     ("Held-out square points RMSE (points)", ["eval_points_rmse"]),
     ("Square points: predicted variance / squared error", ["eval_points_var_ratio"]),
     (
-        "Held-out going-out cross-entropy, overall and by pool",
-        ["eval_going_out_nll", *(f"eval_going_out_nll_pool_{b}" for b in LEAF_EVAL_POOL_BANDS)],
+        "Held-out going-out cross-entropy, overall, by pool and by bag",
+        [
+            "eval_going_out_nll",
+            *(f"eval_going_out_nll_pool_{b}" for b in LEAF_EVAL_POOL_BANDS),
+            *(f"eval_going_out_nll_{split}" for split, _ in LEAF_EVAL_BAG_SPLITS),
+        ],
     ),
     ("Held-out end-of-game points RMSE (points)", ["eval_end_points_rmse"]),
     ("End-of-game points: predicted variance / squared error", ["eval_end_points_var_ratio"]),

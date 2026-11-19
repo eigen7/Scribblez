@@ -7,13 +7,10 @@
 // the rest of the unseen pool, draw the rest of the opponent's rack and then
 // our refill, each player's exchanged tiles going back after its own refill
 // (if our move went out with the bag empty, the game is over here), the
-// opponent plays its top-equity move, we play ours,
-// and the outcome is the score differential with the play-out bonus. If the
-// bag is empty after those two plies, both keep playing top-equity moves to
-// the game's end, so the outcome is exact rather than a leaf. With the bag
-// empty a pass leaves the position unchanged and the players are
-// deterministic, so the second scoreless turn in a row ends the game as the
-// sixth would (each player loses its rack's value).
+// opponent plays its top-equity move, we play ours, and the rollout stops at
+// a leaf for the leaf network to value, whatever the bag holds. The outcome
+// is exact, the score differential with the play-out bonus, only when a
+// player went out within those plies.
 // Both sides draw with the same counter-based generator, so rollout i holds
 // the same racks on either, and the outcomes compare exactly.
 // docs/plans/gpu_hasty_rollouts.md is the design.
@@ -37,10 +34,8 @@ constexpr int kBlankTile = 26;
 // The unseen pool (at most 100 - 1 tiles). An exchange's tiles go back into
 // the slots its draw freed, so the bag never outgrows it.
 constexpr int kBagCap = 100;
-// A bound the rollout never reaches: two plies, then with the bag empty
-// every play takes a tile from the racks (2 x kRackSize at most), with at
-// most one pass between plays.
-constexpr int kMaxRolloutPlies = 2 + 2 * 2 * kRackSize + 1;
+// A rollout's plies: the opponent's reply, then ours.
+constexpr int kRolloutPlies = 2;
 
 // Glyph codes as Board stores them: 0 empty, 1..26 a natural letter,
 // 27..52 a blank designated A..Z.
@@ -63,15 +58,14 @@ struct PackedMove {
 };
 
 // One rollout's result. Player 0 is us (the leave holder), player 1 the
-// opponent, who moves first. `moves[0]` is the opponent's, `moves[1]` ours
-// (any later plies of a game played to the end are not reported);
+// opponent, who moves first. `moves[0]` is the opponent's, `moves[1]` ours;
 // when the opponent plays out, ours is a PASS and `game_over` is set after
 // the first ply.
 struct RolloutResult {
   int16_t diff = 0;  // our score minus the opponent's, after the rollout
   uint8_t game_over = 0;
   uint8_t pad = 0;
-  PackedMove moves[2];
+  PackedMove moves[kRolloutPlies];
 };
 
 // A rollout's end state, left in device memory for the leaf encoder kernel,

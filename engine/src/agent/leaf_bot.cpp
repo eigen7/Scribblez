@@ -14,10 +14,6 @@
 
 namespace scribblez {
 
-bool empties_bag(const Move& move, int bag) {
-  return move.type() == MoveType::PLAY && move.num_glyphs() >= bag;
-}
-
 std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
   std::vector<WeightedLeave> out;
   const double share = 1.0 / double(draws.size());
@@ -76,14 +72,6 @@ MoveDecision LeafBot::make_move(const MoveRequest& req) {
   const belief::LeaveQuery q = recorder_.own_query(req);
   const std::vector<Move> moves = equity_top_k(req, params_.candidates);
   if (moves.size() == 1) return moves.front();
-  std::vector<Move> keeping;
-  for (const Move& m : moves)
-    if (!empties_bag(m, req.bag_size)) keeping.push_back(m);
-  if (keeping.size() < moves.size()) {
-    MoveDecision hasty(hasty_best_move_wmp(req));
-    if (params_.report_values && !keeping.empty()) hasty.values = valued(req, keeping, q);
-    return hasty;
-  }
   MoveDecision decision(moves.front());
   decision.values = valued(req, moves, q);
   decision.move = decision.values[best_value(decision.values)].move;

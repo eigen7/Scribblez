@@ -12,7 +12,7 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // deep_bot_leaf_eval's Positions tab: one known position at a time under one
 // generation's leaf network, as the match slot analyzed it after that
 // generation's match (py/scribblez/deep_bot_leaf_eval/positions.py). LeafBot's
-// value of every move that keeps the bag (the leaf's win value after the
+// value of every legal move (the leaf's win value after the
 // move, its mean over opponent leaves from the leave inference model), and
 // the move the matches' LeafBot plays: the best of HastyBot's top candidates.
 // Clicking a move draws it on the board and charts its value over the
@@ -43,10 +43,11 @@ interface Generation {
   ci_half_width: number | null;
 }
 
-// Where the leaf puts a move; why it has no value, where it has none.
+// Where the leaf puts a move, or that it has no value (a position with a
+// single legal move).
 function leafText(byMove: Map<string, Valued>, move: string): string {
   const v = byMove.get(move);
-  return v ? `leaf #${v.leaf_rank} · ${pct(v.value)}` : 'not valued (it would empty the bag)';
+  return v ? `leaf #${v.leaf_rank} · ${pct(v.value)}` : 'not valued';
 }
 
 function moveTags(p: Payload, move: string): string[] {
@@ -93,7 +94,7 @@ function ValueTable({
     <div className="dbp-panel">
       <div className="dbp-panel-title">Leaf · generation {p.generation}</div>
       <div className="dbp-note">
-        {p.num_values} moves that keep the bag, best first by the leaf&apos;s win value after the move (its mean over
+        {p.num_values} moves, best first by the leaf&apos;s win value after the move (its mean over
         the opponent&apos;s leaves from the leave inference model). The matches&apos; LeafBot chooses among
         HastyBot&apos;s top {p.candidates} by static equity.
       </div>

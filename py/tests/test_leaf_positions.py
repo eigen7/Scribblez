@@ -1,7 +1,7 @@
 """A leaf export's analysis of the known positions (deep_bot_leaf_eval/positions.py)
 and the Positions tab's data API over it (dashboard/deep_bot_leaf_eval_api.py):
-the matches' pick is the best of the top candidates unless one would empty the
-bag, the moves are ranked by the leaf, and the tab lists the best and every
+the matches' pick is the best of the top candidates, the moves are ranked by
+the leaf, and the tab lists the best and every
 named move of a generation's analysis beside that generation's match."""
 
 import json
@@ -27,15 +27,13 @@ def test_the_pick_is_the_best_of_the_top_candidates():
     assert lp.match_pick(record, 4) == "d"
 
 
-def test_where_a_top_candidate_empties_the_bag_the_pick_is_hastybots():
-    # Rank 2 empties the bag, so it is not valued; the tool fell back.
-    record = {"pick": "hasty", "values": [_v("a", 0.2, 1), _v("c", 0.9, 3)]}
-    assert lp.match_pick(record, 3) == "hasty"
-
-
-def test_with_fewer_moves_than_candidates_the_pick_is_the_records():
-    record = {"pick": "b", "values": [_v("a", 0.2, 1), _v("b", 0.5, 2)]}
+def test_with_fewer_moves_than_candidates_the_pick_is_the_best_of_them_all():
+    record = {"pick": "X", "values": [_v("a", 0.2, 1), _v("b", 0.5, 2)]}
     assert lp.match_pick(record, 10) == "b"
+
+
+def test_with_a_single_legal_move_the_pick_is_the_records():
+    assert lp.match_pick({"pick": "only"}, 10) == "only"
 
 
 def test_an_entry_ranks_the_moves_by_the_leaf_and_reads_the_pick():
@@ -119,7 +117,7 @@ def test_the_table_lists_the_best_and_every_named_move(tmp_path, monkeypatch):
 def test_a_moves_history_runs_over_every_analyzed_generation(tmp_path):
     paths = _tag(tmp_path)
     _write_analysis(paths, 10, [{**_v("G11 TORI", 0.30, 2), "leaf_rank": 1}], "G11 TORI")
-    # Generation 20 did not value it: a move that would empty the bag.
+    # Generation 20 did not value it.
     _write_analysis(paths, 20, [{**_v("8H ZZZ", 0.50, 1), "leaf_rank": 1}], "8H ZZZ")
     _write_analysis(paths, 30, [{**_v("G11 TORI", 0.45, 1), "leaf_rank": 1}], "G11 TORI")
     key = (paths.tag, paths.task, str(tmp_path))

@@ -167,7 +167,6 @@ struct Smem {
   int scores[2];
   int num_tiles;
   int game_over;
-  int scoreless;  // consecutive passes and exchanges
   int slot;
   // Per ply.
   int mover;
@@ -1006,18 +1005,6 @@ __device__ inline void record_leave(Smem& s, int player) {
   for (int t = 0; t < kTileKinds; ++t) s.leave[player][t] = s.rack[player][t];
 }
 
-// With the bag empty, a second scoreless turn in a row ends the game as
-// rollout_abi.h describes: each player loses its rack's value.
-__device__ void end_if_stalemate(Smem& s, RolloutFates& fates) {
-  if (s.bag.remaining() > 0 || s.scoreless < 2) return;
-  const int v0 = rack_value(s, 0), v1 = rack_value(s, 1);
-  s.scores[0] -= v0;
-  s.scores[1] -= v1;
-  s.game_over = 1;
-  fates.went_out = 2;
-  fates.end_points = int16_t(v1 - v0);
-}
-
 // The mover went out: the play-out bonus, and the end of the game.
 __device__ void go_out(Smem& s, RolloutFates& fates) {
   const int mover = s.mover;
@@ -1050,21 +1037,18 @@ __device__ void place_chosen(Smem& s, RolloutFates& fates) {
   s.num_tiles += c.n;
 }
 
-// Applies s.chosen for the mover: tiles, score, draw, play-out bonus,
-// stalemate. One thread; the cross-check update follows in parallel.
+// Applies s.chosen for the mover: tiles, score, draw, play-out bonus. One
+// thread; the cross-check update follows in parallel.
 __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout, RolloutFates& fates) {
   const Cand& c = s.chosen;
   const int mover = s.mover;
   if (!c.valid) {
     record_leave(s, mover);
-    ++s.scoreless;
-    end_if_stalemate(s, fates);
     return;
   }
   if (c.type == 0) {
     place_chosen(s, fates);
     s.scores[mover] += c.score;
-    s.scoreless = 0;
     record_leave(s, mover);
     const int draws = min(int(c.n), s.bag.remaining());
     for (int i = 0; i < draws; ++i) ++s.rack[mover][s.bag.draw(mover)];
@@ -1079,7 +1063,6 @@ __device__ void apply_chosen(Smem& s, uint64_t seed, uint32_t rollout, RolloutFa
       s.bag.put_back(uint8_t(c.glyphs[i] == 53 ? kBlankTile : c.glyphs[i] - 1), mover, seed,
                      rollout);
     }
-    ++s.scoreless;
   }
 }
 
@@ -1300,7 +1283,6 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
     s.scores[1] = pos.scores[1];
     s.num_tiles = pos.num_tiles;
     s.game_over = 0;
-    s.scoreless = 0;
     s.overflow = 0;
     fate.went_out = kWentOutOpen;
     fate.end_points = 0;
@@ -1310,13 +1292,10 @@ __global__ void __launch_bounds__(kThreads, kMinBlocksPerSm)
   Scratch& sc = c_tables.scratch[s.slot];
   if (tid == 0) pc.lap(kPhaseInit);
   RolloutResult res;
-  PackedMove later;  // the plies past the first two, which the result doesn't report
-  // Two plies, then to the game's end if the bag is empty (rollout_abi.h).
-  for (int ply = 0; ply < kMaxRolloutPlies && !s.game_over && (ply < 2 || s.bag.remaining() == 0);
-       ++ply) {
+  for (int ply = 0; ply < kRolloutPlies && !s.game_over; ++ply) {
     if (tid == 0) s.mover = ply % 2 == 0 ? 1 : 0;
     __syncthreads();
-    play_ply(s, sc, tid, seed, rollout, ply < 2 ? res.moves[ply] : later, fate, pc, wc);
+    play_ply(s, sc, tid, seed, rollout, res.moves[ply], fate, pc, wc);
     __syncthreads();
     if (tid == 0) atomicAdd(&g_counts[kCountPlies], 1ull);
   }
@@ -1671,7 +1650,7 @@ struct DeviceTables {
   DeviceBuffer<uint32_t> tasks_by_start;
   DeviceBuffer<uint32_t> start_offsets;
   DeviceBuffer<SimMaps> maps;
-  DeviceBuffer<uint32_t> leaf_tasks;  // the tasks encode_leaves was given
+  DeviceBuffer<uint32_t> leaf_tasks;    // the tasks encode_leaves was given
   DeviceBuffer<LeafState> host_leaves;  // the states encode_host_leaves was given
   // complete_maps' tasks, their rows binned by start, the bins' slices with
   // each start's first, and the slices' partial sums
@@ -1891,8 +1870,8 @@ void encode_leaves_to_host(DeviceTables* d, const uint32_t* tasks, int count, fl
   });
 }
 
-void encode_host_leaves_to_host(DeviceTables* d, const LeafState* leaves, int count,
-                                float* spatial, float* scalar) {
+void encode_host_leaves_to_host(DeviceTables* d, const LeafState* leaves, int count, float* spatial,
+                                float* scalar) {
   rows_to_host(count, spatial, scalar, [&](float* d_spatial, float* d_scalar) {
     encode_host_leaves(d, leaves, count, d_spatial, d_scalar);
   });

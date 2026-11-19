@@ -64,8 +64,7 @@ def _position_values(tag_key: tuple[str, str, str], generation: int, position: s
 
 def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dict]:
     """The leaf's value of `move` at `position` under each analyzed
-    generation, ascending; null under one that did not value it (it would
-    empty the bag)."""
+    generation, ascending; null under one that did not value it."""
     return [
         {"generation": g, "value": _position_values(tag_key, g, position).get(move)}
         for g in analyzed_generations(TagPaths(*tag_key))
