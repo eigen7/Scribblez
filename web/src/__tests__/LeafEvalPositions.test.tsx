@@ -67,9 +67,9 @@ describe('LeafEvalPositions', () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens on the newest generation's pick and ranks the moves by the leaf", async () => {
+  it("opens on the newest generation's reference and ranks the moves by the leaf", async () => {
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getByText('On the board: 15D .ROTIC')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('On the board: G11 TORI')).toBeTruthy());
     expect(screen.getByText(/generation 20 \(8,000,000 rows\) · match 0\.545 ± 0\.012/)).toBeTruthy();
     expect(screen.getByText('leaf #53 · 20.2%')).toBeTruthy();
     expect(screen.getByText(/296 moves, best first/)).toBeTruthy();
@@ -87,10 +87,10 @@ describe('LeafEvalPositions', () => {
 
   it('draws a clicked move on the board and charts its leaf eval', async () => {
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getByText('generation 20 · 40.4%')).toBeTruthy());
-    fireEvent.click(screen.getAllByText('G11 TORI')[0]);
-    expect(screen.getByText('On the board: G11 TORI')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('generation 20 · 20.2%')).toBeTruthy());
+    fireEvent.click(screen.getAllByText('15D .ROTIC')[0]);
+    expect(screen.getByText('On the board: 15D .ROTIC')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('generation 20 · 40.4%')).toBeTruthy());
   });
 
   it('says when a move has no value', async () => {
@@ -137,7 +137,7 @@ describe('LeafEvalPositions', () => {
     expect([...row.querySelectorAll('td')].map((td) => td.textContent).slice(5, 7)).toEqual(['30.0%', '#2']);
     expect(screen.getByText(/Truth \(tag t1\)/)).toBeTruthy();
     expect(screen.queryByText(/another leave inference model/)).toBeNull();
-    await waitFor(() => expect(screen.getByText('· truth 30.0%')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('· truth 50.0%')).toBeTruthy());
   });
 
   it("warns when the truth's opponent leaves are not drawn from the analysis's belief", async () => {

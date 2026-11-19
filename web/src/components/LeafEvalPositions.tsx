@@ -190,11 +190,12 @@ interface Source {
 }
 
 function PositionView({ p, pending, source }: { p: Payload; pending: boolean; source: Source }) {
-  // Opens on the pick; kept across generations while the move exists.
+  // Opens on the position's reference answer (the pick when it has none);
+  // kept across generations while the move exists.
   const [selected, setSelected] = useState<string | null>(null);
   const moves = useMemo(() => namedMoves(p), [p]);
   const byMove = useMemo(() => new Map(p.values.map((v) => [v.move, v])), [p]);
-  const shownMove = selected != null && moves.has(selected) ? selected : p.pick.move;
+  const shownMove = selected != null && moves.has(selected) ? selected : (p.reference[0]?.move ?? p.pick.move);
   const preview = moves.get(shownMove) ?? null;
   return (
     <>
