@@ -141,8 +141,25 @@ std::vector<Wld> NoisyRecorder::predict_wld(std::span<const CpuLeaf* const> leav
   return std::vector<Wld>(leaves.size(), Wld{0, 0, 1});
 }
 
-LeafBot::Backend backend(std::shared_ptr<LeafValues> values,
-                         belief::LeaveParamsFn predict = {}) {
+// A leaf that loses where the opponent holds the Q and wins elsewhere, as
+// QHolderLoses, recording each call's size.
+class CallRecorder : public LeafValues {
+ public:
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
+
+  std::vector<size_t> sizes;
+};
+
+std::vector<Wld> CallRecorder::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  sizes.push_back(leaves.size());
+  std::vector<Wld> out;
+  out.reserve(leaves.size());
+  for (const CpuLeaf* leaf : leaves)
+    out.push_back(leaf->leaves[1].count(Tile::from_char('Q')) > 0 ? Wld{0, 0, 1} : Wld{1, 0, 0});
+  return out;
+}
+
+LeafBot::Backend backend(std::shared_ptr<LeafValues> values, belief::LeaveParamsFn predict = {}) {
   return {.values = std::move(values), .predict = std::move(predict), .table = leave_table()};
 }
 
@@ -295,6 +312,29 @@ TEST(LeafBot, AValueIsTheLeafsMeanOverTheLeavesWeighted) {
     bot.values(req, moves, {{Rack::from_string("QU"), 0.25}, {Rack::from_string("EE"), 0.75}});
   ASSERT_EQ(v.size(), 1u);
   EXPECT_DOUBLE_EQ(v[0], 0.75);
+}
+
+// The leaf is asked whole candidates at a time, no more than kLeavesPerCall
+// leaves a call, and each candidate's value is as one call would have it.
+TEST(LeafBot, AsksTheLeafAFewCandidatesAtATime) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEINRST");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
+  const std::vector<Move> moves = equity_top_k(req, 5);
+  ASSERT_EQ(moves.size(), 5u);
+  // Two candidates' leaves fit in a call, a quarter of them holding the Q.
+  const size_t n = LeafBot::kLeavesPerCall / 2 - 1;
+  std::vector<WeightedLeave> opp;
+  for (size_t i = 0; i < n; ++i)
+    opp.push_back({Rack::from_string(i % 4 == 0 ? "QU" : "EE"), 1.0 / double(n)});
+  auto recorder = std::make_shared<CallRecorder>();
+  LeafBot bot(small_params(1), backend(recorder));
+  const std::vector<double> v = bot.values(req, moves, opp);
+  EXPECT_EQ(recorder->sizes, (std::vector<size_t>{2 * n, 2 * n, n}));
+  const double expected = double(n - (n + 3) / 4) / double(n);
+  for (double x : v) EXPECT_NEAR(x, expected, 1e-12);
 }
 
 TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {

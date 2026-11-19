@@ -15,7 +15,8 @@
 // then plays to the game's end, the opponent first. An exchange's tiles are in
 // the pool from the start, as the network sees them. The playout of a call's
 // leaf i is seeded by i + 1, so the values are deterministic and repeats of a
-// leaf are played out apart.
+// leaf within a call (LeafBot asks each candidate's draws in one) are played
+// out apart.
 
 #include "sim/rollout_values.h"
 
