@@ -25,7 +25,6 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import known_positions
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.generational.optimizer_arms import OPTIMIZER_SCHEDULE_FREE, OPTIMIZERS
 from scribblez.generational.scheduler import TICK_FOR_TASK
@@ -33,6 +32,7 @@ from scribblez.match_eval import runner as match_runner
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
+from scribblez.workloads import known_position_inputs
 from scribblez.workloads.base import (
     RoleSpec,
     SlotPlan,
@@ -46,10 +46,8 @@ from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 LEAVE_INFERENCE = "leave_inference"
-# Where a remote match slot finds the pinned leave inference model, and the
-# known positions it analyzes.
+# Where a remote match slot finds the pinned leave inference model.
 LEAVE_INPUT = "inputs/leave_inference.onnx"
-POSITIONS_INPUT_DIR = "inputs/known-positions"
 
 
 @dataclass(frozen=True)
@@ -240,19 +238,7 @@ def leave_model_path(params, mount_root: Path) -> Path:
 def inputs(params, mount_root: Path) -> dict[str, Path]:
     """The match_eval role's out-of-tag inputs: the pinned leave inference
     model and the known positions."""
-    out = {LEAVE_INPUT: leave_model_path(params, mount_root)}
-    for f in known_positions.files():
-        out[f"{POSITIONS_INPUT_DIR}/{f.name}"] = f
-    return out
-
-
-def _known_positions(ctx: WorkerContext) -> list[known_positions.Position]:
-    """The known positions where the slot reads them: in place beside the
-    controller, else from the copies staged under the tag."""
-    staged = [
-        resolve_input(ctx, f"{POSITIONS_INPUT_DIR}/{f.name}", f) for f in known_positions.files()
-    ]
-    return known_positions.load(staged[-1].parent)  # the manifest, last
+    return {LEAVE_INPUT: leave_model_path(params, mount_root), **known_position_inputs.inputs()}
 
 
 def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
@@ -274,7 +260,7 @@ def analyze_positions(ctx: WorkerContext, model: Path, gen: int) -> list[tuple[P
     leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(p, ctx.mount_root))
     work = ctx.tag_paths().work_dir(ctx.worker_id) / "positions"
     doc = leaf_positions.analyze(
-        _known_positions(ctx),
+        known_position_inputs.load(ctx),
         model,
         leave,
         p.match_opp_leaves,

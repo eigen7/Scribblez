@@ -8,6 +8,7 @@
 #include "gpu/rollout_backend.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/lexicon.h"
+#include "sim/monte_carlo_leaf_values.h"
 #include "util/exception.h"
 #include "util/seed_producer.h"
 
@@ -28,7 +29,10 @@ po::options_description leafbot_options(LeafBot::Params& p) {
   desc.add_options()  //
     ("leaf-model", po::value<std::string>(&p.leaf_model),
      "the leaf network (a deep_bot_leaf_eval ONNX export); 'synthetic' for the CPU reference's "
-     "logistic leaf (tests)")  //
+     "logistic leaf (tests); 'monte-carlo' for the network's target computed by playouts, what "
+     "a perfect network would predict")  //
+    ("monte-carlo-games", po::value<int>(&p.monte_carlo_games)->default_value(p.monte_carlo_games),
+     "with --leaf-model=monte-carlo, the playouts per leaf")  //
     ("leaf-precision", po::value<std::string>(&p.leaf_precision)->default_value(p.leaf_precision),
      "TensorRT precision for the leaf network: fp32, fp16 or bf16")  //
     ("leaf-rows", po::value<int>(&p.leaf_rows)->default_value(p.leaf_rows),
@@ -49,20 +53,28 @@ void validate(const LeafBot::Params& p) {
     throw util::CleanException("leafbot: --leave-inference is required");
   if (p.candidates < 1) throw util::CleanException("leafbot: --candidates must be positive");
   if (p.opp_leaves < 1) throw util::CleanException("leafbot: --opp-leaves must be positive");
+  if (p.monte_carlo_games < 1)
+    throw util::CleanException("leafbot: --monte-carlo-games must be positive");
 }
 
-LeafBot::Backend make_backend(const LeafBot::Params& p) {
+// The leaf network the factory serves, or the playouts that stand in for it.
+std::shared_ptr<LeafValues> leaf_values(const LeafBot::Params& p) {
+  if (p.leaf_model == LeafBot::kMonteCarloLeaf)
+    return std::make_shared<MonteCarloLeafValues>(load_dictionary_or_throw(), p.monte_carlo_games);
   RolloutBackend rollouts;
   rollouts.backend = p.leaf_model == RolloutBackend::kSyntheticLeaf ? "cpu" : "gpu";
   rollouts.leaf_model = p.leaf_model;
   rollouts.leaf_precision = p.leaf_precision;
   rollouts.leaf_rows = p.leaf_rows;
   rollouts.validate();
+  return rollouts.shared(load_dictionary_or_throw());
+}
+
+LeafBot::Backend make_backend(const LeafBot::Params& p) {
   belief::AgentLeaveModel leave =
     belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
-  return {.values = rollouts.shared(load_dictionary_or_throw()),
-          .predict = std::move(leave.predict),
-          .table = std::move(leave.table)};
+  return {
+    .values = leaf_values(p), .predict = std::move(leave.predict), .table = std::move(leave.table)};
 }
 
 }  // namespace
