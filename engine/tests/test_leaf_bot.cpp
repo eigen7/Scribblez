@@ -356,8 +356,8 @@ TEST(LeafBot, EqualWeightsKeepEveryDraw) {
 }
 
 // Under a noisy leaf, every draw is valued, repeats included: each call holds
-// the candidates times the draws, or the candidates alone where the
-// opponent's leave is known to be empty.
+// the candidates times the draws, even where the opponent's leave is known to
+// be empty (LeafBot's first turn here), which is played out once per draw.
 TEST(LeafBot, ANoisyLeafValuesEveryDraw) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   auto noisy = std::make_shared<NoisyRecorder>();
@@ -367,7 +367,8 @@ TEST(LeafBot, ANoisyLeafValuesEveryDraw) {
   play(bot);
   ASSERT_FALSE(noisy->sizes.empty());
   EXPECT_TRUE(std::ranges::any_of(noisy->sizes, [](size_t n) { return n >= 64; }));
-  for (size_t n : noisy->sizes) EXPECT_TRUE(n % 64 == 0 || n <= size_t(p.candidates)) << n;
+  EXPECT_EQ(noisy->sizes.front(), size_t(p.candidates) * 64);  // before the opponent's first move
+  for (size_t n : noisy->sizes) EXPECT_EQ(n % 64, 0u) << n;
 }
 
 TEST(LeafBot, TheBestValueIsTheEarliestOnTies) {

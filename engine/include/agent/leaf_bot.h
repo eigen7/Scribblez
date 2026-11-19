@@ -8,8 +8,8 @@
 // (encoding/leaf_eval_input_encoder.h), which is the row the leaf trained on
 // at every post-move turn of its games. The opponent's leave, which the game
 // hides, takes `opp_leaves` values drawn from the leave inference model's
-// belief at stratified quantiles (one draw where the leave is known to be
-// empty), and a candidate's value is its leaf win value's mean over them;
+// belief at stratified quantiles (every draw empty where the leave is known
+// to be empty), and a candidate's value is its leaf win value's mean over them;
 // draws that land on the same leave are valued once, weighted by their
 // count, except under a noisy leaf (the monte-carlo leaf), where each draw
 // gets a playout of its own. It plays the best value, the earlier candidate (the better static
@@ -131,9 +131,12 @@ class LeafBot : public Agent {
   // `moves` and their values over this turn's opponent leaves (values()).
   std::vector<CandidateValue> valued(const MoveRequest& req, const std::vector<Move>& moves,
                                      const belief::LeaveQuery& q) const;
-  // The opponent's leaves this turn's candidates are valued over: the
-  // distinct draws, each weighted by its share of them.
+  // The opponent's leaves this turn's candidates are valued over: every
+  // draw under a noisy leaf (equal_weights), else the distinct draws
+  // (weighted_leaves).
   std::vector<WeightedLeave> opp_leaves(const belief::LeaveQuery& q) const;
+  // This turn's params_.opp_leaves draws of the opponent's leave.
+  std::vector<Rack> opp_draws(const belief::LeaveQuery& q) const;
   // The belief `q` asks for: the model's where it has one, else the unseen
   // tiles' prior over leaves of the query's length.
   std::shared_ptr<const belief::LeaveSampler> belief(const belief::LeaveQuery& q) const;
