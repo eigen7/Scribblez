@@ -59,9 +59,10 @@ class LeafEvalTruthParams:
     # About 12 thread-seconds a move at the default (12 ms a playout, measured
     # 2026-11-19 with monte_carlo_sim_tool over the known positions), so the
     # known positions' 28,835 legal moves cost about 98 thread-hours, 70% of
-    # them THAN's, and their best 600 each about 23.
+    # them THAN's, and their best 600 each about 23. Every move by default, as
+    # the Positions tab's analysis values every move.
     candidates: int = param(
-        600,
+        0,
         "static equity's best N moves of each position that get a truth (0: every legal move). "
         "600 covers every reference move; THAN alone has about 20,000",
     )
