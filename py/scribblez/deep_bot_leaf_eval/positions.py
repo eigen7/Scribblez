@@ -3,7 +3,9 @@ what deep_bot_leaf_eval's Positions tab shows: LeafBot's value of every legal
 move at each position (engine agent/leaf_bot.h, its opponent leaves drawn from
 the matches' leave inference model), the move's points, its rank under that
 value and under static equity, and the pick the matches would make there: the
-best of HastyBot's top `candidates`.
+best of HastyBot's top `candidates`. It values each move over more opponent
+leaves than a match's LeafBot does, so that pick is what the matches' LeafBot
+would play with that many draws, which a match's might not.
 
 The match slot computes it after each match (workloads/deep_bot_leaf_eval.py)
 and delivers it as data/leaf_positions/gen_NNNNNN.json, apart from the match
@@ -81,10 +83,12 @@ def analyze(
     work: Path,
     threads: int,
 ) -> dict:
-    """`model`'s analysis of every position, keyed by position id."""
+    """`model`'s analysis of every position over `opp_leaves` opponent
+    leaves, keyed by position id."""
     records = known_positions.ask(positions, player_spec(model, leave, opp_leaves), work, threads)
     return {
         "candidates": candidates,
+        "opp_leaves": opp_leaves,
         "positions": {
             p.id: entry(p, r, candidates) for p, r in zip(positions, records, strict=True)
         },

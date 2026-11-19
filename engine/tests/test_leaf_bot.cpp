@@ -127,8 +127,39 @@ std::vector<LeafPrediction> QHolderLoses::predict_leaves(std::span<const CpuLeaf
   return out;
 }
 
-LeafBot::Backend backend(std::shared_ptr<RolloutValues> values,
-                         belief::LeaveParamsFn predict = {}) {
+// A noisy leaf that loses everywhere, recording each call's size.
+class NoisyRecorder : public LeafValues {
+ public:
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
+  bool noisy() const override { return true; }
+
+  std::vector<size_t> sizes;
+};
+
+std::vector<Wld> NoisyRecorder::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  sizes.push_back(leaves.size());
+  return std::vector<Wld>(leaves.size(), Wld{0, 0, 1});
+}
+
+// A leaf that loses where the opponent holds the Q and wins elsewhere, as
+// QHolderLoses, recording each call's size.
+class CallRecorder : public LeafValues {
+ public:
+  std::vector<Wld> predict_wld(std::span<const CpuLeaf* const> leaves) override;
+
+  std::vector<size_t> sizes;
+};
+
+std::vector<Wld> CallRecorder::predict_wld(std::span<const CpuLeaf* const> leaves) {
+  sizes.push_back(leaves.size());
+  std::vector<Wld> out;
+  out.reserve(leaves.size());
+  for (const CpuLeaf* leaf : leaves)
+    out.push_back(leaf->leaves[1].count(Tile::from_char('Q')) > 0 ? Wld{0, 0, 1} : Wld{1, 0, 0});
+  return out;
+}
+
+LeafBot::Backend backend(std::shared_ptr<LeafValues> values, belief::LeaveParamsFn predict = {}) {
   return {.values = std::move(values), .predict = std::move(predict), .table = leave_table()};
 }
 
@@ -283,6 +314,29 @@ TEST(LeafBot, AValueIsTheLeafsMeanOverTheLeavesWeighted) {
   EXPECT_DOUBLE_EQ(v[0], 0.75);
 }
 
+// The leaf is asked whole candidates at a time, no more than kLeavesPerCall
+// leaves a call, and each candidate's value is as one call would have it.
+TEST(LeafBot, AsksTheLeafAFewCandidatesAtATime) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  const Board board;
+  const Rack rack = Rack::from_string("AEINRST");
+  const Rack hidden;
+  const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
+  const std::vector<Move> moves = equity_top_k(req, 5);
+  ASSERT_EQ(moves.size(), 5u);
+  // Two candidates' leaves fit in a call, a quarter of them holding the Q.
+  const size_t n = LeafBot::kLeavesPerCall / 2 - 1;
+  std::vector<WeightedLeave> opp;
+  for (size_t i = 0; i < n; ++i)
+    opp.push_back({Rack::from_string(i % 4 == 0 ? "QU" : "EE"), 1.0 / double(n)});
+  auto recorder = std::make_shared<CallRecorder>();
+  LeafBot bot(small_params(1), backend(recorder));
+  const std::vector<double> v = bot.values(req, moves, opp);
+  EXPECT_EQ(recorder->sizes, (std::vector<size_t>{2 * n, 2 * n, n}));
+  const double expected = double(n - (n + 3) / 4) / double(n);
+  for (double x : v) EXPECT_NEAR(x, expected, 1e-12);
+}
+
 TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
   const std::vector<WeightedLeave> w =
     weighted_leaves({Rack::from_string("AB"), Rack::from_string("CD"), Rack::from_string("BA"),
@@ -293,15 +347,38 @@ TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
   EXPECT_DOUBLE_EQ(w[1].weight, 0.25);
 }
 
+TEST(LeafBot, EqualWeightsKeepEveryDraw) {
+  const std::vector<WeightedLeave> w =
+    equal_weights({Rack::from_string("AB"), Rack::from_string("CD"), Rack::from_string("AB")});
+  ASSERT_EQ(w.size(), 3u);
+  EXPECT_EQ(w[2].leave, Rack::from_string("AB"));
+  for (const WeightedLeave& x : w) EXPECT_DOUBLE_EQ(x.weight, 1.0 / 3.0);
+}
+
+// Under a noisy leaf, every draw is valued, repeats included: each call holds
+// the candidates times the draws, or the candidates alone where the
+// opponent's leave is known to be empty.
+TEST(LeafBot, ANoisyLeafValuesEveryDraw) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  auto noisy = std::make_shared<NoisyRecorder>();
+  LeafBot::Params p = small_params(1);
+  p.opp_leaves = 64;  // far more draws than one-tile leaves the pool can hold
+  LeafBot bot(p, backend(noisy));
+  play(bot);
+  ASSERT_FALSE(noisy->sizes.empty());
+  EXPECT_TRUE(std::ranges::any_of(noisy->sizes, [](size_t n) { return n >= 64; }));
+  for (size_t n : noisy->sizes) EXPECT_TRUE(n % 64 == 0 || n <= size_t(p.candidates)) << n;
+}
+
 TEST(LeafBot, TheBestValueIsTheEarliestOnTies) {
   const Move m = Move::pass();
   EXPECT_EQ(best_value({{m, 0.2}, {m, 0.5}, {m, 0.5}, {m, 0.1}}), 1u);
   EXPECT_EQ(best_value({{m, 0.7}}), 0u);
 }
 
-// The monte-carlo leaf (sim/monte_carlo_leaf_values.h) plays each leaf out:
-// its values are probabilities, the same on every call, and follow a lead no
-// game can overturn.
+// The monte-carlo leaf (sim/monte_carlo_leaf_values.h) plays each leaf out
+// once: its values are the same on every call and follow a lead no game can
+// overturn.
 TEST(MonteCarloLeafValues, PlaysEachLeafOutToItsOutcome) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
@@ -313,7 +390,8 @@ TEST(MonteCarloLeafValues, PlaysEachLeafOutToItsOutcome) {
   const CpuLeaf ahead{s.board, {s.leave, Rack{}}, {1000, 0}};
   const CpuLeaf behind{s.board, {s.leave, Rack{}}, {0, 1000}};
   const std::vector<const CpuLeaf*> leaves{&ahead, &behind};
-  MonteCarloLeafValues values(nwl23(), /*games=*/2);
+  MonteCarloLeafValues values(nwl23());
+  EXPECT_TRUE(values.noisy());
   const std::vector<Wld> first = values.predict_wld(leaves);
   EXPECT_EQ(values.predict_wld(leaves), first);
   EXPECT_EQ(first[0], (Wld{1.0f, 0.0f, 0.0f}));

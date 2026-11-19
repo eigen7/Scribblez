@@ -11,7 +11,8 @@
 // belief at stratified quantiles (one draw where the leave is known to be
 // empty), and a candidate's value is its leaf win value's mean over them;
 // draws that land on the same leave are valued once, weighted by their
-// count. It plays the best value, the earlier candidate (the better static
+// count, except under a noisy leaf (the monte-carlo leaf), where each draw
+// gets a playout of its own. It plays the best value, the earlier candidate (the better static
 // equity) on ties, and its decision reports the candidates' values
 // (MoveDecision::values). A candidate that empties the bag is valued like any
 // other, since the leaf trains on every turn the game did not end at. Hidden
@@ -28,8 +29,10 @@
 
 #include <boost/program_options/options_description.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -46,6 +49,9 @@ struct WeightedLeave {
 // by its share of them.
 std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws);
 
+// Every draw of `draws`, repeats included, each weighted equally.
+std::vector<WeightedLeave> equal_weights(const std::vector<Rack>& draws);
+
 class LeafBot : public Agent {
  public:
   static constexpr const char* kType = "leafbot";
@@ -59,9 +65,9 @@ class LeafBot : public Agent {
     std::string name;
     // The leaf network (a deep_bot_leaf_eval ONNX export), "synthetic" for
     // the CPU reference's logistic leaf (tests), or kMonteCarloLeaf for the
-    // leaf's target computed by playouts. Read by the factory.
+    // leaf's target computed by playouts, one per opponent leave drawn. Read
+    // by the factory.
     std::string leaf_model{};
-    int monte_carlo_games = 64;  // kMonteCarloLeaf's playouts per leaf
     std::string leaf_precision = "fp16";
     int leaf_rows = 4096;  // rows per leaf network call, as games' leaves are gathered
     // The leave inference model (ONNX) the opponent's leaves are drawn from.
@@ -106,11 +112,22 @@ class LeafBot : public Agent {
 
   // Each candidate's value: its leaf win value's mean over the opponent's
   // leaves `opp`, weighted, from the side of the player who moves `moves`.
-  // Public for the tests.
+  // The leaf is asked a few candidates at a time (kLeavesPerCall), so memory
+  // stays bounded however many candidates and leaves there are. Public for the
+  // tests.
   std::vector<double> values(const MoveRequest& req, const std::vector<Move>& moves,
                              const std::vector<WeightedLeave>& opp) const;
 
+  // The most leaves one call of the leaf is asked about, but never fewer
+  // than one candidate's: each is a post-move board (~6 KB), and an analysis
+  // over every legal move (THAN's ~20,000) at a hundred leaves would
+  // otherwise hold tens of GB.
+  static constexpr size_t kLeavesPerCall = 16384;
+
  private:
+  // values() of the candidates `moves`, written to `out`.
+  void value_chunk(const MoveRequest& req, std::span<const Move> moves,
+                   const std::vector<WeightedLeave>& opp, std::span<double> out) const;
   // `moves` and their values over this turn's opponent leaves (values()).
   std::vector<CandidateValue> valued(const MoveRequest& req, const std::vector<Move>& moves,
                                      const belief::LeaveQuery& q) const;

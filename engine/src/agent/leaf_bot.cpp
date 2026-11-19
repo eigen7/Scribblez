@@ -7,6 +7,7 @@
 #include "util/math.h"
 
 #include <algorithm>
+#include <span>
 #include <utility>
 
 // The production constructor and the option parsing live in
@@ -25,6 +26,13 @@ std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
     else
       same->weight += share;
   }
+  return out;
+}
+
+std::vector<WeightedLeave> equal_weights(const std::vector<Rack>& draws) {
+  std::vector<WeightedLeave> out;
+  out.reserve(draws.size());
+  for (const Rack& d : draws) out.push_back({d, 1.0 / double(draws.size())});
   return out;
 }
 
@@ -100,7 +108,7 @@ std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) cons
   draws.reserve(size_t(params_.opp_leaves));
   for (int i = 0; i < params_.opp_leaves; ++i)
     draws.push_back(b->leave(b->sample((double(i) + jitter) / double(params_.opp_leaves))));
-  return weighted_leaves(draws);
+  return backend_.values->noisy() ? equal_weights(draws) : weighted_leaves(draws);
 }
 
 std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQuery& q) const {
@@ -114,9 +122,20 @@ std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQ
 
 std::vector<double> LeafBot::values(const MoveRequest& req, const std::vector<Move>& moves,
                                     const std::vector<WeightedLeave>& opp) const {
+  req.board.ensure_movegen_caches(req.dict);
+  std::vector<double> out(moves.size(), 0.0);
+  const size_t per_call = std::max<size_t>(1, kLeavesPerCall / opp.size());
+  for (size_t first = 0; first < moves.size(); first += per_call) {
+    const size_t n = std::min(per_call, moves.size() - first);
+    value_chunk(req, std::span(moves).subspan(first, n), opp, std::span(out).subspan(first, n));
+  }
+  return out;
+}
+
+void LeafBot::value_chunk(const MoveRequest& req, std::span<const Move> moves,
+                          const std::vector<WeightedLeave>& opp, std::span<double> out) const {
   // Each candidate's post-move board is built once (incrementally from the
   // live board's caches) and paired with every opponent leave.
-  req.board.ensure_movegen_caches(req.dict);
   std::vector<CpuLeaf> leaves;
   leaves.reserve(moves.size() * opp.size());
   for (const Move& m : moves) {
@@ -129,10 +148,8 @@ std::vector<double> LeafBot::values(const MoveRequest& req, const std::vector<Mo
   ptrs.reserve(leaves.size());
   for (const CpuLeaf& leaf : leaves) ptrs.push_back(&leaf);
   const std::vector<Wld> wld = backend_.values->predict_wld(ptrs);
-  std::vector<double> out(moves.size(), 0.0);
   for (size_t i = 0; i < wld.size(); ++i)
     out[i / opp.size()] += opp[i % opp.size()].weight * win_value(wld[i]);
-  return out;
 }
 
 }  // namespace scribblez

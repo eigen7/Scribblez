@@ -1,8 +1,11 @@
 """What a perfect leaf network would value each legal move of a known position
 at: LeafBot over its monte-carlo leaf (engine sim/monte_carlo_leaf_values.h),
-which plays each (move, opponent leave) out to the game's end with
-hastybot-endgame, the policy the network's targets come from, over the same
-opponent leaves as the network's analysis (positions.py, ANALYSIS_SEED).
+which plays each move out to the game's end with hastybot-endgame, the
+policy the network's targets come from, once against each of many opponent
+leaves drawn from the leave inference model's belief. It values a move over
+the whole belief, where the network's analysis (positions.py) values it over
+a few draws, so it shows which move is really best; its leaves are drawn as
+the analysis draws them (the same model and ANALYSIS_SEED), only more.
 
 The leaf_eval_truth workload computes it one position at a time into
 data/truth/<gcg stem>.json. py/scripts/deep_bot_leaf_eval/copy_truth.py
@@ -39,18 +42,15 @@ def gcg_hash(position: Position) -> str:
     return hashlib.sha256(position.gcg.read_bytes()).hexdigest()[:16]
 
 
-def run_settings(
-    leave_tag: str, leave_generation: int, opp_leaves: int, games: int, candidates: int
-) -> dict:
+def run_settings(leave_tag: str, leave_generation: int, playouts: int, candidates: int) -> dict:
     """What a truth was computed under, beside the GCG: the leave inference
-    model the opponent's leaves are drawn from, how many, the seed that jitters
-    them, the playouts per (move, leave), and how many of static equity's best
-    moves get one (0: every legal move)."""
+    model the opponent's leaves are drawn from, the playouts per move (one per
+    leave drawn), the seed that jitters the draws, and how many of static
+    equity's best moves get one (0: every legal move)."""
     return {
         "leave_inference": {"tag": leave_tag, "generation": leave_generation},
-        "opp_leaves": opp_leaves,
+        "playouts": playouts,
         "seed": leaf_positions.ANALYSIS_SEED,
-        "games": games,
         "candidates": candidates,
     }
 
@@ -60,12 +60,10 @@ def compute(position: Position, leave: Path, run: dict, work: Path, threads: int
     leave inference model: every legal move's value, the mover's win value
     (a win 1, a draw 1/2) after it, for each move the run covers."""
     spec = leaf_positions.player_spec(
-        MONTE_CARLO_LEAF, leave, run["opp_leaves"], run["candidates"] or leaf_positions.ALL_MOVES
+        MONTE_CARLO_LEAF, leave, run["playouts"], run["candidates"] or leaf_positions.ALL_MOVES
     )
     began = time.monotonic()
-    (record,) = known_positions.ask(
-        [position], f"{spec} --monte-carlo-games={run['games']}", work, threads
-    )
+    (record,) = known_positions.ask([position], spec, work, threads)
     return {
         "id": position.id,
         "gcg_hash": gcg_hash(position),
@@ -112,16 +110,11 @@ def of_position(doc: dict | None, position: Position) -> dict[str, float] | None
     return entry["values"]
 
 
-def same_leaves(run: dict, leaf_params: dict) -> bool:
-    """Whether a truth's opponent leaves are those a deep_bot_leaf_eval tag's
-    analysis draws (its frozen params `leaf_params`): the same leave inference
-    model, count and seed."""
-    return (
-        run["leave_inference"]
-        == {
-            "tag": leaf_params.get("match_leave_inference_tag"),
-            "generation": leaf_params.get("match_leave_inference_generation"),
-        }
-        and run["opp_leaves"] == leaf_params.get("match_opp_leaves")
-        and run["seed"] == leaf_positions.ANALYSIS_SEED
-    )
+def same_belief(run: dict, leaf_params: dict) -> bool:
+    """Whether a truth's opponent leaves are drawn from the belief a
+    deep_bot_leaf_eval tag's analysis draws from (its frozen params
+    `leaf_params`): the same leave inference model."""
+    return run["leave_inference"] == {
+        "tag": leaf_params.get("match_leave_inference_tag"),
+        "generation": leaf_params.get("match_leave_inference_generation"),
+    }
