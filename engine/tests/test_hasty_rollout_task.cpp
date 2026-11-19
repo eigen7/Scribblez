@@ -445,7 +445,7 @@ TEST(HastyRolloutCpu, FatesLabelTheSquaresThePliesFillAndLeaveTheRestOpen) {
       const bool empty = start.at(sq / BOARD_SIZE, sq % BOARD_SIZE).is_empty();
       expected[sq] = {empty ? rollout_abi::kFateOpen : rollout_abi::kFateFilledAtStart, 0};
     }
-    for (int ply = 0; ply < 2; ++ply) {
+    for (int ply = 0; ply < rollout_abi::kRolloutPlies; ++ply) {
       const Move m = unpack_move(results[k].moves[ply]);
       const int mover = ply == 0 ? 1 : 0;
       visit_placed_squares(
@@ -623,8 +623,9 @@ TEST(SimMaps, TheCpuBackendCompletesWhatTheLeavesLeftOpen) {
 namespace {
 
 // A batch of `rollouts` of a play that draws the bag's last tiles without
-// going out: the opponent then moves with the bag empty, so every rollout
-// plays to the end. Has no tasks if no early game reaches such a play.
+// going out: the opponent then moves with the bag empty, and some rollouts
+// end with a player going out. Has no tasks if no early game reaches such a
+// play.
 RolloutBatch bag_emptying_batch(const Dictionary& dict, int rollouts) {
   for (uint64_t seed = 1; seed < 64; ++seed) {
     const Decision d = decision_after(dict, seed, /*plies=*/20);
@@ -639,19 +640,43 @@ RolloutBatch bag_emptying_batch(const Dictionary& dict, int rollouts) {
   return {};
 }
 
+// `batch` with only the tasks whose game ended inside the rollout. A task's
+// outcome depends only on its start and rollout index, so they end again.
+RolloutBatch finished_only(RolloutBatch batch, const Dictionary& dict) {
+  const std::vector<rollout_abi::RolloutResult> results = run_hasty_rollouts_cpu(batch, dict);
+  std::vector<rollout_abi::RolloutTask> finished;
+  for (size_t k = 0; k < results.size(); ++k)
+    if (results[k].game_over) finished.push_back(batch.tasks[k]);
+  batch.tasks = std::move(finished);
+  return batch;
+}
+
 }  // namespace
 
-TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
+// A rollout whose bag empties stops at the leaf after its two plies like any
+// other: it is exact only where a player went out within them.
+TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesStopsAtTheLeaf) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
   const Dictionary& dict = nwl23();
-  const RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/8);
+  const RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/32);
   ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
-  const std::vector<RolloutOutcome> outcomes =
-    CpuRolloutValues(dict, synthetic_leaf()).run(batch).outcomes;
+  const CpuLeafFn leaf = synthetic_leaf();
+  std::vector<CpuLeaf> leaves(batch.tasks.size());
+  std::vector<rollout_abi::RolloutFates> fates;
+  run_hasty_rollouts_cpu(batch, dict, &leaves, &fates);
+  const std::vector<RolloutOutcome> outcomes = CpuRolloutValues(dict, leaf).run(batch).outcomes;
+  int open = 0;
   for (size_t i = 0; i < outcomes.size(); ++i) {
-    EXPECT_EQ(outcomes[i].result.game_over, 1) << "rollout " << i;
-    EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
+    if (outcomes[i].result.game_over) {
+      EXPECT_NE(fates[i].went_out, rollout_abi::kWentOutOpen) << "rollout " << i;
+      EXPECT_EQ(outcomes[i].wld, terminal_wld(outcomes[i].result.diff)) << "rollout " << i;
+      continue;
+    }
+    ++open;
+    EXPECT_EQ(fates[i].went_out, rollout_abi::kWentOutOpen) << "rollout " << i;
+    EXPECT_EQ(outcomes[i].wld, leaf(leaves[i]).wld) << "rollout " << i;
   }
+  EXPECT_GT(open, 0) << "every rollout went out";
 }
 
 // A game that ended inside its rollout leaves nothing open, so the CPU
@@ -659,8 +684,8 @@ TEST(HastyRolloutCpu, ARolloutWhoseBagEmptiesIsPlayedToTheEnd) {
 TEST(SimMaps, FinishedGamesAddNoCompletion) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
   const Dictionary& dict = nwl23();
-  RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/8);
-  ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
+  RolloutBatch batch = finished_only(bag_emptying_batch(dict, /*rollouts=*/32), dict);
+  ASSERT_FALSE(batch.tasks.empty()) << "no rollout went out";
   batch.sum_maps = true;
   std::vector<rollout_abi::RolloutFates> fates;
   run_hasty_rollouts_cpu(batch, dict, nullptr, &fates);
@@ -675,29 +700,22 @@ TEST(SimMaps, FinishedGamesAddNoCompletion) {
 
 // A finished rollout's end of game, against its final racks: whoever went
 // out holds nothing and gains twice the other's rack, signed from player 0's
-// side; in a stalemate each loses its own rack's value.
+// side.
 TEST(HastyRolloutCpu, FatesRecordWhoWentOutAndTheEndPoints) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 kwg / Macondo leaves";
   const Dictionary& dict = nwl23();
-  const RolloutBatch batch = bag_emptying_batch(dict, /*rollouts=*/32);
-  ASSERT_FALSE(batch.tasks.empty()) << "no game reached a play that empties the bag";
+  const RolloutBatch batch = finished_only(bag_emptying_batch(dict, /*rollouts=*/32), dict);
+  ASSERT_FALSE(batch.tasks.empty()) << "no rollout went out";
   std::vector<CpuLeaf> leaves(batch.tasks.size());
   std::vector<rollout_abi::RolloutFates> fates;
   run_hasty_rollouts_cpu(batch, dict, &leaves, &fates);
-  std::array<int, rollout_abi::kWentOutClasses> seen{};
   for (size_t k = 0; k < fates.size(); ++k) {
     const rollout_abi::RolloutFates& f = fates[k];
-    ASSERT_GE(f.went_out, 0) << "rollout " << k;
-    ++seen[size_t(f.went_out)];
-    const int v0 = leaves[k].leaves[0].point_value(), v1 = leaves[k].leaves[1].point_value();
-    if (f.went_out == 2) {
-      EXPECT_EQ(f.end_points, v1 - v0) << "rollout " << k;
-      continue;
-    }
+    ASSERT_TRUE(f.went_out == 0 || f.went_out == 1) << "rollout " << k;
     const int out = f.went_out;
+    const int v0 = leaves[k].leaves[0].point_value(), v1 = leaves[k].leaves[1].point_value();
     EXPECT_TRUE(leaves[k].leaves[size_t(out)].empty()) << "rollout " << k;
     const int bonus = 2 * (out == 0 ? v1 : v0);
     EXPECT_EQ(f.end_points, out == 0 ? bonus : -bonus) << "rollout " << k;
   }
-  EXPECT_GT(seen[1], 0) << "no rollout's opponent went out";
 }

@@ -42,7 +42,7 @@ def pooled(tmp_path_factory) -> Path:
     # One game thread: with two, the games land in the file in the order they
     # finish, and the tools sample and seed each position by its game's index.
     assert (
-        run_games(games, num_games=2, threads=1, player_spec="--type=hastybot-endgame", seed=5) == 0
+        run_games(games, num_games=2, threads=1, player_spec="--type=hastybot-endgame", seed=7) == 0
     )
     cmd = [str(POOL_TOOL), "--slog-dir", str(games), *CPU, "--positions-per-game", "4"]
     run = subprocess.run([*cmd, "--rollouts", "10"], capture_output=True, text=True, check=False)

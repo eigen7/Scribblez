@@ -36,8 +36,7 @@
 // subtree: Bob, holding every unseen tile, has nothing to infer. Under
 // `subtree` and `hasty` the endgame solver makes his reply to it
 // (agent/endgame_reply.h); under `alice-subtree`, whose Bob is HastyBot, it
-// keeps the first pass's value, whose sims play the game to its end by
-// HastyBot.
+// keeps the first pass's value.
 //
 // Where the game asks (MoveRequest::record_pool), a searched turn leaves its
 // record (data/turn_pool.h): the screen's labels as the turn's policy-set

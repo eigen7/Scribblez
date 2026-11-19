@@ -458,17 +458,11 @@ positions. An exchange's tiles go back into the bag after the chooser's
 refill (a start the opponent reached by exchanging returns its tiles after
 the opponent's refill), and a candidate that goes out with the bag empty ends the game at the
 start (exact, no plies). A rollout whose bag is empty after its two plies
-keeps playing hasty moves to the game's end instead of stopping at a leaf:
-the leaf network trains only on turns that began with tiles in the bag, and
-with both racks known and nothing left to draw, the hasty playout is the
-exact value it would only approximate. Two scoreless turns in a row end such
-a game as six would, since the position can no longer change. At seed 6
-after 16 plies, where most rollouts empty the bag, that took the kernel from
-0.50 s to 0.77 s for 65,536 tasks; on positions with a fuller bag nothing
-changes. The leaf network values only the rollouts that did not finish,
-since a finished game's outcome is exact: on one `tilted2` chunk, where a
-quarter of the raced rollouts finish, that took the pool tool from 9.0 to
-10.4 pools/s, with identical pools. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
+stops at a leaf like any other: the leaf network trains on every turn of
+self-play whose endgames were solved, so it values such a leaf as the solved
+endgame would go, where a hasty playout would value it as HastyBot's greedy
+endgame. The leaf network values only the rollouts that did not finish,
+since a finished game's outcome is exact. `GpuRolloutValues` (`gpu/gpu_rollout_values.h`) runs a batch through
 the kernel, the device encoder and the leaf network and returns each task's
 win/draw/loss from the chooser's side (exact when the game ended);
 `CpuRolloutValues` is the same interface over the CPU reference, with a leaf

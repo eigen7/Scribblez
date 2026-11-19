@@ -109,7 +109,7 @@ std::string describe_mismatch(const RolloutBatch& batch, size_t k,
     "  candidate {} rollout {}: opp rack {} our rack {} | diff cpu {} gpu {}\n", task.position,
     task.rollout, racks.opp.to_string(), racks.mine.to_string(), cpu.diff, gpu.diff);
   Board board = batch.starts[task.position].board;
-  for (int ply = 0; ply < 2; ++ply) {
+  for (int ply = 0; ply < rollout_abi::kRolloutPlies; ++ply) {
     const Move mc = unpack_move(cpu.moves[ply]), mg = unpack_move(gpu.moves[ply]);
     out += std::format("    ply {}: cpu [{}] gpu [{}]{}\n", ply, describe_move(mc, board),
                        describe_move(mg, board),

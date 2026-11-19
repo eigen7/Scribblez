@@ -416,7 +416,9 @@ TEST(DeepBot, TheDumpMeasuresAPolicyAgainstBobsReplies) {
 TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const auto dir = scribblez::testing::make_temp_dir("scribblez_test_subtree_dump");
-  DeepBot::Params p = small_params(7);
+  // A seed whose game reaches a candidate that empties the bag and leaves
+  // Bob's sims unsure somewhere.
+  DeepBot::Params p = small_params(2);
   p.subtree_candidates = 0;
   p.subtree_dump = (dir / "dump.jsonl").string();
   DeepBot bot(p, cpu_backend());
@@ -469,8 +471,7 @@ TEST(DeepBot, TheSubtreeDumpWritesALinePerSearchedTurn) {
     EXPECT_EQ(sims.at("after_replies").as_int64() > 0, searched_any) << line;
   }
   EXPECT_GT(lines, 5);
-  EXPECT_GT(emptying, 0);  // this seed's game reaches one
-  // Three samples per rack leave Bob's sims unsure somewhere.
+  EXPECT_GT(emptying, 0);
   EXPECT_GT(with_choice, 0);
   std::filesystem::remove_all(dir);
 }
