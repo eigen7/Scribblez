@@ -29,8 +29,10 @@
 
 #include <boost/program_options/options_description.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -110,11 +112,22 @@ class LeafBot : public Agent {
 
   // Each candidate's value: its leaf win value's mean over the opponent's
   // leaves `opp`, weighted, from the side of the player who moves `moves`.
-  // Public for the tests.
+  // The leaf is asked a few candidates at a time (kLeavesPerCall), so memory
+  // stays bounded however many candidates and leaves there are. Public for the
+  // tests.
   std::vector<double> values(const MoveRequest& req, const std::vector<Move>& moves,
                              const std::vector<WeightedLeave>& opp) const;
 
+  // The most leaves one call of the leaf is asked about, but never fewer
+  // than one candidate's: each is a post-move board (~6 KB), and an analysis
+  // over every legal move (THAN's ~20,000) at a hundred leaves would
+  // otherwise hold tens of GB.
+  static constexpr size_t kLeavesPerCall = 16384;
+
  private:
+  // values() of the candidates `moves`, written to `out`.
+  void value_chunk(const MoveRequest& req, std::span<const Move> moves,
+                   const std::vector<WeightedLeave>& opp, std::span<double> out) const;
   // `moves` and their values over this turn's opponent leaves (values()).
   std::vector<CandidateValue> valued(const MoveRequest& req, const std::vector<Move>& moves,
                                      const belief::LeaveQuery& q) const;
