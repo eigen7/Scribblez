@@ -245,6 +245,9 @@ json::object build_constants() {
                              {"my_leave_value", LeafEval::kMyLeaveValue},
                              {"opp_leave_value", LeafEval::kOppLeaveValue},
                              {"pool_size", LeafEval::kPoolSize},
+                             {"bag_after_refills0", LeafEval::kBagAfterRefills0},
+                             {"bag_buckets", LeafEval::kBagBuckets},
+                             {"scalar_floats", LeafEval::kScalarFloats},
                              {"leave_value_scale", LeafEval::kLeaveValueScale},
                              {"count_scale", LeafEval::kCountScale}};
   // LeaveValueArrays' tile codes (lexicon/leave_value_arrays.h).

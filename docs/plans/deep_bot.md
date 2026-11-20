@@ -224,8 +224,8 @@ on its own player's information.
 **The leaf: a network.** After a sim's fixed moves, a small network turns
 the leaf position into a win probability: the
 [leaf eval model](../deep_bot_leaf_eval_results.md), a conv trunk over the
-board, the cross-checks, both players' leaves, the pool, the spread and the
-pool size.
+board, the cross-checks, both players' leaves, the pool, the spread, the
+pool size and the bag after both refills.
 
 - **Both leaves are known to the leaf,** because the sim holds both racks:
   the mover's own, and the opponent's as sampled from the mover's belief. The

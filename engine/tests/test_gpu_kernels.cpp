@@ -7,6 +7,7 @@
 // cross_check_deltas, entry for entry. Skips without the NWL23 lexicon and
 // HastyBot's leave values.
 
+#include "encoding/leaf_eval_input_encoder.h"
 #include "game/movegen.h"
 #include "gpu/cross_check_deltas_gpu.h"
 #include "gpu/hasty_rollouts_gpu.h"
@@ -21,6 +22,7 @@
 
 #include <format>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -52,6 +54,29 @@ GpuHastyRollouts& gpu() {
 RolloutBatch batch_at(int plies) {
   const DecisionPoint at = self_play_position(nwl23(), kSeed, plies);
   return candidate_batch(at, rollout_candidates(at, nwl23(), kCandidates), kRollouts, kSeed);
+}
+
+// Every position of seed `seed`'s self-play game from ply `first` to its end.
+std::vector<DecisionPoint> positions_to_the_end(uint64_t seed, int first) {
+  std::vector<DecisionPoint> out;
+  for (int plies = first;; ++plies) {
+    try {
+      out.push_back(self_play_position(nwl23(), seed, plies));
+    } catch (const std::runtime_error&) {
+      return out;
+    }
+  }
+}
+
+// The leaf eval row's bag bucket (LeafEvalInputEncoder::kBagAfterRefills0)
+// of row `row` of `rows`, or -1 if it has none.
+int bag_bucket_of(const std::vector<float>& rows, size_t row) {
+  using Encoder = LeafEvalInputEncoder;
+  const float* one_hot =
+    &rows[row * Encoder::kInputFloats + Encoder::kSpatialFloats + Encoder::kBagAfterRefills0];
+  for (int b = 0; b < Encoder::kBagBuckets; ++b)
+    if (one_hot[b] == 1.0f) return b;
+  return -1;
 }
 
 constexpr int kMismatchesShown = 4;
@@ -293,6 +318,35 @@ TEST(GpuRolloutKernel, HostLeafRowsMatchTheCpuEncoder) {
   }
   const RowCheck check = compare_leaf_rows(cpu_leaf_rows(leaves, nwl23()),
                                            host_leaf_rows(gpu(), leaves, nwl23(), /*batch=*/64));
+  EXPECT_EQ(check.rows_identical, check.checked) << check.first_diffs;
+}
+
+// The bag after both refills from deep in the bag to its end, every bucket
+// covered: the post-move boards of late positions' candidates, which play
+// different numbers of tiles, each with known opponent leaves of every length.
+TEST(GpuRolloutKernel, LateLeafRowsCoverEveryBagBucket) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  constexpr int kFirstPly = 14;
+  constexpr int kLateCandidates = 20;
+  std::vector<CpuLeaf> leaves;
+  for (const DecisionPoint& at : positions_to_the_end(kSeed, kFirstPly)) {
+    for (const Move& m : rollout_candidates(at, nwl23(), kLateCandidates)) {
+      const RolloutStart s = make_rollout_start(at.board, at.rack, at.my_score, at.opp_score, m, 0);
+      for (const Rack& opp : known_leaves(s.board.unseen_tiles(s.leave), RACK_SIZE + 1, kSeed))
+        leaves.push_back({s.board, {s.leave, opp}, {s.my_score, s.opp_score}});
+    }
+  }
+  const std::vector<float> cpu = cpu_leaf_rows(leaves, nwl23());
+  std::vector<int> rows_per_bucket(LeafEvalInputEncoder::kBagBuckets, 0);
+  for (size_t i = 0; i < leaves.size(); ++i) {
+    const int bucket = bag_bucket_of(cpu, i);
+    ASSERT_GE(bucket, 0) << "row " << i << " has no bag bucket";
+    ++rows_per_bucket[size_t(bucket)];
+  }
+  for (int b = 0; b < LeafEvalInputEncoder::kBagBuckets; ++b)
+    EXPECT_GT(rows_per_bucket[size_t(b)], 0) << "no row in bag bucket " << b;
+  const RowCheck check =
+    compare_leaf_rows(cpu, host_leaf_rows(gpu(), leaves, nwl23(), /*batch=*/64));
   EXPECT_EQ(check.rows_identical, check.checked) << check.first_diffs;
 }
 

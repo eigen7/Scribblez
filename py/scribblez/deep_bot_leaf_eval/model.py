@@ -10,7 +10,7 @@ The input is the engine's leaf eval row (encoding/leaf_eval_input_encoder.h).
 The scalars reach either trunk as features: each seat's per-tile counts
 normalized by the tile's total, a zero flag per count (so "none left" need not
 be learned as the small end of a line), then the score differential, both
-leave values and the pool size.
+leave values, the pool size and the bag after both refills, one-hot.
 
 `trunk` picks the tower:
 
@@ -18,7 +18,7 @@ leave values and the pool size.
                learned per-cell embedding, which carries position and the
                premium squares), one register per tile kind (its three seats'
                features plus a learned tile embedding), and one global token
-               (the four scalars). Pre-norm layers of LayerNorm, attention
+               (the global scalars). Pre-norm layers of LayerNorm, attention
                without position encoding, and a GELU MLP: under TensorRT at
                this width these run ~1.3x faster than transformer_tower.py's
                RoPE / RMSNorm / SwiGLU blocks, which are bound by memory
@@ -64,8 +64,9 @@ from scribblez.trunk_arms import TRUNK_TRANSFORMER
 LAYOUT = format_layout()["constants"]["deep_bot_leaf_eval"]
 BOARD_CELLS = 15 * 15
 NUM_SEATS = 3  # my leave, the opponent's, the pool
-# The scalars after the seats' counts: score diff, both leave values, pool size.
-GLOBAL_SCALARS = 4
+# The scalars after the seats' counts: score diff, both leave values, pool
+# size, then the bag after both refills, one-hot.
+GLOBAL_SCALARS = LAYOUT["scalar_floats"] - LAYOUT["score_diff"]
 SEAT_FEATURES = 2 * NUM_SEATS * N_TILES  # normalized counts, then zero flags
 SCALAR_FEATURES = SEAT_FEATURES + GLOBAL_SCALARS
 # The transformer's MLP hidden width, as a multiple of its width.
@@ -101,7 +102,7 @@ def scalar_features(input_scalar: torch.Tensor, tile_counts: torch.Tensor) -> to
     seats = seats.unflatten(1, (NUM_SEATS, N_TILES))
     normalized = (seats / tile_counts).flatten(1)
     zero = (seats == 0).to(seats.dtype).flatten(1)
-    global_scalars = input_scalar[:, LAYOUT["score_diff"] : LAYOUT["pool_size"] + 1]
+    global_scalars = input_scalar[:, LAYOUT["score_diff"] : LAYOUT["scalar_floats"]]
     return torch.cat([normalized, zero, global_scalars], dim=1)
 
 

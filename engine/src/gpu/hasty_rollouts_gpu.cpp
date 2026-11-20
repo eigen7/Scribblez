@@ -36,6 +36,8 @@ static_assert(rollout_gpu::kLeafJoinPlane0 == LeafEncoder::kJoinPlane0);
 static_assert(rollout_gpu::kLeafScalars == LeafEncoder::kScalarFloats);
 static_assert(rollout_gpu::kLeafScoreDiff == LeafEncoder::kScoreDiff);
 static_assert(LeafEncoder::kPoolSize == LeafEncoder::kScoreDiff + 3);
+static_assert(rollout_gpu::kLeafBagAfterRefills0 == LeafEncoder::kBagAfterRefills0);
+static_assert(rollout_gpu::kLeafBagBuckets == LeafEncoder::kBagBuckets);
 static_assert(rollout_gpu::kLeafScoreScale == kScoreDiffInputScale);
 static_assert(rollout_gpu::kLeafFaceValueScale == LeafEncoder::kFaceValueScale);
 static_assert(rollout_gpu::kLeafLeaveValueScale == LeafEncoder::kLeaveValueScale);
