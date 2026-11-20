@@ -36,7 +36,7 @@ from scribblez.ffi import LeaveValueArrays
 
 BOARD_SIZE = 15
 SPATIAL_PLANES = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
-SCALAR_SIZE = LAYOUT["pool_size"] + 1
+SCALAR_SIZE = LAYOUT["scalar_floats"]
 SPATIAL_FLOATS = SPATIAL_PLANES * BOARD_SIZE * BOARD_SIZE
 LEAVE_VALUES = "parity-fixture-leave-values"
 # wld (3), score_diff (2), ownership (5 x 225), square_points (2 x 225),
@@ -69,7 +69,12 @@ def random_rows(rng: np.random.Generator, n: int) -> np.ndarray:
     """Rows shaped like the encoder's: 0/1 planes, small non-negative scalars."""
     spatial = (rng.random((n, SPATIAL_FLOATS)) < 0.1).astype(np.float32)
     scalar = rng.integers(0, 4, (n, SCALAR_SIZE)).astype(np.float32)
-    scalar[:, LAYOUT["score_diff"] :] = rng.standard_normal((n, 4), dtype=np.float32)
+    scalar[:, LAYOUT["score_diff"] : LAYOUT["bag_after_refills0"]] = rng.standard_normal(
+        (n, LAYOUT["bag_after_refills0"] - LAYOUT["score_diff"]), dtype=np.float32
+    )
+    bag = np.zeros((n, LAYOUT["bag_buckets"]), dtype=np.float32)
+    bag[np.arange(n), rng.integers(0, LAYOUT["bag_buckets"], n)] = 1.0
+    scalar[:, LAYOUT["bag_after_refills0"] :] = bag
     return np.concatenate([spatial, scalar], axis=1)
 
 

@@ -29,7 +29,7 @@ from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.workloads.deep_bot_leaf_eval import DeepBotLeafEvalParams  # noqa: E402
 
 SPATIAL_PLANES = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
-SCALARS = LAYOUT["pool_size"] + 1
+SCALARS = LAYOUT["scalar_floats"]
 
 
 def _dims(value_info) -> list:

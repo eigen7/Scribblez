@@ -1568,8 +1568,16 @@ __device__ float plane_value(const LeafState& leaf, const LeafSmem& s, int plane
   return join_plane_value(leaf, s, plane - kLeafJoinPlane0, cell);
 }
 
+// LeafEvalInputEncoder::bag_bucket of the leaf's board.
+__device__ int bag_bucket(const LeafSmem& s) {
+  int off_board = 0;
+  for (int t = 0; t < kTileKinds; ++t) off_board += c_tile_distribution[t] - s.board_counts[t];
+  return min(max(off_board - 2 * rollout_abi::kRackSize, 0), kLeafBagBuckets - 1);
+}
+
 // The row's scalars: the three seats' tile counts, then the score
-// differential, both leave values and the pool size.
+// differential, both leave values, the pool size and the bag after both
+// refills, one-hot.
 __device__ void write_leaf_scalars(const LeafState& leaf, const LeafSmem& s, float* sc) {
   if (threadIdx.x < kTileKinds) {
     for (int seat = 0; seat < 3; ++seat) {
@@ -1581,6 +1589,8 @@ __device__ void write_leaf_scalars(const LeafState& leaf, const LeafSmem& s, flo
     sc[kLeafScoreDiff + 1] = leave_value_of_counts(leaf.leaves[0]) / kLeafLeaveValueScale;
     sc[kLeafScoreDiff + 2] = leave_value_of_counts(leaf.leaves[1]) / kLeafLeaveValueScale;
     sc[kLeafScoreDiff + 3] = float(s.pool_size) / kLeafCountScale;
+    const int bucket = bag_bucket(s);
+    for (int b = 0; b < kLeafBagBuckets; ++b) sc[kLeafBagAfterRefills0 + b] = b == bucket ? 1.0f : 0.0f;
   }
 }
 

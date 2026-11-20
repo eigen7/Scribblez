@@ -104,9 +104,15 @@ void encode_scalars(const LeafEvalInput& in, const TileCounts& pool,
   out[Encoder::kMyLeaveValue] = leave_values.lookup(in.my_leave) / Encoder::kLeaveValueScale;
   out[Encoder::kOppLeaveValue] = leave_values.lookup(in.opp_leave) / Encoder::kLeaveValueScale;
   out[Encoder::kPoolSize] = float(pool.size()) / Encoder::kCountScale;
+  const int off_board = pool.size() + in.my_leave.size() + in.opp_leave.size();
+  out[Encoder::kBagAfterRefills0 + Encoder::bag_bucket(off_board)] = 1.0f;
 }
 
 }  // namespace
+
+int LeafEvalInputEncoder::bag_bucket(int off_board) {
+  return std::clamp(off_board - 2 * RACK_SIZE, 0, kBagBuckets - 1);
+}
 
 void LeafEvalInputEncoder::encode(const LeafEvalInput& in, const Dictionary& dict,
                                   const LeaveValues& leave_values, float* out) {

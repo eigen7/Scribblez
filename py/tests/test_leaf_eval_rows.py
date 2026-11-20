@@ -29,7 +29,8 @@ JOIN0 = CROSS_CHECK0 + 2 * LETTERS
 SPATIAL_PLANES = JOIN0 + 12
 MY_LEAVE0, OPP_LEAVE0, POOL0 = 0, 27, 54
 SCORE_DIFF, MY_LEAVE_VALUE, OPP_LEAVE_VALUE, POOL_SIZE = 81, 82, 83, 84
-SCALARS = 85
+BAG0, BAG_BUCKETS = 85, 9  # the bag after both refills: 0 through 7, then 8 or more
+SCALARS = BAG0 + BAG_BUCKETS
 # Square fates (encoding/square_fates.h).
 FILLED, OWN_BINGO, OWN_OTHER, OPP_BINGO, OPP_OTHER, STAYS_EMPTY = -1, 0, 1, 2, 3, 4
 # Going out (training/game_end_targets.h).
@@ -57,7 +58,7 @@ def slogs(tmp_path_factory) -> list[Path]:
 
 @pytest.fixture(scope="module")
 def batch(slogs) -> tuple[np.ndarray, np.ndarray, dict]:
-    """(spatial (B, planes, 15, 15), scalar (B, 85), targets), transposed rows
+    """(spatial (B, planes, 15, 15), scalar (B, 94), targets), transposed rows
     included."""
     ds = SlogDataset(slogs[0].parent, task=_TASK, apply_symmetry=True)
     b = next(ds.iter_batches(batch_size=256, seed=3))
@@ -222,6 +223,8 @@ def test_format_layout_serves_the_offsets_these_tests_assume():
         MY_LEAVE_VALUE,
     )
     assert (layout["opp_leave_value"], layout["pool_size"]) == (OPP_LEAVE_VALUE, POOL_SIZE)
+    assert (layout["bag_after_refills0"], layout["bag_buckets"]) == (BAG0, BAG_BUCKETS)
+    assert layout["scalar_floats"] == SCALARS
 
 
 @pytest.fixture(scope="module")
@@ -246,6 +249,22 @@ def test_the_rows_reach_into_the_endgame(played_games):
     assert (pool > (7 - opp) + (7 - my)).any()
     assert (pool <= (7 - opp) + (7 - my)).any()
     assert (pool == 0).any()
+
+
+def test_the_bag_bucket_is_what_both_refills_leave(played_games):
+    """The bag one-hot marks the pool less what refills both leaves to 7, 0
+    when that exhausts it and 8 for 8 or more, and real games reach both ends.
+    (test_gpu_kernels.cpp covers every bucket.)"""
+    ds = SlogDataset(played_games, task=_TASK, apply_symmetry=False, num_workers=1)
+    scalar = np.concatenate([b["input_scalar"].numpy() for b in ds.iter_batches(256, seed=0)])
+    my = scalar[:, MY_LEAVE0:OPP_LEAVE0].sum(axis=1)
+    opp = scalar[:, OPP_LEAVE0:POOL0].sum(axis=1)
+    pool = scalar[:, POOL0 : POOL0 + TILE_KINDS].sum(axis=1)
+    expected = np.clip(pool - (7 - my) - (7 - opp), 0, BAG_BUCKETS - 1).astype(int)
+    one_hot = scalar[:, BAG0 : BAG0 + BAG_BUCKETS]
+    np.testing.assert_array_equal(one_hot.sum(axis=1), 1.0)
+    np.testing.assert_array_equal(one_hot.argmax(axis=1), expected)
+    assert {0, BAG_BUCKETS - 1} <= set(expected)
 
 
 def test_each_game_drops_only_its_last_turn(played_games):

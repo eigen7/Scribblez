@@ -20,7 +20,7 @@
 //     my leave's per-tile counts (27), the opponent's (27), the pool's (27),
 //     unscaled; the score differential / kScoreDiffInputScale (1); my and the
 //     opponent's static leave values / kLeaveValueScale (2); the pool size /
-//     kCountScale (1)
+//     kCountScale (1); the bag after both refills, one-hot (kBagBuckets)
 //
 // The join planes exist because a conv trunk joins a square's cross-check
 // letters with who holds those letters poorly: it needs one gate per letter
@@ -29,6 +29,16 @@
 // cross-check constrains a play. A leave's fit is 1 if any of its tiles fits;
 // the pool's is the fraction of its tiles that fit, the chance a draw fits. A
 // blank fits any square that allows some letter, at face value 0.
+//
+// The bag after both refills holds the tiles on neither the board nor two
+// full racks: the pool less what refills both leaves, and the bag the opponent
+// moves with, since their own draw is in the pool. Its buckets are 0 (the
+// refills exhaust it) through 7, each exact, then 8 or more: a play of up to 7
+// tiles empties a bag of 7 or fewer, and whether the opponent's next move can
+// empty it, so that a bingo ends the game, turns on this count. The row's
+// counts imply it, but a trained trunk placed that step a tile late when the
+// opponent threatened a bingo, valuing a play that leaves one tile in the bag
+// like one that empties it, so the row states it outright.
 
 #include "encoding/board_planes.h"
 #include "encoding/input_encoder.h"
@@ -42,7 +52,7 @@ class LeaveValues;
 
 // The format version of the leaf eval model's input. Bump it whenever a row's
 // layout or meaning changes; checkpoints and models stamp it.
-inline constexpr int kLeafEvalFormatVersion = 1;
+inline constexpr int kLeafEvalFormatVersion = 2;
 
 // Everything the encoder reads, from the side of the player who just moved.
 struct LeafEvalInput {
@@ -67,7 +77,9 @@ struct LeafEvalInputEncoder {
   static constexpr int kMyLeaveValue = kScoreDiff + 1;
   static constexpr int kOppLeaveValue = kMyLeaveValue + 1;
   static constexpr int kPoolSize = kOppLeaveValue + 1;
-  static constexpr int kScalarFloats = kPoolSize + 1;  // 85
+  static constexpr int kBagAfterRefills0 = kPoolSize + 1;
+  static constexpr int kBagBuckets = 9;  // 0 through 7, then 8 or more
+  static constexpr int kScalarFloats = kBagAfterRefills0 + kBagBuckets;  // 94
 
   static constexpr int kSpatialFloats = kSpatialPlanes * kBoardCells;
   static constexpr int kInputFloats = kSpatialFloats + kScalarFloats;
@@ -75,6 +87,9 @@ struct LeafEvalInputEncoder {
   static constexpr float kFaceValueScale = 10.0f;
   static constexpr float kLeaveValueScale = 25.0f;
   static constexpr float kCountScale = 100.0f;
+
+  // The bag bucket of a board with `off_board` tiles not on it.
+  static int bag_bucket(int off_board);
 
   // Writes kInputFloats into `out`. Builds the board's
   // move-generation caches from `dict` if needed.

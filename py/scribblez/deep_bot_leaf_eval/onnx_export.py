@@ -2,7 +2,7 @@
 (engine/include/nn/model_specs.h, LeafEvalSpec).
 
 The graph takes a row (`input_spatial`, (batch, 95, 15, 15), and
-`input_scalar`, (batch, 85)) and emits every head, in OUTPUTS order: `wld`
+`input_scalar`, (batch, 94)) and emits every head, in OUTPUTS order: `wld`
 logits (batch, 3), `score_diff` (batch, 2: mean, std), `ownership` logits
 (batch, 5, 15, 15), `square_points` (batch, 2, 15, 15: mean, variance),
 `going_out` logits (batch, 3) and `end_points` (batch, 2: mean, variance).
@@ -65,7 +65,7 @@ def export_onnx(
     device = next(model.parameters()).device
     spatial_planes = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
     dummy_spatial = torch.zeros(1, spatial_planes, board_size, board_size, device=device)
-    dummy_scalar = torch.zeros(1, LAYOUT["pool_size"] + 1, device=device)
+    dummy_scalar = torch.zeros(1, LAYOUT["scalar_floats"], device=device)
     names = ("input_spatial", "input_scalar", *OUTPUTS)
     export_graph(
         _ExportGraph(model),

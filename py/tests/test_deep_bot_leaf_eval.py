@@ -21,6 +21,7 @@ from scribblez.dataset import SlogDataset  # noqa: E402
 from scribblez.deep_bot_leaf_eval import evaluation, trainer, unit  # noqa: E402
 from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
     FILLED,
+    GLOBAL_SCALARS,
     LAYOUT,
     POINTS_SCALE,
     SCALAR_FEATURES,
@@ -91,7 +92,7 @@ def test_scalar_features_normalize_counts_and_flag_zeros(batches):
     torch.testing.assert_close(normalized_pool * torch.tensor(TILE_COUNTS).float(), pool)
     zero_pool = features[:, 5 * 27 : 6 * 27]
     torch.testing.assert_close(zero_pool, (pool == 0).float())
-    torch.testing.assert_close(features[:, -4:], scalar[:, LAYOUT["score_diff"] :])
+    torch.testing.assert_close(features[:, -GLOBAL_SCALARS:], scalar[:, LAYOUT["score_diff"] :])
 
 
 def _game_metadata(path: Path) -> np.ndarray:
