@@ -152,7 +152,8 @@ has landed.
   teacher's measured bias toward the point-of-view player, its diagnosis, and
   the phased fix plan.
 - **[plans/fp16_safe_serving.md](plans/fp16_safe_serving.md)**: the FP16
-  activation-overflow incident and its resolution, serving in BF16.
+  activation-overflow incidents and their resolution: the value models serve
+  BF16; the FP16-served leaf network holds its activations down in training.
 - **[plans/lexical_features_for_value.md](plans/lexical_features_for_value.md)**:
   giving the value models lexical foresight through engineered, GADDAG-computed
   input features instead of network-internal lexical knowledge.

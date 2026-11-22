@@ -112,7 +112,12 @@ def main() -> int:
         "per game) before the agents take over. Positions before the last random ply "
         "are excluded from the training-eligible region.",
     )
-    parser.add_argument("--precision", default="FP16", help="Neural agent TensorRT precision.")
+    parser.add_argument(
+        "--precision",
+        default="BF16",
+        help="Neural agent TensorRT precision. FP16 overflows a trained value model "
+        "(docs/plans/fp16_safe_serving.md).",
+    )
     add_mount_root_argument(parser)
     args = parser.parse_args()
 
