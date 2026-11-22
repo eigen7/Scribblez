@@ -121,9 +121,11 @@ std::vector<Rack> LeafBot::opp_draws(const belief::LeaveQuery& q) const {
   // leave is empty, as the leaf's training rows have it. It is still drawn
   // opp_leaves times: a noisy leaf plays each draw out apart.
   if (ply_ == 0 || q.length == 0) return std::vector<Rack>(size_t(params_.opp_leaves));
-  // After a pass the leave is the whole rack, longer than any leave the table
-  // holds. The rack's tiles drawn at random from the pool have the chance the
-  // table's prior would give it.
+  // The opponent passed. The leave table holds no 7-tile leaves, so the racks
+  // are generated here by other means. As a hack, each is drawn at random from
+  // the unseen tiles, as if the opponent had just drawn the whole rack. That
+  // ignores what the pass says about the rack and is certainly wrong, but a
+  // pass is rare enough in Scrabble that we accept it for now.
   if (q.length > kLeaveArraysMaxLength)
     return random_racks(q.leave_pool, q.length, params_.opp_leaves, turn_seed());
   const std::shared_ptr<const belief::LeaveSampler> b = belief(q);
