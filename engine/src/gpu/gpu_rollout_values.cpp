@@ -30,6 +30,18 @@ const float* device_rows(const nn::NeuralNetBase& net, const char* name) {
   return static_cast<const float*>(net.device_ptr(name));
 }
 
+// The WLD of one row's logits. A leaf whose activations outgrow the precision
+// it is served in returns inf or NaN logits, which would otherwise reach a
+// pick or a training label as a NaN, or as a finite but wrong probability
+// from an overflow to -inf, so they are a hard error.
+Wld checked_wld(const float* logits) {
+  if (!std::isfinite(logits[0]) || !std::isfinite(logits[1]) || !std::isfinite(logits[2]))
+    throw util::Exception(
+      "the leaf network gave a non-finite value; its activations outgrew the precision "
+      "it is served in (--leaf-precision)");
+  return wld_from_logits(logits);
+}
+
 double seconds_since(Clock::time_point t0) {
   return std::chrono::duration<double>(Clock::now() - t0).count();
 }
@@ -88,14 +100,14 @@ std::vector<Wld> GpuRolloutValues::predict_wld(std::span<const CpuLeaf* const> l
   std::vector<Wld> out(leaves.size());
   predict_in_chunks(leaves, nn::WldOutput::kName, [&](int first, int count) {
     const float* logits = net_.host<nn::WldOutput>();
-    for (int i = 0; i < count; ++i) out[size_t(first + i)] = wld_from_logits(logits + 3 * i);
+    for (int i = 0; i < count; ++i) out[size_t(first + i)] = checked_wld(logits + 3 * i);
   });
   return out;
 }
 
 LeafPrediction GpuRolloutValues::host_prediction(int row) {
   LeafPrediction p;
-  p.wld = wld_from_logits(net_.host<nn::WldOutput>() + 3 * row);
+  p.wld = checked_wld(net_.host<nn::WldOutput>() + 3 * row);
   const auto copy = [row](const float* rows, auto& dst) {
     std::copy_n(rows + size_t(row) * dst.size(), dst.size(), dst.begin());
   };
@@ -151,12 +163,7 @@ void GpuRolloutValues::evaluate_leaves(const uint32_t* tasks, int count,
                           static_cast<float*>(net_.device_ptr(nn::ScalarInput::kName)));
   net_.predict_device_inputs(count);
   const float* logits = net_.host<nn::WldOutput>();
-  for (int i = 0; i < count; ++i) {
-    RolloutOutcome& o = (*outcomes)[tasks[i]];
-    o.wld = wld_from_logits(logits + 3 * i);
-    if (!std::isfinite(o.wld[0]) || !std::isfinite(o.wld[2]))
-      throw util::Exception("the leaf network gave a non-finite value (precision too narrow?)");
-  }
+  for (int i = 0; i < count; ++i) (*outcomes)[tasks[i]].wld = checked_wld(logits + 3 * i);
 }
 
 }  // namespace scribblez
