@@ -1,6 +1,7 @@
 #include "agent/leaf_bot.h"
 
 #include "agent/hasty_bot.h"
+#include "game/bag.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/sim_runner.h"
 #include "util/exception.h"
@@ -14,6 +15,21 @@
 // leaf_bot_factory.cpp.
 
 namespace scribblez {
+
+namespace {
+
+// `count` racks of `length` tiles, each drawn from `pool` at random.
+std::vector<Rack> random_racks(const TileCounts& pool, int length, int count, uint64_t seed) {
+  Bag bag(seed, pool);
+  std::vector<Rack> racks(static_cast<size_t>(count));
+  for (Rack& rack : racks) {
+    for (int i = 0; i < length; ++i) rack.add(bag.draw());
+    for (int i = 0; i < rack.size(); ++i) bag.put_back(rack.tiles()[size_t(i)]);
+  }
+  return racks;
+}
+
+}  // namespace
 
 std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
   std::vector<WeightedLeave> out;
@@ -105,6 +121,11 @@ std::vector<Rack> LeafBot::opp_draws(const belief::LeaveQuery& q) const {
   // leave is empty, as the leaf's training rows have it. It is still drawn
   // opp_leaves times: a noisy leaf plays each draw out apart.
   if (ply_ == 0 || q.length == 0) return std::vector<Rack>(size_t(params_.opp_leaves));
+  // After a pass the leave is the whole rack, longer than any leave the table
+  // holds. The rack's tiles drawn at random from the pool have the chance the
+  // table's prior would give it.
+  if (q.length > kLeaveArraysMaxLength)
+    return random_racks(q.leave_pool, q.length, params_.opp_leaves, turn_seed());
   const std::shared_ptr<const belief::LeaveSampler> b = belief(q);
   // Stratified quantiles, jittered by the turn: each draw stands for an equal
   // share of the belief's mass, so the mean has far less spread than over

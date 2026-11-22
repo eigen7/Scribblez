@@ -2,10 +2,10 @@
 // GPU): it plays whole games, deterministically for a seed; plays the
 // candidate the leaf values best, whatever its static equity; values each at
 // the position after it, over opponent leaves of the length the opponent
-// kept, empty before the opponent's first move; asks the leave inference
-// model at each modelled turn; and values a candidate that empties the bag
-// like any other. Skips without the NWL23 lexicon and HastyBot's leave
-// values.
+// kept, empty before the opponent's first move and a whole rack after a
+// pass; asks the leave inference model at each modelled turn; and values a
+// candidate that empties the bag like any other. Skips without the NWL23
+// lexicon and HastyBot's leave values.
 
 #include "agent/hasty_bot.h"
 #include "agent/leaf_bot.h"
@@ -159,6 +159,13 @@ std::vector<Wld> CallRecorder::predict_wld(std::span<const CpuLeaf* const> leave
   return out;
 }
 
+// An opponent that passes every turn, keeping its whole rack.
+class PassingBot : public Agent {
+ public:
+  PassingBot() : Agent(0, "PassingBot") {}
+  MoveDecision make_move(const MoveRequest&) override { return MoveDecision{Move::pass()}; }
+};
+
 LeafBot::Backend backend(std::shared_ptr<LeafValues> values, belief::LeaveParamsFn predict = {}) {
   return {.values = std::move(values), .predict = std::move(predict), .table = leave_table()};
 }
@@ -246,6 +253,21 @@ TEST(LeafBot, DrawsTheOpponentsLeavesAtTheLengthItKept) {
   ASSERT_FALSE(second->seen.empty());
   // HastyBot's opening move kept RACK_SIZE minus the tiles it played.
   EXPECT_EQ(second->seen.front().leaves[1].size(), RACK_SIZE - replies.front().num_glyphs());
+}
+
+// A pass keeps the whole rack, a leave longer than the leave table holds:
+// the opponent's leaves are then racks of the tiles LeafBot cannot see.
+TEST(LeafBot, DrawsAWholeRackAfterTheOpponentPasses) {
+  if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
+  auto values = std::make_shared<RecordingValues>();
+  LeafBot bot(small_params(1), backend(values));
+  PassingBot passer;
+  Game g(bot, passer, nwl23(), /*seed=*/1);
+  g.play();
+  const auto after_pass = std::ranges::find_if(
+    values->seen, [](const CpuLeaf& leaf) { return leaf.leaves[1].size() > 0; });
+  ASSERT_NE(after_pass, values->seen.end());
+  EXPECT_EQ(after_pass->leaves[1].size(), RACK_SIZE);
 }
 
 TEST(LeafBot, AsksTheModelForTheOpponentsLeaveAtEachModelledTurn) {
