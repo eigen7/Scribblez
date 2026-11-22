@@ -117,6 +117,7 @@ def _record(state, gen, result, elapsed, optim_arm) -> dict:
         "loss_end_points": losses["end_points"],
         "loss_end_points_mean": losses["end_points_mean"],
         "loss_end_points_var": losses["end_points_var"],
+        "loss_norm_input": losses["norm_input"],
         "wld_acc": result.wld_acc,
         "lr": optim_arm.current,
         **result.grad_norm,

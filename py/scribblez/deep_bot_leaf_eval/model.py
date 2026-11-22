@@ -40,6 +40,10 @@ logits over who goes out (the mover, the opponent, nobody), and end_points
 mover's side (engine training/game_end_targets.h). docs/plans/deep_bot.md
 ("The search network") gives their purpose: sims complete their maps and
 end-of-game outcomes with them, and residuals against them are evidence.
+
+In training mode the model also outputs norm_input, the mean square of its
+normalization layers' inputs (norm_inputs.py), which the loss holds down so
+the engine can serve the leaf in FP16.
 """
 
 from dataclasses import dataclass
@@ -49,6 +53,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from scribblez.ffi import format_layout
+from scribblez.norm_inputs import NormInputSquares
 from scribblez.position_eval.model import (
     Head,
     HeadedModel,
@@ -79,6 +84,8 @@ POINTS_SCALE = 100.0
 GOING_OUT_CLASSES = 3
 # A game cut short has no end to predict: its going-out label.
 UNLABELLED = -1
+# The training-mode output, and loss key, of the norm-input penalty.
+NORM_INPUT = "norm_input"
 
 
 @dataclass(frozen=True)
@@ -202,6 +209,7 @@ class LeafLossConfig(LossConfig):
     lambda_points: float
     lambda_going_out: float
     lambda_end_points: float
+    lambda_norm_input: float
 
 
 def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -352,10 +360,32 @@ class LeafEvalModel(HeadedModel):
             EndPointsHead(value_in),
         )
         self.heads = nn.ModuleDict({h.name: h for h in heads})
+        self.norm_inputs = NormInputSquares(self)
 
     def forward(
         self, input_spatial: torch.Tensor, input_scalar: torch.Tensor
     ) -> dict[str, torch.Tensor]:
+        if self.training:
+            self.norm_inputs.start()
         spatial = input_spatial[:, : self.shape.spatial_planes_used()]
         x, value_in = self.trunk(spatial, scalar_features(input_scalar, self.tile_counts))
-        return {name: head(x, value_in) for name, head in self.heads.items()}
+        out = {name: head(x, value_in) for name, head in self.heads.items()}
+        if self.training:
+            out[NORM_INPUT] = self.norm_inputs.take()
+        return out
+
+    def loss_keys(self) -> tuple[str, ...]:
+        return (*super().loss_keys(), NORM_INPUT)
+
+    def compute_loss(
+        self,
+        outputs: dict[str, torch.Tensor],
+        targets: dict[str, torch.Tensor],
+        cfg: LeafLossConfig,
+    ) -> dict[str, torch.Tensor]:
+        """The heads' losses plus the norm-input penalty, of a training-mode
+        forward's outputs."""
+        losses = super().compute_loss(outputs, targets, cfg)
+        losses["total"] = losses["total"] + cfg.lambda_norm_input * outputs[NORM_INPUT]
+        losses[NORM_INPUT] = outputs[NORM_INPUT]
+        return losses

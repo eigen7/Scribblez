@@ -108,6 +108,11 @@ class DeepBotLeafEvalParams:
     lambda_end_points: float = param(
         1.0, "end-of-game points loss weight (mean and variance, in units of 100 points)"
     )
+    lambda_norm_input: float = param(
+        1e-6,
+        "weight of the mean square of the normalization layers' inputs, whose scale the task "
+        "losses cannot see and which otherwise grows past FP16's range (scribblez/norm_inputs.py)",
+    )
     # Model (deep_bot_leaf_eval/model.py).
     trunk: str = param(
         TRUNK_TRANSFORMER,

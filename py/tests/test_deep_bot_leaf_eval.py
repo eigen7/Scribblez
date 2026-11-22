@@ -23,6 +23,7 @@ from scribblez.deep_bot_leaf_eval.model import (  # noqa: E402
     FILLED,
     GLOBAL_SCALARS,
     LAYOUT,
+    NORM_INPUT,
     POINTS_SCALE,
     SCALAR_FEATURES,
     UNLABELLED,
@@ -156,6 +157,28 @@ def test_epoch_and_eval(batches, corpus, tmp_path, trunk):
     # The tables do not train: their read is the same before and after.
     for key in ("eval_wintable_logloss", "eval_wintable_macondo_logloss"):
         assert after[key] == before[key] and 0 < after[key] < 1
+
+
+@pytest.mark.parametrize("trunk", TRUNKS)
+def test_training_forwards_report_the_norm_input_penalty(batches, trunk):
+    """A training forward adds norm_input, which the loss weights into its
+    total; an eval forward (what the ONNX export traces) has only the heads."""
+    torch.manual_seed(0)
+    model = LeafEvalModel(_shape(trunk))
+    batch = batches[0]
+    inputs = (batch["input_spatial"], batch["input_scalar"])
+    targets = {k: batch[k] for k in model.target_keys()}
+    out = model(*inputs)
+    assert out[NORM_INPUT] > 0
+    cfg = unit.loss_config(deep_bot_leaf_eval.DeepBotLeafEvalParams())
+    heads_only = dataclasses.replace(cfg, lambda_norm_input=0.0)
+    losses = model.compute_loss(out, targets, cfg)
+    unpenalized = model.compute_loss(out, targets, heads_only)
+    assert losses[NORM_INPUT] == out[NORM_INPUT] and NORM_INPUT in model.loss_keys()
+    torch.testing.assert_close(
+        losses["total"], unpenalized["total"] + cfg.lambda_norm_input * out[NORM_INPUT]
+    )
+    assert set(model.eval()(*inputs)) == set(model.heads)
 
 
 def test_square_points_loss_reads_only_empty_squares():

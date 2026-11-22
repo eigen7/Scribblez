@@ -63,6 +63,7 @@ def loss_config(params) -> LeafLossConfig:
         lambda_points=params.lambda_points,
         lambda_going_out=params.lambda_going_out,
         lambda_end_points=params.lambda_end_points,
+        lambda_norm_input=params.lambda_norm_input,
     )
 
 
@@ -75,6 +76,7 @@ def loss_weights(params) -> dict[str, float]:
         "loss_square_points": params.lambda_points,
         "loss_going_out": params.lambda_going_out,
         "loss_end_points": params.lambda_end_points,
+        "loss_norm_input": params.lambda_norm_input,
     }
 
 
