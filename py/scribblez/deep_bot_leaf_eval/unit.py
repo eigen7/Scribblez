@@ -14,6 +14,7 @@ from pathlib import Path
 
 import torch
 
+from scribblez.activation_peak import ActivationPeak
 from scribblez.dataset import SlogDataset
 from scribblez.deep_bot_leaf_eval.evaluation import evaluate
 from scribblez.deep_bot_leaf_eval.model import (
@@ -151,10 +152,15 @@ class LeafEvalUnit:
     def evaluate(self, root, cpu, fitted_table: Path | None = None) -> dict[str, float]:
         """The metrics on the games under `root`, a directory or several: the
         model's, `fitted_table`'s (a win table) when there is one, and
-        Macondo's table's."""
+        Macondo's table's; and activation_peak, the largest activation the
+        model reaches on them, against FP16's 65504 (activation_peak.py)."""
         ds = SlogDataset(root, task=TASK, apply_symmetry=False, num_workers=cpu.dataloader_workers)
         batches = ds.iter_batches(EVAL_BATCH, seed=0)
-        return evaluate(self.model, batches, self.device, fitted_table, win_table.MACONDO_WIN_TABLE)
+        with ActivationPeak(self.model) as peak:
+            metrics = evaluate(
+                self.model, batches, self.device, fitted_table, win_table.MACONDO_WIN_TABLE
+            )
+        return {**metrics, "activation_peak": peak.value()}
 
     def export(self, path: Path, provenance: dict):
         """Export the model to `path` for the engine (GPU rollouts' leaf)."""
