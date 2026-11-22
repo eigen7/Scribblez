@@ -9,7 +9,8 @@
 // at every post-move turn of its games. The opponent's leave, which the game
 // hides, takes `opp_leaves` values drawn from the leave inference model's
 // belief at stratified quantiles (every draw empty where the leave is known
-// to be empty), and a candidate's value is its leaf win value's mean over them;
+// to be empty, and a random rack of the unseen tiles after a pass, which kept
+// the whole rack), and a candidate's value is its leaf win value's mean over them;
 // draws that land on the same leave are valued once, weighted by their
 // count, except under a noisy leaf (the monte-carlo leaf), where each draw
 // gets a playout of its own. It plays the best value, the earlier candidate (the better static
