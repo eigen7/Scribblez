@@ -1,6 +1,8 @@
 # FP16 activation overflow: serve BF16
 
 **Status: landed.** The engine serves the value models in BF16 by default.
+The leaf network is the exception: it stays in FP16 for speed, with a
+training-side restoring force ([The leaf network](#the-leaf-network)).
 
 **Problem.** The position and move-set value models' activations grow past
 FP16's range as training runs on, and a model served in FP16 then returns NaN.
@@ -106,3 +108,57 @@ reference, which keeps the served path honest.
   probe builders, the per-export `fp16_probe_peak` metric); and the
   activation-magnitude loss terms (`PoolFcPenalty` / `lambda_pool_act` and
   `wld_z_loss` / `lambda_wld_z`) in all three trainer families.
+
+## The leaf network
+
+DeepBot's and LeafBot's leaf network (`deep_bot_leaf_eval`) is evaluated once
+per rollout, so its throughput is the search's leaf budget, and it is served
+in FP16 (`--leaf-precision`). BF16 is not an option there: on the transformer
+leaf, LeafBot's analysis of the known positions ran 15 to 18 times slower in
+BF16 than in FP16, about as slow as FP32.
+
+**The incident.** `deep_bot_leaf_eval/v7` (transformer trunk, width 64,
+depth 4) returned NaN at generation 1410 for a bag-emptying bingo at one of
+the known positions; FP32 on the same position was sane. Nothing caught it in
+the engine: LeafBot's `predict_wld` path had no finiteness check, a NaN on the
+first candidate won the pick, and the NaN reached the analysis JSON as `null`.
+
+**The measurement.** The same probe as above, over 16k held-out rows. One
+tensor grows without bound: the residual stream after the last layer (its MLP
+output added in, `layers.3/down` into `Add_2`), whose only consumer is the
+trunk's final LayerNorm. Everything else stays near 5k.
+
+| generation | 100 | 400 | 700 | 1000 | 1200 | 1400 | 1700 | 1990 |
+|------------|----:|----:|----:|-----:|-----:|-----:|-----:|-----:|
+| peak       | 335 | 2.0k | 5.3k | 26k | 45k | **69k** | 97k | 152k |
+
+This is the same mechanism as the incident above. A normalization layer
+discards its input's scale, so no task loss opposes the growth of a tensor
+that feeds one: the face-up teacher's `pool_fc` branch fed `bn2`, and v7's
+residual stream feeds the final LayerNorm.
+
+**The fix.**
+- **A restoring force on exactly the scale the loss cannot see.** The leaf
+  model adds `lambda_norm_input` (default 1e-6) times the mean square of every
+  normalization layer's input to its loss (`scribblez/norm_inputs.py`). The
+  task losses are indifferent to those scales, so the penalty holds them down
+  without trading against the fit while they stay small. It covers both
+  trunks: the transformer's residual stream and the conv tower's pre-BatchNorm
+  activations. On v7's exports the term would have been about 7e-4 at
+  generation 100 (under 0.1% of a total loss near 0.87) and about 1.1 at
+  generation 1000 (peak 26k).
+
+  Shrinking a scale that has already run away is not free. From v7's
+  generation-1993 checkpoint, where the penalty began at about 15 times the
+  whole loss, 1500 batches of AdamW (lr 1e-4) took the peak from 152k to 42k,
+  and held-out WLD NLL rose from 0.4647 to 0.5038, against 0.4675 for the same
+  batches without the penalty. A fresh run's penalty starts near 7e-4, so its
+  cost is what that run's series shows.
+- **The peak as a series.** Each generation's evaluation records
+  `activation_peak`, the largest input or output of any module on the
+  held-out rows in FP32 (`scribblez/activation_peak.py`); deep_bot records it
+  as `leaf_activation_peak`. It should plateau far below 65504.
+- **A hard error on a non-finite leaf.** Every read of the leaf's WLD in the
+  GPU leaf service (`GpuRolloutValues`) refuses a non-finite logit, so an
+  overflow fails the first game that meets it rather than leaking into picks
+  and labels.
