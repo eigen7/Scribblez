@@ -5,7 +5,11 @@ the leaf, and the tab lists the best and every
 named move of a generation's analysis beside that generation's match."""
 
 import json
+import tempfile
+from pathlib import Path
 
+import tornado.testing
+from scribblez.dashboard import api as dashboard_api
 from scribblez.dashboard import db
 from scribblez.dashboard import deep_bot_leaf_eval_api as api
 from scribblez.deep_bot import known_positions
@@ -113,6 +117,31 @@ def test_the_table_lists_the_best_and_every_named_move(tmp_path, monkeypatch):
     assert (p["pick"]["move"], p["pick"]["reading"]) == ("15D .ROTIC", "equity")
     assert p["match"] is None
     json.dumps(p)  # the handler writes it as JSON
+
+
+class PositionAddedAfterTheAnalysisTest(tornado.testing.AsyncHTTPTestCase):
+    """A position the manifest gained after a generation was analyzed is
+    reported as such, not as a server error."""
+
+    def get_app(self):
+        self.mount_root = self.enterContext(tempfile.TemporaryDirectory())
+        _write_analysis(_tag(Path(self.mount_root)), 20, [], "15D .ROTIC")
+        return dashboard_api.make_app(self.mount_root)
+
+    def _get(self, position_id: str):
+        index = [p.id for p in known_positions.load()].index(position_id)
+        return self.fetch(
+            "/api/deep_bot_leaf_eval/position?task=deep_bot_leaf_eval&tag=v2"
+            f"&generation=20&position={index}"
+        )
+
+    def test_an_analyzed_position_is_served(self):
+        assert self._get("TORI").code == 200
+
+    def test_a_later_position_is_a_404_saying_why(self):
+        r = self._get("CLINKER")
+        assert r.code == 404
+        assert json.loads(r.body) == {"error": "generation 20 was analyzed before this position"}
 
 
 LEAF_PARAMS = {
