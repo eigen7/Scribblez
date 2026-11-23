@@ -346,6 +346,15 @@ class FleetHandler(_MasterBase):
         self.guarded(self.manager.fleet)
 
 
+class RunningTagsHandler(_MasterBase):
+    """Every tag with a running worker, across workloads, for the strip atop
+    every dashboard page. Served from the reconcile pass's last observations,
+    so a poll costs no ssh."""
+
+    def get(self):
+        self.guarded(lambda: {"tags": self.manager.running_tags()})
+
+
 class OrphansHandler(_MasterBase):
     """Instances the provider tagged ours that no task names."""
 
@@ -634,6 +643,7 @@ class TaskFigureHandler(_MasterBase):
 MASTER_ROUTES = [
     (r"/api/workloads", WorkloadsHandler),
     (r"/api/workload_tags", WorkloadTagsHandler),
+    (r"/api/running_tags", RunningTagsHandler),
     (r"/api/tasks", TaskCreateHandler),
     (r"/api/task", TaskHandler),
     (r"/api/task/delete", TaskDeleteHandler),

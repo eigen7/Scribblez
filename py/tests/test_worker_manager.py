@@ -236,6 +236,30 @@ def test_a_status_poll_writes_nothing(manager, spec, task):
     assert manager.control.version != before
 
 
+def test_running_tags_counts_only_slots_seen_running(manager, spec, task, monkeypatch):
+    """The running strip lists a tag by the slots the pass saw running: a
+    paused slot whose container still runs reads `stopping` and does not
+    count, and a tag with nothing running is left out."""
+    _fake_ssh(monkeypatch, state="running")
+    for _ in range(2):
+        manager.add_ssh(spec, task, "generate", host="user@h", threads=None)
+    manager.add_ssh(spec, task, "generate", host="user@h", threads=None)  # stays paused
+    for w in task.workers[:2]:
+        w.desired_state = "running"
+    manager.tasks.save(spec, task)
+    quiet = tasks.TaskRecord(workload="blind_spots", tag="quiet", params={}, created_at=0.0)
+    manager.add_ssh(spec, quiet, "generate", host="user@h", threads=None)
+    for t in (task, quiet):
+        manager.worker_status(spec, t, observe=True)
+    assert manager.running_tags() == [
+        {
+            "workload": "blind_spots",
+            "tag": "t",
+            "roles": [{"role": "generate", "title": "Surveyor", "running": 2}],
+        }
+    ]
+
+
 def test_reconcile_skips_a_slot_removed_between_its_steps(manager, spec, task, monkeypatch):
     """A Remove clicked while the pass was observing runs between its steps
     (same serialized thread). The slot it removed is neither enforced nor a
