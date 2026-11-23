@@ -24,6 +24,7 @@ from scribblez import ffi  # noqa: E402
 from scribblez.dashboard import db, deep_bot_api  # noqa: E402
 from scribblez.deep_bot import (  # noqa: E402
     KINDS,
+    known_positions,
     position_view,
     release,
     release_positions,
@@ -36,7 +37,7 @@ from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.sim_evidence.sobs import move_notation  # noqa: E402
 from tests.test_deep_bot_trainer import CPU, PARAMS, save_tiny_seed  # noqa: E402
 
-CLINKER = 2  # the manifest's third position
+CLINKER = [p.id for p in known_positions.load()].index("CLINKER")  # its manifest index
 
 
 @pytest.fixture(scope="module")

@@ -40,9 +40,16 @@ one another, leaving the moves, the scores and the position untouched.
 ## Where they came from
 
 - `richards-eellt`: [docs/analysis/richards-johnson-exchange](../../../docs/analysis/richards-johnson-exchange/README.md).
+- `richards-allee-yeti`: a hypothetical continuation of that game, with
+  Nigel Richards playing B6 ALLEE instead of exchanging, and Mike Johnson
+  then holding ADEIIST.
 - `aceta`: [interesting-positions](../interesting-positions/README.md), whose
   two variants differ only in the opponent's hidden leave.
+- `avert`, `diner`, `trey`, `anneal`, `hins`: picked by David from the
+  `hidden_blind_spots` tag `v1`'s survey, copied from that tag, which lives
+  on the mount.
 - The rest: the worked entries of
   [docs/analysis/hidden_blind_spots.md](../../../docs/analysis/hidden_blind_spots.md),
-  copied from the `hidden_blind_spots` tag `v1`, which lives on the mount.
-  That page's three passes (CHORD, INDIGENE, ACDEINT) are the ones left out.
+  copied from the `hidden_blind_spots` tag `v1`. That page's three passes
+  (CHORD, INDIGENE, ACDEINT) are the ones left out, and A(I)M, O(I) and
+  exchange seven were dropped later; their GCGs remain.

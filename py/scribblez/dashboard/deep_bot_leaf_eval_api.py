@@ -254,9 +254,15 @@ class PositionHandler(_Base):
             self.write({"error": "no such analysis" if analyzed else "no analysis yet"})
             return
         index = int(self.get_query_argument("position", "0"))
-        if not 0 <= index < len(known_positions.load()):
+        positions = known_positions.load()
+        if not 0 <= index < len(positions):
             self.set_status(404)
             self.write({"error": "position out of range"})
+            return
+        # A position added to the manifest after the generation was analyzed.
+        if positions[index].id not in _analysis(self.tag_key(), generation)["positions"]:
+            self.set_status(404)
+            self.write({"error": f"generation {generation} was analyzed before this position"})
             return
         self.write(position_payload(self.tag_key(), generation, index))
 
