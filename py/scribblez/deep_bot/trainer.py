@@ -101,33 +101,11 @@ def evaluate_generation(by_kind: dict, gen_dir, cpu) -> dict:
     }
 
 
-def train_unit(kind: str, unit, window, gen: int, rows: int, cpu):
-    """`unit`'s epoch over `window`; the policy's reads no CPU controls."""
-    if kind == POLICY:
-        return unit.train(window, gen, rows)
-    return unit.train(window, gen, rows, cpu)
-
-
-def epoch_loss(kind: str, result) -> float:
-    return result.losses["total"] if kind == LEAF else result.loss
-
-
 def train_generation(by_kind: dict, paths: TagPaths, params, state: DeepBotState, cpu) -> dict:
-    """Train each unit one epoch over its window ending at the cursor
-    generation, advancing its rows-clock. Returns the record's training keys."""
-    gen = state.generation_index
-    record = {}
-    for kind, unit in by_kind.items():
-        window = lifecycle.window_dirs(paths, gen, units.window(params, kind))
-        result, elapsed = train_unit(kind, unit, window, gen, getattr(state, f"{kind}_rows"), cpu)
-        setattr(state, f"{kind}_rows", result.rows_trained)
-        record |= {
-            f"loss_{kind}": epoch_loss(kind, result),
-            f"{kind}_lr": unit.optim_arm.current,
-            f"{kind}_train_s": elapsed,
-            f"{kind}_rows": result.rows_trained,
-        }
-    by_kind[POLICY].check_finite(f"after generation {gen}")
+    """Train each unit one epoch over its window (unit_set.train), then check
+    the policy is still finite. Returns the record's training keys."""
+    record = unit_set.train(by_kind, paths, params, state, cpu)
+    by_kind[POLICY].check_finite(f"after generation {state.generation_index}")
     return record
 
 
@@ -146,11 +124,8 @@ def export_provenance(kind: str, tag: str, number: int) -> dict:
 def publish_release(by_kind: dict, paths: TagPaths, tag: str, number: int, rows: dict):
     """Write release `number`: the three exports, their analysis of the
     known positions, then its manifest."""
-    release.release_dir(paths, number).mkdir(parents=True, exist_ok=True)
-    for kind, unit in by_kind.items():
-        path = release.export_path(paths, number, kind)
-        if unit.export(path, export_provenance(kind, tag, number)) is False:
-            raise RuntimeError(f"the {kind} seed trains nothing a release can serve")
+    provenance = functools.partial(export_provenance, tag=tag, number=number)
+    unit_set.export(by_kind, paths, number, provenance)
     release_positions.write(paths, number)
     release.DEEP_BOT.write_manifest(paths, number, tag, rows)
 
