@@ -2311,7 +2311,7 @@ def _deep_bot_fleet(manager, monkeypatch, tmp_path, trainer_kind: str):
 
 
 def _write_release(paths, number: int):
-    for rel in release.files(number):
+    for rel in release.DEEP_BOT.files(number):
         (paths.root / rel).parent.mkdir(parents=True, exist_ok=True)
         (paths.root / rel).write_text("x")
 

@@ -56,7 +56,7 @@ def tag(tmp_path_factory) -> TagPaths:
     with pytest.MonkeyPatch.context() as m:
         # Compiling the tiny models would take most of the setup's time.
         m.setattr(torch, "compile", lambda model: model)
-        by_kind = units.build_units(paths, PARAMS, CPU)
+        by_kind = units.build_units(paths, PARAMS, CPU, KINDS)
     trainer.ensure_newest_release(by_kind, paths, "t", False, trainer.DeepBotState())
     return paths
 

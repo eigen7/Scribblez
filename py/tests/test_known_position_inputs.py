@@ -8,7 +8,7 @@ from pathlib import Path
 from scribblez.deep_bot import known_positions
 from scribblez.workloads import known_position_inputs
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.leaf_eval_truth import ROLE, SPEC, LeafEvalTruthParams
+from scribblez.workloads.leaf_eval_hasty_rollouts import ROLE, SPEC, LeafEvalHastyRolloutsParams
 
 
 def _ctx(mount: Path, kind: str) -> WorkerContext:
@@ -16,7 +16,7 @@ def _ctx(mount: Path, kind: str) -> WorkerContext:
         spec=SPEC,
         role=SPEC.role(ROLE),
         tag="t",
-        params=LeafEvalTruthParams(),
+        params=LeafEvalHastyRolloutsParams(),
         worker_id="w0",
         threads=1,
         max_cycles=0,

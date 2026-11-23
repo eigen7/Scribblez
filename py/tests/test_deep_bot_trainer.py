@@ -31,6 +31,7 @@ from scribblez.deep_bot import (  # noqa: E402
     release,
     seeds,
     trainer,
+    unit_set,
     units,
 )
 from scribblez.ffi import struct_dtype  # noqa: E402
@@ -148,8 +149,8 @@ def test_a_seed_of_another_format_is_refused(tag):
 def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypatch):
     """The trainer's one end-to-end case, a few seconds: six units built, a
     generation scored twice and trained, and two releases exported."""
-    by_kind = units.build_units(tag, PARAMS, CPU)
-    baseline = units.build_units(tag, PARAMS, CPU)
+    by_kind = units.build_units(tag, PARAMS, CPU, KINDS)
+    baseline = units.build_units(tag, PARAMS, CPU, KINDS)
     recorder, ctx, staged = _context(tag, monkeypatch)
     state = trainer.DeepBotState()
     trainer.ensure_newest_release(by_kind, tag, "t", False, state)
@@ -180,8 +181,8 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
     assert 0.0 <= record["newest_release_share"] <= 1.0
     assert tag.checkpoint_path(1).exists()  # keep_checkpoint_every = 1
 
-    resumed = units.build_units(tag, PARAMS, CPU)
-    assert trainer.resume(resumed, tag, CPU) == state
+    resumed = units.build_units(tag, PARAMS, CPU, KINDS)
+    assert unit_set.resume(resumed, tag, CPU, trainer.DeepBotState) == state
     for kind in KINDS:
         want = by_kind[kind].model.state_dict()
         for name, value in resumed[kind].model.state_dict().items():
@@ -194,7 +195,7 @@ def test_a_generation_is_scored_trained_and_published_as_a_release(tag, monkeypa
 
 
 def test_a_restored_trainer_republishes_the_release_its_checkpoint_holds(tag, monkeypatch):
-    by_kind = units.build_units(tag, PARAMS, CPU)
+    by_kind = units.build_units(tag, PARAMS, CPU, KINDS)
     _, ctx, _ = _context(tag, monkeypatch)
     state = trainer.DeepBotState(generation_index=3, rows_trained=3)
     trainer.ensure_newest_release(by_kind, tag, "t", False, state)
@@ -225,7 +226,7 @@ def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tm
         release.export_path(tag, 2, kind).parent.mkdir(parents=True, exist_ok=True)
         release.export_path(tag, 2, kind).write_text(kind)
     (release.release_dir(tag, 2) / release.POSITIONS).write_text("{}")
-    release.write_manifest(tag, 2, "t", {})
+    release.DEEP_BOT.write_manifest(tag, 2, "t", {})
     tag.rolling_checkpoint.parent.mkdir(parents=True, exist_ok=True)
     tag.rolling_checkpoint.write_text("state 2")
 
@@ -239,7 +240,9 @@ def test_a_remote_trainers_releases_and_kept_checkpoints_reach_the_controller(tm
     shutil.move(tag.root / kept_checkpoints.OUTBOX, home.root / kept_checkpoints.OUTBOX)
     release.install(pulled / "release_000002", home)
     kept_checkpoints.install(home.root / kept_checkpoints.OUTBOX / "gen_000002", home)
-    assert [(home.root / rel).is_file() for rel in release.newest_files(home, None)] == [True] * 5
+    assert [(home.root / rel).is_file() for rel in release.DEEP_BOT.newest_files(home)] == [
+        True
+    ] * 5
     assert release.export_path(home, 2, LEAF).read_text() == LEAF
     assert home.checkpoint_path(2).read_text() == "state 2"
     assert not any(pulled.iterdir())

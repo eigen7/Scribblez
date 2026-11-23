@@ -24,7 +24,7 @@ WORKER = "local-9"
 
 
 def _publish(paths, number: int):
-    for rel in release.files(number):
+    for rel in release.DEEP_BOT.files(number):
         (paths.root / rel).parent.mkdir(parents=True, exist_ok=True)
         (paths.root / rel).write_text(f"{number}")
 
@@ -102,7 +102,9 @@ def test_the_newest_release_is_assigned_with_release_0_beside_it(paths):
         "release_000002.json"
     ]
     for number in (0, 2):
-        assert all((inbox / rel).read_text() == f"{number}" for rel in release.files(number))
+        assert all(
+            (inbox / rel).read_text() == f"{number}" for rel in release.DEEP_BOT.files(number)
+        )
     assert measure.assigned_release(inbox) == 2
     # The known positions come along, as the worker's loader reads them.
     held = known_positions.load(inbox / matches.KNOWN_POSITIONS_DIR)
@@ -150,8 +152,8 @@ def test_delivered_matches_are_recorded_kept_and_cleared_from_the_inbox(paths):
     assert not any(paths.match_results_dir.iterdir())
     # Release 1's files left the inbox with its assignment; release 0's stay,
     # and release 0 is now assigned.
-    assert not (inbox / release.files(1)[0]).exists()
-    assert (inbox / release.files(0)[0]).exists()
+    assert not (inbox / release.DEEP_BOT.files(1)[0]).exists()
+    assert (inbox / release.DEEP_BOT.files(0)[0]).exists()
     assert measure.assigned_release(inbox) == 0
 
 

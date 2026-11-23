@@ -1,8 +1,9 @@
-"""A release (docs/plans/deep_bot_generations.md, "Terms"): the three models'
-exports published together, under the tag at
-releases/release_<k>/{leave,leaf,policy}.onnx, beside the exports' analysis of
-the known positions (positions.json, release_positions.py), with a manifest
-written last.
+"""A release (docs/plans/deep_bot_generations.md, "Terms"): a tag's models'
+exports published together, under the tag at releases/release_<k>/<kind>.onnx,
+beside any files of the workload's own (a Layout names both), with a manifest
+written last. deep_bot's release holds its three models and their analysis of
+the known positions (positions.json, release_positions.py); leaf_bot_generation's
+holds the leave inference model and the leaf network.
 A release exists once its manifest does, so a reader never takes two models
 of different releases. Release 0 is the seeds'; release k has trained
 through generation k - 1.
@@ -17,6 +18,7 @@ not share the trainer's tree (`newest_files`).
 import json
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from scribblez.deep_bot import KINDS
@@ -44,53 +46,67 @@ def export_path(paths: TagPaths, release: int, kind: str) -> Path:
 
 def export_rel(release: int, kind: str) -> str:
     """Release `release`'s export of `kind`, relative to the tag root or to
-    wherever else its files (below) are laid out."""
-    return f"releases/release_{release:06d}/{kind}.onnx"
+    wherever else its files (Layout.files) are laid out."""
+    return f"{release_rel(release)}/{kind}.onnx"
 
 
-def write_manifest(paths: TagPaths, release: int, tag: str, rows: dict[str, int]) -> Path:
-    """Complete release `release`: its exports must be in place. `rows` is
-    each model's rows-clock at the release."""
-    manifest = {
-        "tag": tag,
-        "release": release,
-        "models": {kind: f"{kind}.onnx" for kind in KINDS},
-        "rows_trained": rows,
-    }
-    path = release_dir(paths, release) / MANIFEST
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(manifest, indent=2) + "\n")
-    tmp.replace(path)
-    return path
+def release_rel(release: int) -> str:
+    """Release `release`'s directory, relative to the tag root."""
+    return f"releases/release_{release:06d}"
+
+
+@dataclass(frozen=True)
+class Layout:
+    """What a workload's release holds: an export per model kind, and the
+    files of the workload's own written beside them before the manifest."""
+
+    kinds: tuple[str, ...]
+    extras: tuple[str, ...] = ()
+
+    def write_manifest(self, paths: TagPaths, release: int, tag: str, rows: dict[str, int]):
+        """Complete release `release`: its exports and extras must be in
+        place. `rows` is each model's rows-clock at the release."""
+        manifest = {
+            "tag": tag,
+            "release": release,
+            "models": {kind: f"{kind}.onnx" for kind in self.kinds},
+            "rows_trained": rows,
+        }
+        path = release_dir(paths, release) / MANIFEST
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+        tmp.replace(path)
+
+    def files(self, release: int) -> list[str]:
+        """Release `release`'s files, tag-relative, the manifest last."""
+        rel = release_rel(release)
+        exports = [export_rel(release, kind) for kind in self.kinds]
+        return [*exports, *(f"{rel}/{name}" for name in self.extras), f"{rel}/{MANIFEST}"]
+
+    def newest_files(self, paths: TagPaths) -> list[str]:
+        """The files of the newest release, for a role that plays it
+        (RoleSpec.tag_files), or none before release 0."""
+        number = newest(paths)
+        return [] if number is None else self.files(number)
+
+    def deliver(self, paths: TagPaths, release: int):
+        """Link release `release` into the outbox as a set for the
+        controller, the manifest, its marker, last. The release stays where
+        it is, for the trainer and the generators beside it."""
+        for rel in self.files(release):
+            dest = paths.root / OUTBOX / Path(rel).relative_to("releases")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.unlink(missing_ok=True)
+            os.link(paths.root / rel, dest)
+
+
+# deep_bot's release: its three models and their analysis of the known
+# positions.
+DEEP_BOT = Layout(KINDS, (POSITIONS,))
 
 
 def read_manifest(paths: TagPaths, release: int) -> dict:
     return json.loads((release_dir(paths, release) / MANIFEST).read_text())
-
-
-def files(release: int) -> list[str]:
-    """Release `release`'s files, tag-relative, the manifest last."""
-    exports = [export_rel(release, kind) for kind in KINDS]
-    rel = f"releases/release_{release:06d}"
-    return [*exports, f"{rel}/{POSITIONS}", f"{rel}/{MANIFEST}"]
-
-
-def newest_files(paths: TagPaths, params) -> list[str]:
-    """The RoleSpec.tag_files of a role that plays the newest release: its
-    files, or none before release 0."""
-    number = newest(paths)
-    return [] if number is None else files(number)
-
-
-def deliver(paths: TagPaths, release: int):
-    """Link release `release` into the outbox as a set for the controller,
-    the manifest, its marker, last. The release stays where it is, for the
-    trainer and the generators beside it."""
-    for rel in files(release):
-        dest = paths.root / OUTBOX / Path(rel).relative_to("releases")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.unlink(missing_ok=True)
-        os.link(paths.root / rel, dest)
 
 
 def install(set_dir: Path, paths: TagPaths):

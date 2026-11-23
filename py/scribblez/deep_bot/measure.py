@@ -8,7 +8,7 @@ this runner needs only its inbox and runs on a machine with neither the
 database nor the tag's releases:
 
     data/match_inbox/<worker_id>/
-        releases/release_<k>/...       a release to play (release.files)
+        releases/release_<k>/...       a release to play (release.Layout.files)
         releases/release_000000/...    the opponent, kept
         known-positions/...            the known positions, kept
         assigned/release_<k>.json      play release k
@@ -95,7 +95,7 @@ def measure_release(ctx: WorkerContext, number: int, stats_rec: WorkerStats):
     for opponent in matches.opponents_of(number):
         specs = (agent_spec(ctx, number), opponent_spec(ctx, opponent))
         record, slog = matches.play(
-            number, opponent, specs, p.match_games, p.match_seed, ctx.threads, work
+            number, opponent, specs, p.match_games, p.match_seed, ctx.threads, work, keep_games=True
         )
         nbytes = matches.deliver(ctx.sink, record, slog, work)
         stats_rec.cycle_done(

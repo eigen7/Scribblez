@@ -54,7 +54,7 @@ def test_a_missing_seed_refuses_the_tag_before_anything_is_copied(tmp_path):
 
 def _publish(paths: TagPaths, number: int):
     release.release_dir(paths, number).mkdir(parents=True)
-    release.write_manifest(paths, number, "t", {})
+    release.DEEP_BOT.write_manifest(paths, number, "t", {})
 
 
 def _ctx(tmp_path, max_cycles: int = 1, kind: str = "local") -> WorkerContext:

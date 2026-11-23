@@ -62,7 +62,7 @@ BUNDLE_BINARY_NAMES = [
     "move_set_eval_target_generator",
     "transfer_test_generator",
     # The known positions' tools (deep_bot/known_positions.py): the GCGs to a
-    # .slog, and an agent's picks there (leaf_eval_truth's truth role).
+    # .slog, and an agent's picks there (leaf_eval_hasty_rollouts' rollouts role).
     "gcg_to_slog",
     "position_pick_tool",
     "libscribblez_ffi.so",

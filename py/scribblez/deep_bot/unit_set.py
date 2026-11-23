@@ -1,0 +1,115 @@
+"""A multi-model trainer's units (units.py) as one rolling checkpoint: the
+models and optimizers by kind, each unit's config with the versions a seed
+must match (units.check_seed), and the cursor, whose `<kind>_rows` fields are
+the units' rows-clocks. A later tag seeds from the checkpoint as it would
+from a standalone workload's (units.seed_part).
+"""
+
+from collections.abc import Callable
+from dataclasses import asdict
+
+from torch import nn
+
+from scribblez.deep_bot import LEAF, POLICY, release, units
+from scribblez.generational import checkpoint, lifecycle
+from scribblez.paths import TagPaths
+from scribblez.train_common import timed_print
+
+
+class OptimizerSet:
+    """The units' optimizers as the rolling checkpoint saves and loads them."""
+
+    def __init__(self, by_kind: dict):
+        self._units = by_kind
+
+    def state_dict(self) -> dict:
+        return {kind: unit.optimizer.state_dict() for kind, unit in self._units.items()}
+
+    def load_state_dict(self, saved: dict):
+        for kind, unit in self._units.items():
+            unit.optimizer.load_state_dict(saved[kind])
+
+
+def models(by_kind: dict) -> nn.ModuleDict:
+    """The units' models as the rolling checkpoint saves and loads them."""
+    return nn.ModuleDict({kind: unit.model for kind, unit in by_kind.items()})
+
+
+def unit_rows(by_kind: dict, state) -> dict[str, int]:
+    """Each unit's rows-clock in the cursor `state`."""
+    return {kind: getattr(state, f"{kind}_rows") for kind in by_kind}
+
+
+def prefixed(prefix: str, metrics: dict) -> dict:
+    return {f"{prefix}{key}": value for key, value in metrics.items()}
+
+
+def checkpoint_config(params, by_kind: dict) -> dict:
+    """The tag's params, and each unit's params with its versions."""
+    return {
+        "params": asdict(params),
+        "units": {
+            kind: asdict(unit.params) | units.unit_versions(kind, unit)
+            for kind, unit in by_kind.items()
+        },
+    }
+
+
+def save(paths: TagPaths, by_kind: dict, params, state):
+    """The rolling checkpoint of the units' models and optimizers at the
+    cursor `state`."""
+    config = checkpoint_config(params, by_kind)
+    checkpoint.save(paths, models(by_kind), OptimizerSet(by_kind), state, config)
+
+
+def resume(by_kind: dict, paths: TagPaths, device, state_cls: type):
+    """Load the rolling checkpoint into the units, if there is one, and
+    return its cursor, a `state_cls`; else the units stay at their seeds."""
+    ckpt, state = checkpoint.load(paths, device, state_cls)
+    if ckpt is None:
+        return state
+    models(by_kind).load_state_dict(ckpt["model_state_dict"])
+    OptimizerSet(by_kind).load_state_dict(ckpt["optimizer_state_dict"])
+    timed_print(f"Resuming at generation {state.generation_index}")
+    return state
+
+
+def _train_unit(kind: str, unit, window, gen: int, rows: int, cpu):
+    """`unit`'s epoch over `window`; the policy's reads no CPU controls."""
+    if kind == POLICY:
+        return unit.train(window, gen, rows)
+    return unit.train(window, gen, rows, cpu)
+
+
+def _epoch_loss(kind: str, result) -> float:
+    return result.losses["total"] if kind == LEAF else result.loss
+
+
+def train(by_kind: dict, paths: TagPaths, params, state, cpu) -> dict:
+    """Train each unit one epoch over its window ending at the cursor
+    generation, advancing its rows-clock in `state`. Returns the record's
+    training keys: per model, `loss_<kind>` (the names the Loss tab stacks),
+    its learning rate, seconds and rows-clock."""
+    gen = state.generation_index
+    record = {}
+    for kind, unit in by_kind.items():
+        window = lifecycle.window_dirs(paths, gen, units.window(params, kind))
+        result, elapsed = _train_unit(kind, unit, window, gen, getattr(state, f"{kind}_rows"), cpu)
+        setattr(state, f"{kind}_rows", result.rows_trained)
+        record |= {
+            f"loss_{kind}": _epoch_loss(kind, result),
+            f"{kind}_lr": unit.optim_arm.current,
+            f"{kind}_train_s": elapsed,
+            f"{kind}_rows": result.rows_trained,
+        }
+    return record
+
+
+def export(by_kind: dict, paths: TagPaths, number: int, provenance: Callable[[str], dict]):
+    """Export each unit into release `number`, `provenance(kind)` recorded
+    in its export. Raises if a unit's model has no servable export."""
+    release.release_dir(paths, number).mkdir(parents=True, exist_ok=True)
+    for kind, unit in by_kind.items():
+        path = release.export_path(paths, number, kind)
+        if unit.export(path, provenance(kind)) is False:
+            raise RuntimeError(f"the {kind} seed trains nothing a release can serve")

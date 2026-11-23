@@ -431,17 +431,18 @@ POLICY_SET_QUALITY = (
 
 
 def _beside_release_0(title: str, key: str, *others: str):
-    """A deep_bot chart group: the newest release's `key` beside release 0's
-    on the same games, and any `others`."""
+    """A multi-model trainer's chart group: the newest release's `key`
+    beside release 0's on the same games, and any `others`."""
     return (title, [key, f"r0_{key}", *others])
 
 
-# The deep_bot read (scribblez/deep_bot/trainer.py's record): each generation's
-# games scored before the trainer trains on them, by the newest release's
-# models and by release 0's (the "r0_" prefix). The gap between the two curves
-# is the loop's gain over its seeds on that generation's games; either curve
-# alone also moves with the games, which a newer agent plays.
-DEEP_BOT_QUALITY = [
+# A multi-model trainer's read (deep_bot/trainer.py's and
+# leaf_bot_generation/trainer.py's records): each generation's games scored
+# before the trainer trains on them, by the newest release's models and by
+# release 0's (the "r0_" prefix). The gap between the two curves is the tag's
+# gain over its seeds on that generation's games; either curve alone also
+# moves with the games, which deep_bot's newer releases play.
+LEAVE_INFERENCE_SCORES = [
     _beside_release_0(
         "Leave inference: NLL vs the uniform prior (nats per leave)", "leave_eval_nll_vs_uniform"
     ),
@@ -449,6 +450,32 @@ DEEP_BOT_QUALITY = [
         "Leave inference, private history hidden: NLL vs uniform",
         "leave_eval_hidden_nll_vs_uniform",
     ),
+]
+LEAF_NETWORK_SCORES = [
+    _beside_release_0(
+        "Leaf network: log loss of the expected score",
+        "leaf_eval_model_logloss",
+        "leaf_eval_wintable_macondo_logloss",
+    ),
+    _beside_release_0("Leaf network: WLD cross-entropy", "leaf_eval_wld_nll"),
+    _beside_release_0(
+        "Leaf network: ownership cross-entropy per empty square", "leaf_eval_ownership_nll"
+    ),
+]
+
+
+def training_by_model(kinds: tuple[str, ...]) -> list[tuple]:
+    """A multi-model trainer's training curves, each model's beside the
+    others' (deep_bot/unit_set.py's record keys)."""
+    return [
+        ("Training loss, by model", [f"loss_{k}" for k in kinds], {"log": True}),
+        ("Learning rate, by model", [f"{k}_lr" for k in kinds], {"log": True}),
+        ("Training time (s), by model", [f"{k}_train_s" for k in kinds]),
+    ]
+
+
+DEEP_BOT_QUALITY = [
+    *LEAVE_INFERENCE_SCORES,
     # The same score where it should move most: after a move static equity
     # ranks low, the leave is the tell (deep_bot/belief_by_rank.py).
     *(
@@ -462,15 +489,7 @@ DEEP_BOT_QUALITY = [
         "Share of moves played, by static-equity rank",
         [f"leave_eval_played_rank_{band}_share" for band in ("0", "1_9", "10_up")],
     ),
-    _beside_release_0(
-        "Leaf network: log loss of the expected score",
-        "leaf_eval_model_logloss",
-        "leaf_eval_wintable_macondo_logloss",
-    ),
-    _beside_release_0("Leaf network: WLD cross-entropy", "leaf_eval_wld_nll"),
-    _beside_release_0(
-        "Leaf network: ownership cross-entropy per empty square", "leaf_eval_ownership_nll"
-    ),
+    *LEAF_NETWORK_SCORES,
     *(
         _beside_release_0(
             f"Policy: {title} at N={n}", f"policy_eval_{metric}_{n}", f"equity_eval_{metric}_{n}"
@@ -491,9 +510,15 @@ DEEP_BOT_QUALITY = [
     # Below 1 where generators were still on an older release when their
     # chunks arrived: the price of not parking them while the trainer works.
     ("Share of the generation's games played on the newest release", ["newest_release_share"]),
-    ("Training loss, by model", ["loss_leave", "loss_leaf", "loss_policy"], {"log": True}),
-    ("Learning rate, by model", ["leave_lr", "leaf_lr", "policy_lr"], {"log": True}),
-    ("Training time (s), by model", ["leave_train_s", "leaf_train_s", "policy_train_s"]),
+    *training_by_model(("leave", "leaf", "policy")),
+]
+LEAF_BOT_GENERATION_QUALITY = [
+    *LEAVE_INFERENCE_SCORES,
+    *LEAF_NETWORK_SCORES,
+    # FP16 serves the leaf network: an activation past 65504 overflows
+    # (scribblez/norm_inputs.py).
+    _beside_release_0("Leaf network: largest activation", "leaf_activation_peak"),
+    *training_by_model(("leave", "leaf")),
 ]
 # The Loss tab's per-term panel for policy_set: each form's loss terms,
 # training beside held-out, which the stacked training loss above it cannot

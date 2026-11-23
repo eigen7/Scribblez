@@ -15,10 +15,12 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // value of every legal move (the leaf's win value after the
 // move, its mean over opponent leaves from the leave inference model), and
 // the move the matches' LeafBot plays: the best of HastyBot's top candidates.
-// Where the repo holds the position's truth (py/scribblez/deep_bot_leaf_eval/
-// truth.py: what a perfect leaf would value each move at, from playouts), each
-// move's truth stands beside its leaf value. Clicking a move draws it on the
-// board and charts its value over the generations against its truth.
+// Where the repo holds the position's hasty rollouts (py/scribblez/
+// deep_bot_leaf_eval/hasty_rollouts.py: each move played out to the game's end
+// by HastyBot, what a leaf trained on HastyBot's self-play should value it
+// at), each move's rollout value stands beside its leaf value. Clicking a move
+// draws it on the board and charts its value over the generations against its
+// rollout value.
 
 const LEAF_COLOR = '#3a86d4';
 
@@ -27,13 +29,14 @@ interface Valued extends MoveRef {
   points?: number; // what the move scores; absent from analyses written before the pick tool reported it
   equity_rank: number;
   leaf_rank: number;
-  truth: number | null; // the truth's win value, null where the truth does not cover the move
-  truth_rank: number | null;
+  rollout: number | null; // the hasty rollouts' win value, null where they do not cover the move
+  rollout_rank: number | null;
 }
 
-// The position's truth: whose it is, how it was run, and whether it drew the
-// opponent's leaves from the belief this tag's analysis draws from.
-interface TruthInfo {
+// The position's hasty rollouts: whose they are, how they were run, and
+// whether they drew the opponent's leaves from the belief this tag's analysis
+// draws from.
+interface RolloutsInfo {
   tag: string;
   run: {
     leave_inference: { tag: string; generation: number };
@@ -50,7 +53,7 @@ interface Payload extends BoardView {
   pick: MoveRef & { reading: string };
   num_values: number;
   values: Valued[];
-  truth: TruthInfo | null;
+  rollouts: RolloutsInfo | null;
   match: { score: number; ci_half_width: number; games: number; opponent: string } | null;
 }
 
@@ -61,20 +64,21 @@ interface Generation {
   ci_half_width: number | null;
 }
 
-// Where the leaf puts a move, and the truth where it covers it; or that it
-// has no value (a position with a single legal move).
+// Where the leaf puts a move, and the hasty rollouts where they cover it; or
+// that it has no value (a position with a single legal move).
 function leafText(byMove: Map<string, Valued>, move: string): string {
   const v = byMove.get(move);
   if (!v) return 'not valued';
-  const truth = v.truth != null ? ` · truth #${v.truth_rank} · ${pct(v.truth)}` : '';
-  return `leaf #${v.leaf_rank} · ${pct(v.value)}${truth}`;
+  const rollout = v.rollout != null ? ` · rollouts #${v.rollout_rank} · ${pct(v.rollout)}` : '';
+  return `leaf #${v.leaf_rank} · ${pct(v.value)}${rollout}`;
 }
 
-function TruthNote({ t }: { t: TruthInfo }) {
+function RolloutsNote({ t }: { t: RolloutsInfo }) {
   const r = t.run;
   return (
     <div className="dbp-note">
-      Truth (tag {t.tag}): what a perfect leaf would value the move at over the whole belief, from
+      Hasty rollouts (tag {t.tag}): the move&apos;s win value over the whole belief when HastyBot
+      plays the game out from it, what a leaf trained on HastyBot&apos;s self-play should value it at;
       {' '}{r.playouts} playouts to the game&apos;s end, each against its own opponent leave drawn from
       leave inference {r.leave_inference.tag} generation {r.leave_inference.generation};{' '}
       {t.num_values} moves{r.candidates > 0 ? `, static equity's best ${r.candidates}` : ''}.
@@ -134,13 +138,13 @@ function ValueTable({
         the opponent&apos;s leaves from the leave inference model). The matches&apos; LeafBot chooses among
         HastyBot&apos;s top {p.candidates} by static equity.
       </div>
-      {p.truth && <TruthNote t={p.truth} />}
+      {p.rollouts && <RolloutsNote t={p.rollouts} />}
       <table className="dbp-policy">
         <thead>
           <tr>
             <th className="num">#</th><th>move</th><th className="num">points</th><th className="num">leaf eval</th>
             <th />
-            {p.truth && <><th className="num">truth</th><th className="num">truth rank</th></>}
+            {p.rollouts && <><th className="num">hasty rollout win%</th><th className="num">rollout rank</th></>}
             <th className="num">equity rank</th><th />
           </tr>
         </thead>
@@ -157,10 +161,10 @@ function ValueTable({
                 <td className="bar">
                   <span style={{ width: `${Math.max(1, (v.value / Math.max(top, 1e-9)) * 100)}%`, background: LEAF_COLOR }} />
                 </td>
-                {p.truth && (
+                {p.rollouts && (
                   <>
-                    <td className="num">{v.truth != null ? pct(v.truth) : '—'}</td>
-                    <td className="num">{v.truth_rank != null ? `#${v.truth_rank}` : '—'}</td>
+                    <td className="num">{v.rollout != null ? pct(v.rollout) : '—'}</td>
+                    <td className="num">{v.rollout_rank != null ? `#${v.rollout_rank}` : '—'}</td>
                   </>
                 )}
                 <td className="num">{v.equity_rank > 0 ? `#${v.equity_rank}` : '—'}</td>
@@ -216,7 +220,7 @@ function PositionView({ p, pending, source }: { p: Payload; pending: boolean; so
           {!pending && preview && (
             <LeafEvalHistory task={source.task} tag={source.tag} position={source.position} move={preview.move}
               display={preview.display} generation={p.generation} newest={source.newest}
-              truth={byMove.get(preview.move)?.truth ?? null} />
+              rollout={byMove.get(preview.move)?.rollout ?? null} />
           )}
         </div>
       </div>
