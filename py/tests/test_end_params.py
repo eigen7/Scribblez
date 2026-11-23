@@ -66,7 +66,7 @@ END_PARAMS = {
     "leave_inference": {"max_rows"},
     "policy_set": {"max_rows"},
     "deep_bot_leaf_eval": {"max_rows"},
-    "leaf_eval_truth": set(),
+    "leaf_eval_hasty_rollouts": set(),
     "deep_bot": {"max_generations"},
     "leaf_bot_generation": {"max_generations"},
 }

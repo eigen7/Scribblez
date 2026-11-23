@@ -13,7 +13,7 @@ from scribblez.workloads import (
     evidence_trajectories,
     hidden_blind_spots,
     leaf_bot_generation,
-    leaf_eval_truth,
+    leaf_eval_hasty_rollouts,
     leave_inference,
     match_arms,
     max_move_per_lane,
@@ -47,7 +47,7 @@ WORKLOADS = {
         leave_inference.SPEC,
         policy_set.SPEC,
         deep_bot_leaf_eval.SPEC,
-        leaf_eval_truth.SPEC,
+        leaf_eval_hasty_rollouts.SPEC,
         deep_bot.SPEC,
         leaf_bot_generation.SPEC,
     )
