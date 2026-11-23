@@ -1,0 +1,1010 @@
+<title>Leave Value Distribution</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<!--
+The template py/tools/leave_value_distribution_viewer.py fills: it replaces the data
+marker in the leave-data script with every leave and its value, so the written
+page is self-contained. Open the written page, not this template.
+-->
+<style>
+/* Layout: one working column -- constraints, summary, histogram, leaves. */
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --ring: rgba(11, 11, 11, 0.10);
+  --tile: #f1e7cf;
+  --tile-ink: #2b2417;
+  --on: #0b0b0b;
+  --on-ink: #fcfcfb;
+  --warn: #b3261e;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --select: rgba(42, 120, 214, 0.12);
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10);
+    --tile: #3a3326; --tile-ink: #f3e9d2; --on: #f0efec; --on-ink: #1a1a19; --warn: #f2867f;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+    --series-5: #d55181; --series-6: #0ca30c; --select: rgba(57, 135, 229, 0.20);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10);
+  --tile: #3a3326; --tile-ink: #f3e9d2; --on: #f0efec; --on-ink: #1a1a19; --warn: #f2867f;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500;
+  --series-5: #d55181; --series-6: #0ca30c; --select: rgba(57, 135, 229, 0.20);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 var(--font-ui);
+}
+main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 20px;
+}
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+h2 { font-size: 0.78rem; font-weight: 600; margin: 0; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+p { margin: 0; }
+.lede { color: var(--ink-2); max-width: 68ch; }
+.provenance { color: var(--muted); font-size: 0.82rem; font-family: var(--font-data); }
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--ring);
+  border-radius: 10px;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.row { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: end; }
+.field { display: grid; gap: 4px; min-width: 0; }
+.field > label, .field > span { font-size: 0.78rem; color: var(--ink-2); font-weight: 500; }
+input[type="text"] {
+  font: 600 1rem var(--font-data);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  width: 11ch;
+  padding: 6px 8px;
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--ink);
+}
+input[type="text"]::placeholder { text-transform: none; letter-spacing: normal; font-weight: 400; color: var(--muted); }
+input[type="text"]:focus-visible, button:focus-visible, select:focus-visible, svg:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+select {
+  font: inherit;
+  padding: 5px 8px;
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  background: var(--page);
+  color: var(--ink);
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+.chip {
+  border: 1px solid var(--axis);
+  background: transparent;
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 0.86rem;
+}
+.chip:hover { border-color: var(--ink-2); }
+.chip[aria-pressed="true"] { background: var(--on); color: var(--on-ink); border-color: var(--on); }
+.segmented { display: inline-flex; border: 1px solid var(--axis); border-radius: 7px; overflow: hidden; }
+.segmented button { border: 0; background: transparent; padding: 4px 11px; font-size: 0.86rem; }
+.segmented button + button { border-left: 1px solid var(--axis); }
+.segmented button[aria-pressed="true"] { background: var(--on); color: var(--on-ink); }
+.rack { display: flex; flex-wrap: wrap; gap: 5px; }
+.tile {
+  position: relative;
+  width: 34px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: var(--tile);
+  color: var(--tile-ink);
+  font: 600 1.05rem var(--font-data);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.12);
+  padding: 0;
+}
+.tile .bag { position: absolute; right: 3px; bottom: 1px; font-size: 0.6rem; font-weight: 400; opacity: 0.7; }
+.tile .need { position: absolute; left: 3px; top: 0; font-size: 0.62rem; }
+.tile[data-state="req"] { background: var(--on); color: var(--on-ink); }
+.tile[data-state="exc"] { background: transparent; border: 1px dashed var(--axis); color: var(--muted); text-decoration: line-through; box-shadow: none; }
+.hint { color: var(--muted); font-size: 0.8rem; }
+.error { color: var(--warn); font-size: 0.84rem; font-weight: 500; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.stat { display: grid; align-content: start; gap: 2px; padding: 10px 12px; border-radius: 8px; background: var(--page); }
+.stat .label { font-size: 0.75rem; color: var(--ink-2); }
+.stat .value { font-size: 1.25rem; font-weight: 600; }
+.stat .base { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.82rem; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.swatch.outline { background: transparent; border-top: 2px solid var(--ink-2); border-radius: 0; height: 0; width: 14px; }
+.chart { position: relative; min-width: 0; }
+.chart svg { display: block; width: 100%; height: auto; }
+.chart text { fill: var(--muted); font: 11px var(--font-ui); font-variant-numeric: tabular-nums; }
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--ring);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  min-width: 170px;
+  z-index: 2;
+}
+.tooltip .t-head { font-weight: 600; margin-bottom: 4px; }
+.tooltip .t-row { display: flex; justify-content: space-between; gap: 14px; font-variant-numeric: tabular-nums; }
+.tooltip .t-row span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.leaves { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.leaves th { text-align: left; font-size: 0.72rem; font-weight: 500; color: var(--muted); padding: 2px 0; }
+.leaves td { padding: 3px 0; border-top: 1px solid var(--grid); }
+.leaves td.leave { font: 600 0.95rem var(--font-data); letter-spacing: 0.1em; }
+.leaves .num { text-align: right; }
+details summary { cursor: pointer; color: var(--ink-2); font-size: 0.86rem; }
+.table-wrap { overflow-x: auto; max-height: 360px; overflow-y: auto; margin-top: 8px; }
+.loading { color: var(--ink-2); font-family: var(--font-data); }
+@media (max-width: 520px) {
+  .tile { width: 30px; height: 33px; font-size: 0.95rem; }
+}
+</style>
+
+<main>
+  <header style="display: grid; gap: 6px;">
+    <h1>Leave Value Distribution</h1>
+    <p class="lede">
+      The value of every leave of one to six tiles. Constrain the tiles a leave holds to see how
+      the distribution shifts; the outline keeps the unconstrained shape for comparison.
+    </p>
+    <p class="provenance" id="provenance"></p>
+  </header>
+
+  <section class="panel" aria-labelledby="constraints-h">
+    <h2 id="constraints-h">Constraints</h2>
+    <div class="row">
+      <div class="field">
+        <label for="contains">Must contain</label>
+        <input id="contains" type="text" placeholder="e.g. ?S" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="excludes">Must not contain</label>
+        <input id="excludes" type="text" placeholder="e.g. Q" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <span>Examples</span>
+        <div class="row" style="gap: 6px;" id="presets"></div>
+      </div>
+    </div>
+    <div class="rack" id="rack" aria-label="Tiles: click to require, again to exclude, again to clear"></div>
+    <p class="hint">
+      Click a tile to require it, again to exclude it, again to clear it. <b>?</b> is the blank.
+      Repeat a letter in <i>Must contain</i> to require copies: <b>SS</b> means two S's or more.
+      The small number on each tile is how many the bag holds.
+    </p>
+    <p class="error" id="error" hidden></p>
+    <div class="row">
+      <div class="field">
+        <span>Leave length</span>
+        <div class="row" style="gap: 6px;" id="lengths"></div>
+      </div>
+      <div class="field">
+        <span>Count each leave</span>
+        <div class="segmented" id="weighting">
+          <button type="button" id="w-distinct" data-value="distinct">Once</button>
+          <button type="button" id="w-drawn" data-value="drawn">By draw chance</button>
+        </div>
+      </div>
+      <div class="field">
+        <span>Bar heights</span>
+        <div class="segmented" id="scale">
+          <button type="button" id="s-shape" data-value="shape">Own shape</button>
+          <button type="button" id="s-share" data-value="share">Share of all</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="color-by">Color by</label>
+        <select id="color-by">
+          <option value="blanks">Blanks held</option>
+          <option value="esses">S's held</option>
+          <option value="length">Leave length</option>
+          <option value="none">Nothing</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="bin-width">Bin width</label>
+        <select id="bin-width">
+          <option value="0.5">0.5 pts</option>
+          <option value="1" selected>1 pt</option>
+          <option value="2">2 pts</option>
+          <option value="5">5 pts</option>
+        </select>
+      </div>
+    </div>
+    <p class="hint" id="weighting-note"></p>
+  </section>
+
+  <section class="panel" aria-labelledby="summary-h">
+    <h2 id="summary-h">Summary</h2>
+    <div class="stats" id="stats"><p class="loading">Unpacking leaves…</p></div>
+  </section>
+
+  <section class="panel" aria-labelledby="chart-h">
+    <div class="chart-head">
+      <h2 id="chart-h">Distribution of leave values</h2>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="chart" id="chart"><div class="tooltip" id="tooltip" hidden></div></div>
+    <p class="hint">Hover a bar for its numbers; click one (or use the arrow keys) to list its leaves below.</p>
+    <details id="table-details">
+      <summary>Show the histogram as a table</summary>
+      <div class="table-wrap" id="table-wrap"></div>
+    </details>
+  </section>
+
+  <section class="panel" aria-labelledby="leaves-h">
+    <h2 id="leaves-h">Leaves</h2>
+    <div class="lists" id="lists"></div>
+  </section>
+</main>
+
+<script id="leave-data" type="application/json">/*__LEAVE_DATA__*/null</script>
+<script>
+"use strict";
+
+// ---- Constants ------------------------------------------------------------
+
+const SYMBOLS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ?";
+const BLANK = 26;
+const S_TILE = 18;
+const KINDS = 27;
+const MAX_LEN = 6;
+const FINE_STEP = 0.05; // Resolution of the histogram the quantiles read.
+const LIST_ROWS = 12;
+
+const COLOR_BY = {
+  blanks: { key: (i) => counts[i * KINDS + BLANK], labels: ["No blank", "1 blank", "2 blanks"] },
+  esses: { key: (i) => counts[i * KINDS + S_TILE], labels: ["No S", "1 S", "2 S's", "3 S's", "4 S's"] },
+  length: { key: (i) => lens[i] - 1, labels: ["1 tile", "2 tiles", "3 tiles", "4 tiles", "5 tiles", "6 tiles"] },
+  none: { key: () => 0, labels: ["Leaves"] },
+};
+
+const PRESETS = [
+  { label: "Has a blank", contains: "?", excludes: "" },
+  { label: "No blank", contains: "", excludes: "?" },
+  { label: "Blank and S", contains: "?S", excludes: "" },
+  { label: "No Q", contains: "", excludes: "Q" },
+  { label: "Q, no U", contains: "Q", excludes: "U" },
+];
+
+// ---- Leave table (filled by load) ------------------------------------------
+
+let N = 0;
+let lens; // Uint8Array: tiles in leave i
+let starts; // Uint32Array: offset of leave i in tiles
+let tiles; // Uint8Array: tile indices, leave by leave
+let values; // Float32Array: value of leave i, in points
+let counts; // Uint8Array(N * KINDS): copies of each tile in leave i
+let drawChance; // Float64Array: chance of drawing leave i's tiles from a full bag
+let byValue; // Uint32Array: leave indices in ascending value
+let bagCounts; // tiles of each kind in a full bag
+let valueLo, valueHi;
+
+// ---- View state -----------------------------------------------------------
+
+const state = {
+  required: new Uint8Array(KINDS),
+  excluded: new Array(KINDS).fill(false),
+  lengths: new Set([1, 2, 3, 4, 5, 6]),
+  weighting: "distinct",
+  scale: "shape",
+  colorBy: "blanks",
+  binWidth: 1,
+  selectedBin: null,
+  error: null,
+};
+let view = null; // The last computed histogram and stats.
+
+const $ = (id) => document.getElementById(id);
+
+// ---- Loading --------------------------------------------------------------
+
+async function gunzipBase64(b64) {
+  const raw = atob(b64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function binomial(n, k) {
+  let r = 1;
+  for (let j = 1; j <= k; j++) r = (r * (n - k + j)) / j;
+  return r;
+}
+
+async function load() {
+  const data = JSON.parse($("leave-data").textContent);
+  bagCounts = data.bagCounts;
+  tiles = await gunzipBase64(data.tiles);
+  values = new Float32Array((await gunzipBase64(data.values)).buffer);
+  N = values.length;
+  indexLeaves(data.rows);
+  sortByValue();
+  const leaves = N.toLocaleString();
+  $("provenance").textContent = `${data.lexicon} leave values (${data.source}, hash ${data.contentHash}) · ${leaves} leaves`;
+}
+
+// Fills lens, starts, counts and drawChance from the packed tiles.
+function indexLeaves(rows) {
+  lens = new Uint8Array(N);
+  starts = new Uint32Array(N);
+  counts = new Uint8Array(N * KINDS);
+  drawChance = new Float64Array(N);
+  const bagTotal = bagCounts.reduce((a, b) => a + b, 0);
+  const choose = bagCounts.map((n) => Array.from({ length: MAX_LEN + 1 }, (_, c) => binomial(n, c)));
+  let leave = 0;
+  let offset = 0;
+  rows.forEach((n, k0) => {
+    const k = k0 + 1;
+    const draws = binomial(bagTotal, k);
+    for (let r = 0; r < n; r++, leave++, offset += k) {
+      lens[leave] = k;
+      starts[leave] = offset;
+      const row = leave * KINDS;
+      for (let s = 0; s < k; s++) counts[row + tiles[offset + s]]++;
+      let ways = 1;
+      for (let s = 0; s < k; s++) {
+        const t = tiles[offset + s];
+        if (s === 0 || tiles[offset + s - 1] !== t) ways *= choose[t][counts[row + t]];
+      }
+      drawChance[leave] = ways / draws;
+    }
+  });
+}
+
+// Sorts leaf indices by value with a native numeric sort: each key packs the
+// value (in thousandths, offset positive) above a 20-bit leave index.
+function sortByValue() {
+  const SHIFT = 2 ** 20;
+  const keys = new Float64Array(N);
+  valueLo = Infinity;
+  valueHi = -Infinity;
+  for (let i = 0; i < N; i++) {
+    const v = values[i];
+    if (v < valueLo) valueLo = v;
+    if (v > valueHi) valueHi = v;
+    keys[i] = Math.round((v + 1000) * 1000) * SHIFT + i;
+  }
+  keys.sort();
+  byValue = new Uint32Array(N);
+  for (let j = 0; j < N; j++) byValue[j] = keys[j] % SHIFT;
+}
+
+// ---- Constraints ----------------------------------------------------------
+
+function parseTiles(text) {
+  const out = [];
+  for (const ch of text.toUpperCase()) {
+    if (ch === " " || ch === ",") continue;
+    const t = SYMBOLS.indexOf(ch === "_" ? "?" : ch);
+    if (t < 0) throw new Error(`"${ch}" is not a tile. Use A to Z, or ? for the blank.`);
+    out.push(t);
+  }
+  return out;
+}
+
+function readConstraints() {
+  state.required.fill(0);
+  state.excluded.fill(false);
+  state.error = null;
+  try {
+    for (const t of parseTiles($("contains").value)) state.required[t]++;
+    for (const t of parseTiles($("excludes").value)) state.excluded[t] = true;
+  } catch (e) {
+    state.error = e.message;
+    return;
+  }
+  const need = state.required.reduce((a, b) => a + b, 0);
+  const overBag = SYMBOLS.split("").filter((_, t) => state.required[t] > bagCounts[t]);
+  const clash = SYMBOLS.split("").filter((_, t) => state.required[t] && state.excluded[t]);
+  if (need > MAX_LEN) state.error = `No leave holds ${need} tiles; leaves have at most ${MAX_LEN}.`;
+  else if (overBag.length) state.error = `The bag doesn't hold that many ${overBag.join(", ")}.`;
+  else if (clash.length) state.error = `${clash.join(", ")} is both required and excluded.`;
+}
+
+function writeConstraints() {
+  let contains = "";
+  let excludes = "";
+  for (let t = 0; t < KINDS; t++) {
+    contains += SYMBOLS[t].repeat(state.required[t]);
+    if (state.excluded[t]) excludes += SYMBOLS[t];
+  }
+  $("contains").value = contains;
+  $("excludes").value = excludes;
+}
+
+function hasConstraints() {
+  return state.required.some((c) => c > 0) || state.excluded.some(Boolean);
+}
+
+// Tile clicks cycle: any -> required -> excluded -> any.
+function cycleTile(t) {
+  if (state.excluded[t]) state.excluded[t] = false;
+  else if (state.required[t]) {
+    state.required[t] = 0;
+    state.excluded[t] = true;
+  } else state.required[t] = 1;
+  writeConstraints();
+  readConstraints();
+  update();
+}
+
+// ---- Computation ----------------------------------------------------------
+
+function matcher() {
+  const req = [];
+  const exc = [];
+  for (let t = 0; t < KINDS; t++) {
+    if (state.required[t]) req.push([t, state.required[t]]);
+    if (state.excluded[t]) exc.push(t);
+  }
+  return (i) => {
+    const row = i * KINDS;
+    for (const [t, c] of req) if (counts[row + t] < c) return false;
+    for (const t of exc) if (counts[row + t] > 0) return false;
+    return true;
+  };
+}
+
+function inLengths(i) {
+  return state.lengths.has(lens[i]);
+}
+
+function weightOf(i) {
+  return state.weighting === "drawn" ? drawChance[i] : 1;
+}
+
+function newAggregate(bins, fineBins, series) {
+  return {
+    leaves: 0,
+    weight: 0,
+    sum: 0,
+    sumSq: 0,
+    bins: Array.from({ length: series }, () => new Float64Array(bins)),
+    total: new Float64Array(bins),
+    fine: new Float64Array(fineBins),
+  };
+}
+
+function addTo(agg, i, w, bin, fineBin, series) {
+  const v = values[i];
+  agg.leaves++;
+  agg.weight += w;
+  agg.sum += w * v;
+  agg.sumSq += w * v * v;
+  agg.bins[series][bin] += w;
+  agg.total[bin] += w;
+  agg.fine[fineBin] += w;
+}
+
+function compute() {
+  const bw = state.binWidth;
+  const lo = Math.floor(valueLo / bw) * bw;
+  const bins = Math.ceil((valueHi - lo) / bw) + 1;
+  const fineBins = Math.ceil((valueHi - valueLo) / FINE_STEP) + 1;
+  const colorBy = COLOR_BY[state.colorBy];
+  const series = colorBy.labels.length;
+  const base = newAggregate(bins, fineBins, series);
+  const filt = newAggregate(bins, fineBins, series);
+  const matches = state.error ? () => false : matcher();
+  for (let i = 0; i < N; i++) {
+    if (!inLengths(i)) continue;
+    const w = weightOf(i);
+    const bin = Math.floor((values[i] - lo) / bw);
+    const fineBin = Math.floor((values[i] - valueLo) / FINE_STEP);
+    const s = colorBy.key(i);
+    addTo(base, i, w, bin, fineBin, s);
+    if (matches(i)) addTo(filt, i, w, bin, fineBin, s);
+  }
+  return { lo, bw, bins, base, filt, labels: colorBy.labels, matches };
+}
+
+function quantile(agg, q) {
+  const target = q * agg.weight;
+  let acc = 0;
+  for (let b = 0; b < agg.fine.length; b++) {
+    acc += agg.fine[b];
+    if (acc >= target) return valueLo + (b + 0.5) * FINE_STEP;
+  }
+  return valueHi;
+}
+
+function summarize(agg) {
+  if (agg.weight === 0) return null;
+  const mean = agg.sum / agg.weight;
+  return {
+    leaves: agg.leaves,
+    weight: agg.weight,
+    mean,
+    sd: Math.sqrt(Math.max(0, agg.sumSq / agg.weight - mean * mean)),
+    median: quantile(agg, 0.5),
+    p10: quantile(agg, 0.1),
+    p90: quantile(agg, 0.9),
+  };
+}
+
+// ---- Formatting -----------------------------------------------------------
+
+const fmtPts = (v) => {
+  const s = Math.abs(v).toFixed(1);
+  return (v < 0 && s !== "0.0" ? "−" : "") + s;
+};
+const fmtPct = (x) => {
+  const p = 100 * x;
+  if (p === 0) return "0%";
+  if (p < 0.01) return "<0.01%";
+  return (p < 1 ? p.toFixed(2) : p < 10 ? p.toFixed(1) : p.toFixed(0)) + "%";
+};
+const fmtChance = (p) => (p >= 0.001 ? fmtPct(p) : `1 in ${Math.round(1 / p).toLocaleString()}`);
+
+function leaveText(i) {
+  const k = lens[i];
+  let blanks = "";
+  let letters = "";
+  for (let s = 0; s < k; s++) {
+    const t = tiles[starts[i] + s];
+    if (t === BLANK) blanks += "?";
+    else letters += SYMBOLS[t];
+  }
+  return blanks + letters;
+}
+
+function binRange(b) {
+  const a = view.lo + b * view.bw;
+  return `${fmtPts(a)} to ${fmtPts(a + view.bw)} pts`;
+}
+
+// ---- Rendering: controls --------------------------------------------------
+
+function renderRack() {
+  const rack = $("rack");
+  rack.innerHTML = "";
+  for (let t = 0; t < KINDS; t++) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tile";
+    b.id = `tile-${t}`;
+    b.addEventListener("click", () => cycleTile(t));
+    rack.appendChild(b);
+  }
+}
+
+function paintRack() {
+  for (let t = 0; t < KINDS; t++) {
+    const b = $(`tile-${t}`);
+    const req = state.required[t];
+    const st = state.excluded[t] ? "exc" : req ? "req" : "any";
+    const need = req > 1 ? `<span class="need">×${req}</span>` : "";
+    b.dataset.state = st;
+    b.innerHTML = `${need}${SYMBOLS[t]}<span class="bag">${bagCounts[t]}</span>`;
+    const name = t === BLANK ? "Blank" : SYMBOLS[t];
+    const what = st === "exc" ? "excluded" : st === "req" ? `required (${req})` : "any";
+    b.setAttribute("aria-label", `${name}: ${what}`);
+  }
+}
+
+function renderPresets() {
+  for (const p of PRESETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip";
+    b.textContent = p.label;
+    b.addEventListener("click", () => {
+      $("contains").value = p.contains;
+      $("excludes").value = p.excludes;
+      readConstraints();
+      update();
+    });
+    $("presets").appendChild(b);
+  }
+}
+
+function renderLengthChips() {
+  for (let k = 1; k <= MAX_LEN; k++) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip";
+    b.id = `len-${k}`;
+    b.textContent = String(k);
+    b.addEventListener("click", () => {
+      if (state.lengths.has(k)) {
+        if (state.lengths.size > 1) state.lengths.delete(k);
+      } else state.lengths.add(k);
+      update();
+    });
+    $("lengths").appendChild(b);
+  }
+}
+
+function bindSegmented(id, key) {
+  for (const b of $(id).querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      state[key] = b.dataset.value;
+      update();
+    });
+  }
+}
+
+function paintControls() {
+  for (let k = 1; k <= MAX_LEN; k++) $(`len-${k}`).setAttribute("aria-pressed", state.lengths.has(k));
+  for (const id of ["weighting", "scale"]) {
+    for (const b of $(id).querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", b.dataset.value === state[id]);
+    }
+  }
+  $("error").hidden = !state.error;
+  $("error").textContent = state.error || "";
+  $("weighting-note").textContent =
+    state.weighting === "drawn"
+      ? "Each leave weighs its chance of being drawn from a full bag of 100 tiles. When several lengths are on, each length weighs the same in total."
+      : "Each distinct leave counts once, however likely it is to be drawn.";
+  paintRack();
+}
+
+// ---- Rendering: summary ---------------------------------------------------
+
+function statTile(label, value, base) {
+  return `<div class="stat"><span class="label">${label}</span><span class="value">${value}</span>` +
+    (base ? `<span class="base">${base}</span>` : "") + `</div>`;
+}
+
+function renderStats() {
+  const f = summarize(view.filt.weight ? view.filt : { weight: 0 });
+  const b = summarize(view.base);
+  const constrained = hasConstraints() || state.error;
+  const vs = (x) => (constrained ? `all: ${x}` : "");
+  if (!f) {
+    $("stats").innerHTML = statTile("Leaves", "0", vs(b.leaves.toLocaleString()));
+    return;
+  }
+  const share = state.weighting === "drawn" ? "Share of draws" : "Share of leaves";
+  $("stats").innerHTML = [
+    statTile("Leaves", f.leaves.toLocaleString(), vs(b.leaves.toLocaleString())),
+    statTile(share, fmtPct(f.weight / b.weight), ""),
+    statTile("Mean", fmtPts(f.mean), vs(fmtPts(b.mean))),
+    statTile("Median", fmtPts(f.median), vs(fmtPts(b.median))),
+    statTile("Middle 80%", `${fmtPts(f.p10)} to ${fmtPts(f.p90)}`, vs(`${fmtPts(b.p10)} to ${fmtPts(b.p90)}`)),
+    statTile("Std. deviation", fmtPts(f.sd), vs(fmtPts(b.sd))),
+  ].join("");
+}
+
+// ---- Rendering: chart -----------------------------------------------------
+
+const CHART_H = 340;
+const M = { top: 14, right: 14, bottom: 38, left: 50 };
+
+function niceStep(max, ticks) {
+  const raw = max / ticks;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * pow >= raw) return m * pow;
+  return 10 * pow;
+}
+
+// Bar heights as fractions: "shape" normalizes each set to its own total,
+// "share" puts both over the unconstrained total.
+function heights() {
+  const baseTotal = view.base.weight || 1;
+  const filtTotal = state.scale === "shape" ? view.filt.weight || 1 : baseTotal;
+  return {
+    stacks: view.filt.bins.map((arr) => Array.from(arr, (w) => w / filtTotal)),
+    total: Array.from(view.filt.total, (w) => w / filtTotal),
+    base: Array.from(view.base.total, (w) => w / baseTotal),
+  };
+}
+
+function chartGeometry(width, h) {
+  const showBase = hasConstraints() || !!state.error;
+  const top = Math.max(...h.total, showBase ? Math.max(...h.base) : 0, 1e-9);
+  const step = niceStep(top, 5);
+  const yMax = Math.ceil(top / step) * step;
+  const plotW = width - M.left - M.right;
+  const plotH = CHART_H - M.top - M.bottom;
+  const x = (v) => M.left + ((v - view.lo) / (view.bins * view.bw)) * plotW;
+  const y = (f) => M.top + plotH - (f / yMax) * plotH;
+  return { showBase, step, yMax, plotW, plotH, x, y, binPx: plotW / view.bins };
+}
+
+function axesSvg(g) {
+  const parts = [];
+  for (let f = 0; f <= g.yMax + 1e-12; f += g.step) {
+    const yy = g.y(f).toFixed(1);
+    parts.push(`<line x1="${M.left}" x2="${M.left + g.plotW}" y1="${yy}" y2="${yy}" stroke="var(--grid)" stroke-width="1"/>`);
+    parts.push(`<text x="${M.left - 6}" y="${yy}" text-anchor="end" dominant-baseline="middle">${fmtPct(f)}</text>`);
+  }
+  const span = view.bins * view.bw;
+  const tick = span > 60 ? 10 : 5;
+  for (let v = Math.ceil(view.lo / tick) * tick; v <= view.lo + span; v += tick) {
+    const xx = g.x(v).toFixed(1);
+    const zero = v === 0;
+    parts.push(`<line x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top + g.plotH}" stroke="${zero ? "var(--axis)" : "transparent"}" stroke-width="1"/>`);
+    parts.push(`<text x="${xx}" y="${M.top + g.plotH + 16}" text-anchor="middle">${v < 0 ? "−" + -v : v}</text>`);
+  }
+  parts.push(`<line x1="${M.left}" x2="${M.left + g.plotW}" y1="${M.top + g.plotH}" y2="${M.top + g.plotH}" stroke="var(--axis)" stroke-width="1"/>`);
+  parts.push(`<text x="${M.left + g.plotW / 2}" y="${CHART_H - 4}" text-anchor="middle">Leave value (points)</text>`);
+  return parts.join("");
+}
+
+function barsSvg(g, h) {
+  const gap = Math.min(2, g.binPx * 0.2);
+  const w = Math.max(0.5, g.binPx - gap);
+  const parts = [];
+  for (let b = 0; b < view.bins; b++) {
+    const x0 = (M.left + b * g.binPx + gap / 2).toFixed(2);
+    let acc = 0;
+    h.stacks.forEach((col, s) => {
+      if (col[b] <= 0) return;
+      const y1 = g.y(acc + col[b]);
+      const y0 = g.y(acc);
+      acc += col[b];
+      parts.push(`<rect x="${x0}" y="${y1.toFixed(2)}" width="${w.toFixed(2)}" height="${Math.max(0, y0 - y1).toFixed(2)}" fill="var(--series-${s + 1})"/>`);
+    });
+  }
+  return parts.join("");
+}
+
+function baseOutlineSvg(g, h) {
+  if (!g.showBase) return "";
+  let d = `M${g.x(view.lo).toFixed(2)},${g.y(0).toFixed(2)}`;
+  for (let b = 0; b < view.bins; b++) {
+    const yy = g.y(h.base[b]).toFixed(2);
+    d += `V${yy}H${(M.left + (b + 1) * g.binPx).toFixed(2)}`;
+  }
+  d += `V${g.y(0).toFixed(2)}`;
+  return `<path d="${d}" fill="none" stroke="var(--ink-2)" stroke-width="1.5" stroke-linejoin="round"/>`;
+}
+
+function selectionSvg(g) {
+  if (state.selectedBin === null) return "";
+  const x0 = M.left + state.selectedBin * g.binPx;
+  return `<rect x="${x0.toFixed(2)}" y="${M.top}" width="${g.binPx.toFixed(2)}" height="${g.plotH}" fill="var(--select)"/>`;
+}
+
+function renderChart() {
+  const host = $("chart");
+  const width = Math.max(320, host.clientWidth);
+  const h = heights();
+  const g = chartGeometry(width, h);
+  view.geometry = g;
+  view.heights = h;
+  const svg = `<svg id="chart-svg" viewBox="0 0 ${width} ${CHART_H}" tabindex="0" role="img"
+    aria-label="Histogram of leave values; arrow keys select a bin">
+    ${selectionSvg(g)}${axesSvg(g)}${barsSvg(g, h)}${baseOutlineSvg(g, h)}</svg>`;
+  host.querySelector("svg")?.remove();
+  host.insertAdjacentHTML("afterbegin", svg);
+  const el = $("chart-svg");
+  el.addEventListener("mousemove", (e) => showTooltip(binAt(e), e));
+  el.addEventListener("mouseleave", () => ($("tooltip").hidden = true));
+  el.addEventListener("click", (e) => selectBin(binAt(e)));
+  el.addEventListener("keydown", onChartKey);
+  renderLegend(g);
+}
+
+function renderLegend(g) {
+  const items = view.labels.length > 1 || g.showBase
+    ? view.labels.map((l, s) => `<span><i class="swatch" style="background: var(--series-${s + 1})"></i>${l}</span>`)
+    : [];
+  if (g.showBase) items.push(`<span><i class="swatch outline"></i>All leaves (no constraints)</span>`);
+  $("legend").innerHTML = items.join("");
+}
+
+function binAt(e) {
+  const svg = $("chart-svg");
+  const r = svg.getBoundingClientRect();
+  const px = ((e.clientX - r.left) / r.width) * svg.viewBox.baseVal.width;
+  const b = Math.floor((px - M.left) / view.geometry.binPx);
+  return b >= 0 && b < view.bins ? b : null;
+}
+
+function showTooltip(b, e) {
+  const tip = $("tooltip");
+  if (b === null) {
+    tip.hidden = true;
+    return;
+  }
+  const h = view.heights;
+  const rows = view.labels
+    .map((l, s) => [l, h.stacks[s][b], s])
+    .filter(([, f]) => f > 0)
+    .map(([l, f, s]) => `<div class="t-row"><span><i class="swatch" style="background: var(--series-${s + 1})"></i>${l}</span><span>${fmtPct(f)}</span></div>`);
+  if (view.labels.length > 1) rows.push(`<div class="t-row"><span>Total</span><span>${fmtPct(h.total[b])}</span></div>`);
+  if (view.geometry.showBase) rows.push(`<div class="t-row"><span><i class="swatch outline"></i>All leaves</span><span>${fmtPct(h.base[b])}</span></div>`);
+  tip.innerHTML = `<div class="t-head">${binRange(b)}</div>${rows.join("")}`;
+  tip.hidden = false;
+  const host = $("chart").getBoundingClientRect();
+  const left = e.clientX - host.left + 14;
+  tip.style.left = `${Math.min(left, host.width - tip.offsetWidth - 4)}px`;
+  tip.style.top = `${Math.max(0, e.clientY - host.top - tip.offsetHeight - 10)}px`;
+}
+
+// Re-rendering replaces the chart's svg, so focus moves to the new one to keep
+// the arrow keys working.
+function showSelection() {
+  renderChart();
+  renderLists();
+  $("chart-svg").focus({ preventScroll: true });
+}
+
+function selectBin(b) {
+  state.selectedBin = b === state.selectedBin ? null : b;
+  showSelection();
+}
+
+function onChartKey(e) {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Escape") return;
+  e.preventDefault();
+  $("tooltip").hidden = true;
+  if (e.key === "Escape") state.selectedBin = null;
+  else {
+    const from = state.selectedBin ?? Math.floor(view.bins / 2);
+    state.selectedBin = Math.min(view.bins - 1, Math.max(0, from + (e.key === "ArrowRight" ? 1 : -1)));
+  }
+  showSelection();
+}
+
+// ---- Rendering: leave lists and table -------------------------------------
+
+function firstAtLeast(v) {
+  let a = 0;
+  let b = N;
+  while (a < b) {
+    const m = (a + b) >> 1;
+    if (values[byValue[m]] < v) a = m + 1;
+    else b = m;
+  }
+  return a;
+}
+
+function leaveRows(ids, total) {
+  const chance = state.weighting === "drawn";
+  const rows = ids.map((i) =>
+    `<tr><td class="leave">${leaveText(i)}</td><td class="num">${fmtPts(values[i])}</td>` +
+    (chance ? `<td class="num">${fmtChance(drawChance[i])}</td>` : "") + `</tr>`);
+  const more = total > ids.length ? `<tr><td colspan="3" class="hint">and ${(total - ids.length).toLocaleString()} more</td></tr>` : "";
+  const head = `<tr><th>Leave</th><th class="num">Value</th>${chance ? '<th class="num">Draw chance</th>' : ""}</tr>`;
+  return `<table class="leaves">${head}${rows.join("")}${more}</table>`;
+}
+
+function extremes(fromTop) {
+  const out = [];
+  for (let j = 0; j < N && out.length < LIST_ROWS; j++) {
+    const i = byValue[fromTop ? N - 1 - j : j];
+    if (inLengths(i) && view.matches(i)) out.push(i);
+  }
+  return out;
+}
+
+function binLeaves(b) {
+  const a = view.lo + b * view.bw;
+  const out = [];
+  for (let j = firstAtLeast(a); j < N && values[byValue[j]] < a + view.bw; j++) {
+    const i = byValue[j];
+    if (inLengths(i) && view.matches(i)) out.push(i);
+  }
+  const key = state.weighting === "drawn" ? (i) => drawChance[i] : (i) => values[i];
+  return out.sort((p, q) => key(q) - key(p));
+}
+
+function renderLists() {
+  if (state.selectedBin !== null) {
+    const ids = binLeaves(state.selectedBin);
+    const order = state.weighting === "drawn" ? "most likely first" : "highest first";
+    $("lists").innerHTML = `<div><p class="hint">Leaves worth ${binRange(state.selectedBin)}, ${order}.
+      Click the bar again or press Escape to go back.</p>${leaveRows(ids.slice(0, 2 * LIST_ROWS), ids.length)}</div>`;
+    return;
+  }
+  $("lists").innerHTML =
+    `<div><p class="hint">Highest valued</p>${leaveRows(extremes(true), 0)}</div>` +
+    `<div><p class="hint">Lowest valued</p>${leaveRows(extremes(false), 0)}</div>`;
+}
+
+function renderTable() {
+  if (!$("table-details").open) return;
+  const h = view.heights;
+  const showBase = view.geometry.showBase;
+  const rows = [];
+  for (let b = 0; b < view.bins; b++) {
+    if (h.total[b] === 0 && h.base[b] === 0) continue;
+    rows.push(`<tr><td>${binRange(b)}</td><td class="num">${fmtPct(h.total[b])}</td>` +
+      (showBase ? `<td class="num">${fmtPct(h.base[b])}</td>` : "") + `</tr>`);
+  }
+  const head = `<tr><th>Value</th><th class="num">${showBase ? "Constrained" : "Leaves"}</th>${showBase ? '<th class="num">All leaves</th>' : ""}</tr>`;
+  $("table-wrap").innerHTML = `<table class="leaves">${head}${rows.join("")}</table>`;
+}
+
+// ---- Wiring ---------------------------------------------------------------
+
+function update() {
+  paintControls();
+  view = compute();
+  if (state.selectedBin !== null && state.selectedBin >= view.bins) state.selectedBin = null;
+  renderStats();
+  renderChart();
+  renderLists();
+  renderTable();
+}
+
+function wire() {
+  renderRack();
+  renderPresets();
+  renderLengthChips();
+  bindSegmented("weighting", "weighting");
+  bindSegmented("scale", "scale");
+  for (const id of ["contains", "excludes"]) {
+    $(id).addEventListener("input", () => {
+      readConstraints();
+      update();
+    });
+  }
+  $("color-by").addEventListener("change", (e) => {
+    state.colorBy = e.target.value;
+    update();
+  });
+  $("bin-width").addEventListener("change", (e) => {
+    state.binWidth = Number(e.target.value);
+    state.selectedBin = null;
+    update();
+  });
+  $("table-details").addEventListener("toggle", renderTable);
+  let resizeTimer = 0;
+  new ResizeObserver(() => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => view && renderChart(), 80);
+  }).observe($("chart"));
+}
+
+load()
+  .then(() => {
+    wire();
+    readConstraints();
+    update();
+  })
+  .catch((e) => {
+    $("stats").innerHTML = `<p class="error">Couldn't load the leaves: ${e.message}</p>`;
+  });
+</script>
