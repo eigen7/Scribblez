@@ -1238,9 +1238,9 @@ class WorkerManager:
 
     def _gpu_fit_refusal(self, spec, task, role: str, kind: str, machine, host) -> str | None:
         """Why a new `role` slot would not fit the target machine's GPU memory
-        alongside the GPU slots already there, or None: the task's own, and
-        other tags' while they hold the machine (_holds_machine), so a paused
-        or long-dead slot elsewhere does not refuse it. The same measured
+        alongside the GPU slots already there, or None: the task's own and
+        other tags', while they hold the machine (_holds_machine), so a paused
+        or long-dead slot does not refuse it. The same measured
         needs as placement (WorkloadSpec.gpu_need); checked only when every need
         and the machine's memory are known, so a hand placement is refused
         only on evidence."""
@@ -1257,7 +1257,7 @@ class WorkerManager:
                     or _slot_target(w.kind, None, self._slot_host(t, w)) != target
                 ):
                     continue
-                if t is task or self._holds_machine(s, t, w):
+                if self._holds_machine(s, t, w):
                     needs.append(_gpu_need(s, t, w.role))
         if any(n is None for n in needs):
             return None

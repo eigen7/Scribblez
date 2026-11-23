@@ -632,6 +632,20 @@ def test_a_hand_placed_trainer_counts_other_tags_on_the_gpu(queued):
     manager.add_local(SPEC, second, "train", None)
 
 
+def test_a_hand_placed_slot_counts_its_own_tags_slots_only_while_they_run(queued):
+    """A tag's paused slots hold no GPU memory: match eval beside a paused
+    trainer fits a GPU the two would not fit running together, as a backfill
+    beside a finished tag's paused trainer and match eval must."""
+    q, manager, make = queued  # localhost: 12 GiB
+    task = make("own")
+    trainer = manager.add_local(SPEC, task, "train", None)  # 11.03 GiB
+    trainer.desired_state = "running"
+    with pytest.raises(AssertionError, match="would need 13.6 GiB"):
+        manager.add_local(SPEC, task, "match_eval", None)
+    trainer.desired_state = "paused"
+    manager.add_local(SPEC, task, "match_eval", None)
+
+
 def test_the_plan_shows_the_roles_and_each_machines_slots(queued):
     """What the queue would start for a tag, before and after enqueueing: the
     roles come from its params (match eval only with a cadence), and each
