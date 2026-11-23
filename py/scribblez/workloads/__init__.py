@@ -12,6 +12,7 @@ from scribblez.workloads import (
     deep_bot_leaf_eval,
     evidence_trajectories,
     hidden_blind_spots,
+    leaf_bot_generation,
     leaf_eval_truth,
     leave_inference,
     match_arms,
@@ -48,6 +49,7 @@ WORKLOADS = {
         deep_bot_leaf_eval.SPEC,
         leaf_eval_truth.SPEC,
         deep_bot.SPEC,
+        leaf_bot_generation.SPEC,
     )
 }
 

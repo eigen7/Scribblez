@@ -68,6 +68,7 @@ END_PARAMS = {
     "deep_bot_leaf_eval": {"max_rows"},
     "leaf_eval_truth": set(),
     "deep_bot": {"max_generations"},
+    "leaf_bot_generation": {"max_generations"},
 }
 
 
