@@ -1,7 +1,9 @@
-"""Data for deep_bot_leaf_eval's Positions tab: one known position at a time
-under one generation's analysis (deep_bot_leaf_eval/positions.py), which the
-match slot delivered after that generation's match. Registered with the rest
-of the data plane by api.make_app(). The known positions themselves come from
+"""Data for the Positions tab of deep_bot_leaf_eval and of
+leaf_bot_generation: one known position at a time under one generation's
+analysis (deep_bot_leaf_eval/positions.py), which a match slot delivered
+with that generation's match against HastyBot. A leaf_bot_generation tag's
+"generation" is a release. Registered with the rest of the data plane by
+api.make_app(). The known positions themselves come from
 /api/deep_bot/positions.
 
 Routes (all take task + tag):
@@ -30,6 +32,7 @@ import tornado.web
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
 from scribblez.deep_bot import known_positions
+from scribblez.deep_bot.matches import HASTYBOT
 from scribblez.deep_bot.position_view import board_view, move_json
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.deep_bot_leaf_eval import truth
@@ -92,12 +95,17 @@ def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dic
 
 
 def _matches(paths: TagPaths) -> dict[int, dict]:
-    """The tag's match results by generation; none before its first."""
+    """The tag's match results against HastyBot by generation, from
+    deep_bot_leaf_eval's match eval or by release from leaf_bot_generation's
+    release matches; none before its first."""
     if not paths.dashboard_db.is_file():
         return {}
     conn = db.connect(paths.dashboard_db)
     try:
-        return {r["epoch"]: r for r in db.read_all_match_eval(conn)}
+        by_release = {
+            r["release"]: r for r in db.read_release_matches(conn) if r["opponent"] == HASTYBOT
+        }
+        return by_release | {r["epoch"]: r for r in db.read_all_match_eval(conn)}
     finally:
         conn.close()
 
@@ -112,7 +120,7 @@ def generation_list(paths: TagPaths) -> list[dict]:
         out.append(
             {
                 "generation": g,
-                "rows_trained": m["positions"] if m else None,
+                "rows_trained": m.get("positions") if m else None,
                 "score": m["score"] if m else None,
                 "ci_half_width": m["ci_half_width"] if m else None,
             }
