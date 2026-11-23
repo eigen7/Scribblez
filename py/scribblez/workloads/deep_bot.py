@@ -34,7 +34,7 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez import params as params_mod
-from scribblez.deep_bot import LEAF, LEAVE, kept_checkpoints, matches, release, seeds
+from scribblez.deep_bot import KINDS, LEAF, LEAVE, kept_checkpoints, matches, release, seeds
 from scribblez.generational import lifecycle
 from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leave_inference import forgone
@@ -164,6 +164,11 @@ def newest_release(ctx: WorkerContext) -> int:
     return await_push(ctx, functools.partial(release.newest, paths), why)
 
 
+def release_files(paths: TagPaths, params) -> list[str]:
+    """The generate role's RoleSpec.tag_files: the newest release's files."""
+    return release.DEEP_BOT.newest_files(paths)
+
+
 def release_cycle(ctx: WorkerContext) -> Cycle:
     """A cycle on the newest release the worker holds."""
     paths, params = ctx.tag_paths(), ctx.params
@@ -192,8 +197,9 @@ def run_generate(ctx: WorkerContext) -> int:
 
 def finalize(spec, paths: TagPaths, params: DeepBotParams) -> DeepBotParams:
     """Copy the seeds under the new tag, failing here, where the operator
-    sees it, if a seed tag has no checkpoint."""
-    seeds.install(paths, params)
+    sees it and before anything is copied, if a seed tag has no
+    checkpoint."""
+    seeds.install(paths, {kind: seeds.source(params, kind, paths.mount_root) for kind in KINDS})
     return params
 
 
@@ -226,7 +232,7 @@ SPEC = WorkloadSpec(
             title="Generator (GPU)",
             runner="scribblez.workloads.deep_bot:run_generate",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            tag_files="scribblez.deep_bot.release:newest_files",
+            tag_files="scribblez.workloads.deep_bot:release_files",
             gpu=True,
             stats=GENERATOR_STATS,
         ),

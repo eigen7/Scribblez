@@ -8,7 +8,7 @@ this runner needs only its inbox and runs on a machine with neither the
 database nor the tag's releases:
 
     data/match_inbox/<worker_id>/
-        releases/release_<k>/...       a release to play (release.files)
+        releases/release_<k>/...       a release to play (release.Layout.files)
         releases/release_000000/...    the opponent, kept
         known-positions/...            the known positions, kept
         assigned/release_<k>.json      play release k

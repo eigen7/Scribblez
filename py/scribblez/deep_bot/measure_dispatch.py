@@ -109,7 +109,7 @@ def _clear_spent(slot, inbox: str, held: list[str], done: set[int]) -> list[str]
             left.append(name)
             continue
         slot.remove(f"{inbox}/{measure.ASSIGNED_DIR}/{name}")
-        for rel in release.files(number) if number > 0 else []:
+        for rel in release.DEEP_BOT.files(number) if number > 0 else []:
             slot.remove(f"{inbox}/{rel}")
     return left
 
@@ -126,7 +126,7 @@ def _put_known_positions(slot, inbox: str):
 
 def _put_release(paths: TagPaths, slot, inbox: str, number: int):
     """Give the slot release `number`, its manifest last."""
-    for rel in release.files(number):
+    for rel in release.DEEP_BOT.files(number):
         slot.put(paths.root / rel, f"{inbox}/{rel}")
 
 
@@ -142,7 +142,7 @@ def _assign(paths: TagPaths, conn, every: int, slot):
         return  # busy: an assignment unplayed, or its results still in transit
     # The positions and the opponent first; they stay for every assignment.
     _put_known_positions(slot, inbox)
-    if release.MANIFEST not in slot.list(f"{inbox}/{Path(release.files(0)[-1]).parent}"):
+    if release.MANIFEST not in slot.list(f"{inbox}/{Path(release.DEEP_BOT.files(0)[-1]).parent}"):
         _put_release(paths, slot, inbox, 0)
     if number > 0:
         _put_release(paths, slot, inbox, number)
