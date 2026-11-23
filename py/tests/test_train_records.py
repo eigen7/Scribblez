@@ -53,14 +53,16 @@ def _dump(conn) -> dict:
     """Every table's rows, with the write-time stamps (meta's, the control
     table's) left out: they are when the write happened, which the two paths
     cannot share."""
-    tables = [
-        r["name"]
-        for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {
+        r["name"]: r["sql"]
+        for r in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'")
         if r["name"] != "train_record"
-    ]
+    }
     out = {}
-    for t in tables:
-        rows = [dict(r) for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")]
+    for t, sql in tables.items():
+        # A WITHOUT ROWID table has no rowid; it scans in key order instead.
+        order = "" if "WITHOUT ROWID" in sql else " ORDER BY rowid"
+        rows = [dict(r) for r in conn.execute(f"SELECT * FROM {t}{order}")]
         for r in rows:
             for stamp in ("created_at", "updated_at"):
                 r.pop(stamp, None)

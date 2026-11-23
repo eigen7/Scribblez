@@ -15,7 +15,9 @@ Routes (all take task + tag):
   /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
                                        one move under every analyzed generation
 
-A delivered analysis never changes, so each is read once.
+A delivered analysis never changes, so each is read once: the slider's from
+its file, a history's from the tag's leaf_value table (dashboard/db.py), which
+a history request first brings up to date with the analyses delivered since.
 """
 
 import functools
@@ -39,8 +41,9 @@ from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
 SHOWN_VALUES = 25
 # The truth's best moves the table lists too.
 SHOWN_TRUTH = 10
-# A history's first request for a position reads every analysis, so it runs
-# off the IOLoop; one thread, as the caches are shared.
+# A history request first indexes the analyses delivered since the last, every
+# one on a tag's first request (~8 s for 127 generations), so it runs off the
+# IOLoop; one thread, so no two requests index the same generation.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
@@ -58,23 +61,34 @@ def _analysis(tag_key: tuple[str, str, str], generation: int) -> dict:
     return json.loads(path.read_text())
 
 
-# One position's values out of one generation's analysis, kept apart from
-# _analysis so a history's sweep over every generation does not evict the
-# slider's. A position's values over 80 generations are ~12 MB.
-@functools.lru_cache(maxsize=1024)
-def _position_values(tag_key: tuple[str, str, str], generation: int, position: str) -> dict:
-    path = TagPaths(*tag_key).data_dir / leaf_positions.rel(generation)
-    entry = json.loads(path.read_text())["positions"][position]
-    return {v["move"]: v["value"] for v in entry["values"]}
+def _values(paths: TagPaths, generation: int) -> list[tuple[str, str, float]]:
+    """Every (position, move, value) of one generation's analysis."""
+    doc = json.loads((paths.data_dir / leaf_positions.rel(generation)).read_text())
+    return [
+        (position, v["move"], v["value"])
+        for position, entry in doc["positions"].items()
+        for v in entry["values"]
+    ]
+
+
+def sync_values(paths: TagPaths, conn):
+    """Index into leaf_value every analysis it does not yet hold."""
+    held = db.read_leaf_value_generations(conn)
+    for g in analyzed_generations(paths):
+        if g not in held:
+            db.write_leaf_values(conn, g, _values(paths, g))
 
 
 def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dict]:
     """The leaf's value of `move` at `position` under each analyzed
     generation, ascending; null under one that did not value it."""
-    return [
-        {"generation": g, "value": _position_values(tag_key, g, position).get(move)}
-        for g in analyzed_generations(TagPaths(*tag_key))
-    ]
+    paths = TagPaths(*tag_key)
+    conn = db.connect(paths.dashboard_db)
+    try:
+        sync_values(paths, conn)
+        return db.read_leaf_value_history(conn, position, move)
+    finally:
+        conn.close()
 
 
 def _matches(paths: TagPaths) -> dict[int, dict]:

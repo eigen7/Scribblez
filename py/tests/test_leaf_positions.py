@@ -194,3 +194,15 @@ def test_a_moves_history_runs_over_every_analyzed_generation(tmp_path):
         {"generation": 20, "value": None},
         {"generation": 30, "value": 0.45},
     ]
+
+
+def test_a_history_takes_in_the_analyses_delivered_since_the_last(tmp_path):
+    paths = _tag(tmp_path)
+    _write_analysis(paths, 10, [{**_v("G11 TORI", 0.30, 1), "leaf_rank": 1}], "G11 TORI")
+    key = (paths.tag, paths.task, str(tmp_path))
+    assert api.history(key, "TORI", "G11 TORI") == [{"generation": 10, "value": 0.30}]
+    _write_analysis(paths, 20, [{**_v("G11 TORI", 0.40, 1), "leaf_rank": 1}], "G11 TORI")
+    assert api.history(key, "TORI", "G11 TORI") == [
+        {"generation": 10, "value": 0.30},
+        {"generation": 20, "value": 0.40},
+    ]
