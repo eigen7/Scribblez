@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getJSON, postJSON } from '../../lib/api';
 import BurnStrip from './BurnStrip';
 import PoolView, { enqueueTag } from './PoolView';
+import RunningStrip from './RunningStrip';
 import TaskView from './TaskView';
 import { fmtBytes, fmtCompact, StateText } from './ui';
 
@@ -562,6 +563,7 @@ export default function MasterApp() {
     }}>
       <div className="page-cap">
         <BurnStrip onOpen={openTask} />
+        <RunningStrip onOpen={openTask} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14 }}>
           <strong style={{ fontSize: 19 }}>Scribblez</strong>
           <label style={{ fontSize: 15 }}>

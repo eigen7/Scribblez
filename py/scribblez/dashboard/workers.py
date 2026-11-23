@@ -2087,6 +2087,23 @@ class WorkerManager:
             out.append(info)
         return out
 
+    def running_tags(self) -> list[dict]:
+        """Every tag, of any workload, with a slot whose worker_status state is
+        `running`, and how many of its slots run per role in the workload's
+        role order (roles with none left out). Read from what the reconcile
+        pass last observed, as worker_status is for a browser's poll."""
+        out = []
+        for spec, task in self.tasks.load_all():
+            states = self.worker_status(spec, task)
+            roles = [
+                {"role": r.name, "title": r.title, "running": n}
+                for r in spec.roles
+                if (n := sum(s["role"] == r.name and s["state"] == "running" for s in states))
+            ]
+            if roles:
+                out.append({"workload": spec.name, "tag": task.tag, "roles": roles})
+        return out
+
     def _show_removal(self, spec, task: tasks.TaskRecord, w: tasks.WorkerRecord, info: dict):
         """Mark slot `w`'s status `info` as removing while a removal of it is
         under way, with the step it is on and the megabytes a sweep has copied

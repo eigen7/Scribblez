@@ -61,6 +61,7 @@ class WriterRuleTest(tornado.testing.AsyncHTTPTestCase):
         self.get("/api/queue/plan?workload=position_eval&tag=t")
         self.get("/api/cloud/stop_all")
         self.get("/api/workload_tags?workload=position_eval")
+        assert self.get("/api/running_tags") == {"tags": []}  # the slot is paused
 
     def test_a_tag_whose_params_went_stale_still_reads(self):
         """A param removed from the schema after the tag was created (task.json
