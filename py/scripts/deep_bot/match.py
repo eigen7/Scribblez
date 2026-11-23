@@ -93,6 +93,7 @@ def main(argv=None) -> int:
             args.seed or params.match_seed,
             args.threads,
             Path(work),
+            keep_games=True,
         )
         matches.deliver(LocalSink(args.out or paths.root), record, slog, Path(work))
     print(matches.describe(record))

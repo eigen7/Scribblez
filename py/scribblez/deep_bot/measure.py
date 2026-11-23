@@ -95,7 +95,7 @@ def measure_release(ctx: WorkerContext, number: int, stats_rec: WorkerStats):
     for opponent in matches.opponents_of(number):
         specs = (agent_spec(ctx, number), opponent_spec(ctx, opponent))
         record, slog = matches.play(
-            number, opponent, specs, p.match_games, p.match_seed, ctx.threads, work
+            number, opponent, specs, p.match_games, p.match_seed, ctx.threads, work, keep_games=True
         )
         nbytes = matches.deliver(ctx.sink, record, slog, work)
         stats_rec.cycle_done(

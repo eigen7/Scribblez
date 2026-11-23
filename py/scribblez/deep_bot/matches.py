@@ -95,13 +95,16 @@ def play(
     seed: int,
     threads: int,
     work: Path,
-) -> tuple[dict, Path]:
+    keep_games: bool,
+) -> tuple[dict, Path | None]:
     """A match of `games` mirrored games from `seed` between `specs`, the
-    release's --player spec and the opponent's: its record and its .slog,
-    both under `work`."""
+    release's --player spec and the opponent's: its record and, if
+    `keep_games`, its .slog, both under `work`. A kept match fits one .slog,
+    play_game's 1000 games."""
     results = work / "results.jsonl"
-    slog_dir = work / "games"
-    shutil.rmtree(slog_dir, ignore_errors=True)
+    slog_dir = work / "games" if keep_games else None
+    if slog_dir is not None:
+        shutil.rmtree(slog_dir, ignore_errors=True)
     t0 = time.monotonic()
     harness.play_round(
         *specs,
@@ -112,17 +115,21 @@ def play(
         slog_dir=slog_dir,
     )
     rows = [json.loads(line) for line in results.read_text().splitlines() if line.strip()]
-    (slog,) = slog_dir.glob("*.slog")  # play_game writes up to 1000 games a file
-    return result_record(release, opponent, rows, time.monotonic() - t0), slog
+    record = result_record(release, opponent, rows, time.monotonic() - t0)
+    if slog_dir is None:
+        return record, None
+    (slog,) = slog_dir.glob("*.slog")
+    return record, slog
 
 
-def deliver(sink, record: dict, slog: Path, work: Path) -> int:
-    """Hand a finished match to the tag behind `sink`: its games, then the
-    rows that announce them. Returns the bytes delivered."""
+def deliver(sink, record: dict, slog: Path | None, work: Path) -> int:
+    """Hand a finished match to the tag behind `sink`: its games if they
+    were kept, then the rows that announce them. Returns the bytes
+    delivered."""
     number, opponent = record["release"], record["opponent"]
     rows = work / "result.json"
     rows.write_text(json.dumps(record) + "\n")
-    nbytes = sink.deliver(slog, games_rel(number, opponent))
+    nbytes = 0 if slog is None else sink.deliver(slog, games_rel(number, opponent))
     return nbytes + sink.deliver(rows, result_rel(number, opponent))
 
 
