@@ -19,7 +19,7 @@ Routes (all take task + tag):
                                        one move under every analyzed generation
 
 An analysis is read again only when its file changes, which happens when the
-positions backfill (deep_bot_leaf_eval/backfill.py) adds the positions the
+positions backfill (workloads/positions_backfill.py) adds the positions the
 manifest gained: the slider's from its file, a history's from the tag's
 leaf_value table (dashboard/db.py), which a history request first brings up
 to date with the analyses delivered or rewritten since.

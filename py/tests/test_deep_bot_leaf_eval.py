@@ -280,7 +280,7 @@ def test_resume_gate_refuses_another_format_or_leave_values(tmp_path, key):
 
 def test_workload_registration_and_hidden_leaves_generation(monkeypatch):
     spec = workloads.get(TASK)
-    assert {r.name for r in spec.roles} == {"generate", "train", "match_eval"}
+    assert {r.name for r in spec.roles} == {"generate", "train", "match_eval", "backfill"}
     seen = {}
 
     def fake_generate(ctx, player_spec, face_up_leaves, random_opening_mean):

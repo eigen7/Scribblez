@@ -17,7 +17,9 @@ opponent, its opponent leaves drawn from a leave inference model pinned at
 task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
 After each match the slot analyzes the known positions under the same export
 (deep_bot_leaf_eval/positions.py), which the Positions tab shows, over more
-opponent leaves (`analysis_opp_leaves`) than the matches can afford.
+opponent leaves (`analysis_opp_leaves`) than the matches can afford. The
+backfill role adds the positions the manifest gains later to the analyses
+already made (workloads/positions_backfill.py).
 """
 
 from dataclasses import dataclass, replace
@@ -33,7 +35,7 @@ from scribblez.match_eval import runner as match_runner
 from scribblez.params import param
 from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
-from scribblez.workloads import known_position_inputs
+from scribblez.workloads import known_position_inputs, positions_backfill
 from scribblez.workloads.base import (
     RoleSpec,
     SlotPlan,
@@ -200,7 +202,8 @@ def gpu_need(params, role: str) -> float | None:
     """The WorkloadSpec.gpu_need hook: GiB one slot of `role` needs."""
     if role == "generate":
         return 0.0
-    if role == "match_eval":
+    # The backfill runs the match slot's analysis alone.
+    if role in ("match_eval", positions_backfill.ROLE):
         return (
             _MATCH_EVAL_MEASURED_GB[params.trunk] + LEAF_TRT_WORKSPACE_GB + TRAINER_GPU_HEADROOM_GB
         )
@@ -293,6 +296,16 @@ def run_match(ctx: WorkerContext) -> int:
     return match_runner.run(ctx, leafbot_player, analyze_positions)
 
 
+def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
+    """The positions_backfill.Exports of generation `gen`: its export, and the
+    matches' pinned leave inference model."""
+    return paths.onnx_path(gen), leave_model_path(params, paths.mount_root)
+
+
+def run_backfill(ctx: WorkerContext) -> int:
+    return positions_backfill.run(ctx, backfill_exports)
+
+
 def run_generate(ctx: WorkerContext) -> int:
     """Hidden-leaves HastyBot self-play without random openings."""
     return generate(ctx, hasty_spec(ctx.params), face_up_leaves=False, random_opening_mean=0.0)
@@ -330,6 +343,15 @@ SPEC = WorkloadSpec(
             kinds=("local", "ssh"),
             gpu=True,
             stats=StatsSpec(unit="games", phases={"match_s": "match play"}),
+        ),
+        RoleSpec(
+            name=positions_backfill.ROLE,
+            title="Positions backfill (GPU)",
+            runner="scribblez.workloads.deep_bot_leaf_eval:run_backfill",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=positions_backfill.STATS,
         ),
     ),
     scheduler=TICK_FOR_TASK,
