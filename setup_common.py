@@ -24,10 +24,13 @@ from subtrees.devenv_utils import (
 REPO_ROOT = Path(__file__).resolve().parent
 
 # Lexica we know how to fetch. The KWG files are not in this repo; they are
-# downloaded at setup time from the public liwords URL into the user's mount
-# directory. We never redistribute them ourselves.
+# downloaded at setup time from the public liwords repo into the user's mount
+# directory. We never redistribute them ourselves. The URL is pinned to the
+# last liwords commit that has them: liwords deleted wasm/2024/ on 2026-11-19
+# (3f606be4b7, "Remove the 2024 analyzer files"), and a moving branch would
+# break again or change the files under us.
 LIWORDS_KWG_URL_TEMPLATE = (
-    "https://raw.githubusercontent.com/woogles-io/liwords/master/"
+    "https://raw.githubusercontent.com/woogles-io/liwords/9315e18a78d3854debed8b90d1c3618abd91ee08/"
     "liwords-ui/public/wasm/2024/{name}.kwg"
 )
 

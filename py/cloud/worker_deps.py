@@ -34,7 +34,7 @@ DEFAULT_LEXICON = "NWL23"
 # Duplicates setup_common.LIWORDS_KWG_URL_TEMPLATE: setup_common lives at the
 # repo root, outside the py/ tree that bundles ship.
 LIWORDS_KWG_URL_TEMPLATE = (
-    "https://raw.githubusercontent.com/woogles-io/liwords/master/"
+    "https://raw.githubusercontent.com/woogles-io/liwords/9315e18a78d3854debed8b90d1c3618abd91ee08/"
     "liwords-ui/public/wasm/2024/{name}.kwg"
 )
 
