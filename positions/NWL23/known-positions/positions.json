@@ -14,6 +14,20 @@
     "note": "Mike Johnson's racks before the position are adjusted so that the record replays; the position is the record's."
   },
   {
+    "id": "YETI",
+    "title": "unblockable S bingo setup",
+    "gcg": "richards-allee-yeti.gcg",
+    "source": "docs/analysis/richards-johnson-exchange/README.md",
+    "origin": "Richards vs. Johnson, 2025 World Cup, round 11, move 23, had Nigel Richards played B6 ALLEE at move 22 instead of exchanging",
+    "reference": [
+      "8K ..TI"
+    ],
+    "reference_equity_rank": 42,
+    "evidence": "David's reading: (YE)TI keeps an S for YETIS through the triple word square at O8, a lane that cannot be blocked; not simmed",
+    "static_equity_best": "A5 IDEA",
+    "note": "Hypothetical: the record to move 21, then B6 ALLEE and Mike Johnson to move with ADEIIST. His rack at move 21 is adjusted so that the racks follow from one another."
+  },
+  {
     "id": "ACETA",
     "title": "double Z setup",
     "gcg": "aceta.gcg",
@@ -39,20 +53,6 @@
     "reference_equity_rank": 46,
     "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 17.9 +- 0.4 points of win %",
     "static_equity_best": "F6 JILTE.",
-    "note": ""
-  },
-  {
-    "id": "A(I)M",
-    "title": "try to bingo out",
-    "gcg": "aim-fish.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#aim-the-same-fish",
-    "origin": "hidden_blind_spots v1 1792939480730359398-local-0-g4-turn18",
-    "reference": [
-      "K10 A.M"
-    ],
-    "reference_equity_rank": 594,
-    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 9.2 +- 0.7 points of win %",
-    "static_equity_best": "L4 POsTGAM.",
     "note": ""
   },
   {
@@ -196,17 +196,77 @@
     "note": ""
   },
   {
-    "id": "exch-all",
-    "title": "poisoning opponent draw",
-    "gcg": "exchange-seven.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#exchange-seven-with-seven-in-the-bag",
-    "origin": "hidden_blind_spots v1 1792940249407138500-local-0-g161-turn17",
+    "id": "AVERT",
+    "title": "block bingo lanes",
+    "gcg": "avert.gcg",
+    "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
+    "origin": "hidden_blind_spots v1 1792934845876721137-ssh-0-g153-turn21",
     "reference": [
-      "-ADFGQTV"
+      "C10 AVERT"
     ],
-    "reference_equity_rank": 20,
-    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 26.3 +- 0.7 points of win %",
-    "static_equity_best": "11C D.V",
+    "reference_equity_rank": 77,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 40.5 +- 0.9 points of win %",
+    "static_equity_best": "O8 ...E",
+    "note": ""
+  },
+  {
+    "id": "DINER",
+    "title": "block TW lane",
+    "gcg": "diner.gcg",
+    "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
+    "origin": "hidden_blind_spots v1 1792935012079129504-local-0-g37-turn19",
+    "reference": [
+      "J11 DINER",
+      "J12 IRED",
+      "14F CIN.ER.D",
+      "14G RI.",
+      "J13 REI"
+    ],
+    "reference_equity_rank": 37,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 13.3 +- 0.5 points of win %; the other four references, which also block the S hook at I15 (LAKEBEDS) into the triple word square at H15, sim the same",
+    "static_equity_best": "3I C.NID",
+    "note": "reference_equity_rank is J11 DINER's; the others rank 40, 66, 135 and 143."
+  },
+  {
+    "id": "TR(E)Y",
+    "title": "consonant-heavy bag + few bingo lanes changes leave valuations",
+    "gcg": "trey.gcg",
+    "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
+    "origin": "hidden_blind_spots v1 1792935012079129504-local-0-g99-turn17",
+    "reference": [
+      "M10 TR.Y"
+    ],
+    "reference_equity_rank": 11,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 10.5 +- 0.7 points of win %",
+    "static_equity_best": "14F Y.",
+    "note": ""
+  },
+  {
+    "id": "AN(N)EAL",
+    "title": "super-valuable bag (2 blanks, S, Z) justifies maximizing tile turnover",
+    "gcg": "anneal.gcg",
+    "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
+    "origin": "hidden_blind_spots v1 1792935066706148359-local-0-g61-turn18",
+    "reference": [
+      "11B AN.EAL"
+    ],
+    "reference_equity_rank": 33,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 11.5 +- 0.7 points of win %",
+    "static_equity_best": "C9 AA",
+    "note": ""
+  },
+  {
+    "id": "H(IN)S",
+    "title": "outbingo setup",
+    "gcg": "hins.gcg",
+    "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
+    "origin": "hidden_blind_spots v1 1792935308369178278-local-0-g101-turn20",
+    "reference": [
+      "J3 H..S"
+    ],
+    "reference_equity_rank": 107,
+    "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 5.5 +- 0.7 points of win %",
+    "static_equity_best": "6E SHE.LS",
     "note": ""
   }
 ]

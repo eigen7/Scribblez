@@ -1,0 +1,27 @@
+#character-encoding UTF-8
+#lexicon NWL23
+#player1 hasty0 hasty0
+#player2 hasty1 hasty1
+#note hidden-leaves blind spot: turn 21; hasty0 to move with AEEIRTV
+#note C10 AVERT (#77) beats the hasty top 10's best, 6D TI (#7), by 40.5 +- 0.9 points of win%
+>hasty0: AAFLOQ? H5 FOAL +14 14
+>hasty1: EHINPUV I7 HIVE +29 29
+>hasty0: AAIQSU? 5D AQUA.ItS +126 140
+>hasty1: DENPTTU H10 PUTTED +34 63
+>hasty0: ABCGKNO 4A BOCK +42 182
+>hasty1: EHINRST B3 H.RNIEST +65 128
+>hasty0: AGLNWXY J10 WANLY +43 225
+>hasty1: ILLOOUY A8 YOU +37 165
+>hasty0: DEGINRX 4K INDEX +44 269
+>hasty1: EILLOOS O1 ILE. +33 198
+>hasty0: AAGIRTW 2B TRAGI +40 309
+>hasty1: ALNOOSS 1F SALOONS +76 274
+>hasty0: ABCMTUW N3 W.BCAM +26 335
+>hasty1: ADJNNTZ O8 ADZ +51 325
+>hasty0: AEEIMTU C1 U.I. +22 357
+>hasty1: GJNNRRT G4 R.J +19 344
+>hasty0: AEEEIMT 2I EME +25 382
+>hasty1: GNNORRT M7 TORN +14 358
+>hasty0: AEEIRTV 3M E.. +18 400
+>hasty1: DFGNPR? 8G F..NG +9 367
+>hasty0: AEEIRTV O8 ...E +14 414
