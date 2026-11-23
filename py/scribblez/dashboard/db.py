@@ -26,7 +26,7 @@ Tables:
   train_record    the ingest ledger: which trainer records have been written
   leaf_value      deep_bot_leaf_eval's value of each move at each known
                   position, per analyzed generation, for a move's history
-  leaf_value_generation  the analyses leaf_value holds
+  leaf_value_analysis  the analyses leaf_value holds, as their files were
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved).
 """
@@ -137,9 +137,13 @@ CREATE TABLE IF NOT EXISTS train_record (
   mtime_ns INTEGER,             -- the file as last ingested: its mtime ...
   size     INTEGER              -- ... and size, so a rewrite is ingested again
 );
-CREATE TABLE IF NOT EXISTS leaf_value_generation (
-  generation INTEGER PRIMARY KEY -- an analysis whose values leaf_value holds
+CREATE TABLE IF NOT EXISTS leaf_value_analysis (
+  generation INTEGER PRIMARY KEY, -- an analysis whose values leaf_value holds
+  mtime_ns   INTEGER,             -- its file as last indexed: its mtime ...
+  size       INTEGER              -- ... and size, so a rewrite is indexed again
 );
+-- Superseded by leaf_value_analysis, which also records the file indexed.
+DROP TABLE IF EXISTS leaf_value_generation;
 -- Keyed generation first, so each generation's rows append. Keyed by
 -- (position, move) first, every generation's rows land beside the earlier
 -- ones' and each generation rewrites the whole table; a history instead looks
@@ -354,25 +358,33 @@ def write_record_ledger(conn: sqlite3.Connection, name: str, mtime_ns: int, size
     conn.commit()
 
 
-def read_leaf_value_generations(conn: sqlite3.Connection) -> set[int]:
-    """The analyzed generations whose values leaf_value holds."""
-    return {r[0] for r in conn.execute("SELECT generation FROM leaf_value_generation")}
+def read_leaf_value_stamps(conn: sqlite3.Connection) -> dict[int, tuple[int, int]]:
+    """The analyzed generations whose values leaf_value holds, each with its
+    file's (mtime_ns, size) as indexed."""
+    rows = conn.execute("SELECT generation, mtime_ns, size FROM leaf_value_analysis")
+    return {r[0]: (r[1], r[2]) for r in rows}
 
 
 def write_leaf_values(
-    conn: sqlite3.Connection, generation: int, values: list[tuple[str, str, float]]
+    conn: sqlite3.Connection,
+    generation: int,
+    stamp: tuple[int, int],
+    values: list[tuple[str, str, float]],
 ):
-    """Store one generation's analysis, its (position, move, value) triples,
-    and mark the generation held, in one transaction: a sync cut short leaves
-    no generation half held."""
+    """Store one generation's analysis, its (position, move, value) triples
+    in place of any held before, and its file's `stamp`, in one transaction:
+    a sync cut short leaves no generation half held."""
     with conn:
+        conn.execute("DELETE FROM leaf_value WHERE generation = ?", (generation,))
         conn.executemany(
             "INSERT OR REPLACE INTO leaf_value (generation, position, move, value) "
             "VALUES (?, ?, ?, ?)",
             ((generation, *v) for v in values),
         )
         conn.execute(
-            "INSERT OR IGNORE INTO leaf_value_generation (generation) VALUES (?)", (generation,)
+            "INSERT OR REPLACE INTO leaf_value_analysis (generation, mtime_ns, size) "
+            "VALUES (?, ?, ?)",
+            (generation, *stamp),
         )
 
 
@@ -382,7 +394,7 @@ def read_leaf_value_history(conn: sqlite3.Connection, position: str, move: str) 
     return [
         dict(r)
         for r in conn.execute(
-            "SELECT g.generation, v.value FROM leaf_value_generation g "
+            "SELECT g.generation, v.value FROM leaf_value_analysis g "
             "LEFT JOIN leaf_value v "
             "ON v.generation = g.generation AND v.position = ? AND v.move = ? "
             "ORDER BY g.generation",

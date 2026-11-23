@@ -17,6 +17,7 @@ from pathlib import Path
 
 from scribblez.deep_bot import known_positions
 from scribblez.deep_bot.known_positions import Position
+from scribblez.paths import TagPaths
 
 # The data/ subdirectory the analyses are delivered into.
 POSITIONS_DIR = "leaf_positions"
@@ -38,6 +39,12 @@ def rel(generation: int) -> str:
 def generation_of(path: Path) -> int:
     """The generation an analysis file is of."""
     return int(path.stem.removeprefix("gen_"))
+
+
+def analyzed(paths: TagPaths) -> list[int]:
+    """The generations with a delivered analysis, ascending."""
+    folder = paths.data_dir / POSITIONS_DIR
+    return sorted(generation_of(f) for f in folder.glob("gen_*.json"))
 
 
 def player_spec(

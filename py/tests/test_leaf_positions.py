@@ -238,3 +238,25 @@ def test_a_history_takes_in_the_analyses_delivered_since_the_last(tmp_path):
         {"generation": 10, "value": 0.30},
         {"generation": 20, "value": 0.40},
     ]
+
+
+def test_a_history_takes_in_a_rewritten_analysis(tmp_path):
+    paths = _tag(tmp_path)
+    _write_analysis(paths, 10, [{**_v("G11 TORI", 0.30, 1), "leaf_rank": 1}], "G11 TORI")
+    key = (paths.tag, paths.task, str(tmp_path))
+    assert api.history(key, "TORI", "G11 TORI") == [{"generation": 10, "value": 0.30}]
+    # As the positions backfill rewrites it: the move's value is replaced, and
+    # a move the rewrite drops no longer has one.
+    _write_analysis(paths, 10, [{**_v("8H ZZZ", 0.25, 1), "leaf_rank": 1}], "8H ZZZ")
+    assert api.history(key, "TORI", "G11 TORI") == [{"generation": 10, "value": None}]
+    assert api.history(key, "TORI", "8H ZZZ") == [{"generation": 10, "value": 0.25}]
+
+
+def test_a_position_is_read_from_its_analysis_as_rewritten(tmp_path):
+    paths = _tag(tmp_path)
+    key = (paths.tag, paths.task, str(tmp_path))
+    index = [p.id for p in known_positions.load()].index("TORI")
+    _write_analysis(paths, 20, [], "15D .ROTIC")
+    assert api.position_payload(key, 20, index)["pick"]["move"] == "15D .ROTIC"
+    _write_analysis(paths, 20, [], "G11 TORI")
+    assert api.position_payload(key, 20, index)["pick"]["move"] == "G11 TORI"
