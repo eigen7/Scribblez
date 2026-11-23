@@ -18,14 +18,17 @@ Routes (all take task + tag):
   /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
                                        one move under every analyzed generation
 
-A delivered analysis never changes, so each is read once: the slider's from
-its file, a history's from the tag's leaf_value table (dashboard/db.py), which
-a history request first brings up to date with the analyses delivered since.
+An analysis is read again only when its file changes, which happens when the
+positions backfill (workloads/positions_backfill.py) adds the positions the
+manifest gained: the slider's from its file, a history's from the tag's
+leaf_value table (dashboard/db.py), which a history request first brings up
+to date with the analyses delivered or rewritten since.
 """
 
 import functools
 import json
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import tornado.ioloop
 import tornado.web
@@ -45,29 +48,33 @@ from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
 SHOWN_VALUES = 25
 # The hasty rollouts' best moves the table lists too.
 SHOWN_ROLLOUTS = 10
-# A history request first indexes the analyses delivered since the last, every
+# A history request first indexes the analyses changed since the last, every
 # one on a tag's first request (~8 s for 127 generations), so it runs off the
 # IOLoop; one thread, so no two requests index the same generation.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 
 
-def analyzed_generations(paths: TagPaths) -> list[int]:
-    """The generations with a delivered analysis, ascending."""
-    folder = paths.data_dir / leaf_positions.POSITIONS_DIR
-    return sorted(leaf_positions.generation_of(f) for f in folder.glob("gen_*.json"))
+def _stamp(path: Path) -> tuple[int, int]:
+    """A file's (mtime_ns, size), which a rewrite changes."""
+    st = path.stat()
+    return st.st_mtime_ns, st.st_size
 
 
-# Keyed by the tag's (tag, task, mount_root): TagPaths hashes by identity, and
-# every request makes its own. A missing file raises, which is not cached.
-@functools.lru_cache(maxsize=32)
 def _analysis(tag_key: tuple[str, str, str], generation: int) -> dict:
     path = TagPaths(*tag_key).data_dir / leaf_positions.rel(generation)
+    return _read_analysis(path, _stamp(path))
+
+
+# Keyed by the file's stamp too, so a rewritten analysis is read afresh. A
+# missing file raises, which is not cached.
+@functools.lru_cache(maxsize=32)
+def _read_analysis(path: Path, stamp: tuple[int, int]) -> dict:
     return json.loads(path.read_text())
 
 
-def _values(paths: TagPaths, generation: int) -> list[tuple[str, str, float]]:
-    """Every (position, move, value) of one generation's analysis."""
-    doc = json.loads((paths.data_dir / leaf_positions.rel(generation)).read_text())
+def _values(path: Path) -> list[tuple[str, str, float]]:
+    """Every (position, move, value) of the analysis at `path`."""
+    doc = json.loads(path.read_text())
     return [
         (position, v["move"], v["value"])
         for position, entry in doc["positions"].items()
@@ -76,11 +83,15 @@ def _values(paths: TagPaths, generation: int) -> list[tuple[str, str, float]]:
 
 
 def sync_values(paths: TagPaths, conn):
-    """Index into leaf_value every analysis it does not yet hold."""
-    held = db.read_leaf_value_generations(conn)
-    for g in analyzed_generations(paths):
-        if g not in held:
-            db.write_leaf_values(conn, g, _values(paths, g))
+    """Index into leaf_value every analysis it does not hold as its file now
+    is. The stamp is taken before the read, so a rewrite between them is
+    indexed on the next sync."""
+    held = db.read_leaf_value_stamps(conn)
+    for g in leaf_positions.analyzed(paths):
+        path = paths.data_dir / leaf_positions.rel(g)
+        stamp = _stamp(path)
+        if held.get(g) != stamp:
+            db.write_leaf_values(conn, g, stamp, _values(path))
 
 
 def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dict]:
@@ -116,7 +127,7 @@ def generation_list(paths: TagPaths) -> list[dict]:
     its match row) and its match score, when the match is recorded."""
     matches = _matches(paths)
     out = []
-    for g in analyzed_generations(paths):
+    for g in leaf_positions.analyzed(paths):
         m = matches.get(g)
         out.append(
             {
@@ -246,7 +257,7 @@ class PositionHandler(_Base):
     defaults to the newest."""
 
     def get(self):
-        analyzed = analyzed_generations(TagPaths(*self.tag_key()))
+        analyzed = leaf_positions.analyzed(TagPaths(*self.tag_key()))
         arg = self.get_query_argument("generation", "latest")
         generation = (analyzed[-1] if analyzed else None) if arg in ("", "latest") else int(arg)
         if generation not in analyzed:

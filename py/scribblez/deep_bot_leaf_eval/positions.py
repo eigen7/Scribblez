@@ -9,7 +9,9 @@ would play with that many draws, which a match's might not.
 
 The match slot computes it after each match (workloads/deep_bot_leaf_eval.py)
 and delivers it as data/leaf_positions/gen_NNNNNN.json, apart from the match
-results the controller ingests.
+results the controller ingests. A position the manifest gains later is added
+to the analyses already delivered by the positions backfill
+(workloads/positions_backfill.py), which rewrites them.
 """
 
 import json
@@ -17,6 +19,7 @@ from pathlib import Path
 
 from scribblez.deep_bot import known_positions
 from scribblez.deep_bot.known_positions import Position
+from scribblez.paths import TagPaths
 
 # The data/ subdirectory the analyses are delivered into.
 POSITIONS_DIR = "leaf_positions"
@@ -38,6 +41,12 @@ def rel(generation: int) -> str:
 def generation_of(path: Path) -> int:
     """The generation an analysis file is of."""
     return int(path.stem.removeprefix("gen_"))
+
+
+def analyzed(paths: TagPaths) -> list[int]:
+    """The generations with a delivered analysis, ascending."""
+    folder = paths.data_dir / POSITIONS_DIR
+    return sorted(generation_of(f) for f in folder.glob("gen_*.json"))
 
 
 def player_spec(
@@ -94,6 +103,25 @@ def analyze(
             p.id: entry(p, r, candidates) for p, r in zip(positions, records, strict=True)
         },
     }
+
+
+def read(paths: TagPaths, generation: int) -> dict:
+    """Generation `generation`'s delivered analysis."""
+    return json.loads((paths.data_dir / rel(generation)).read_text())
+
+
+def missing(doc: dict, positions: list[Position]) -> list[Position]:
+    """The positions an analysis lacks: those the manifest gained since."""
+    return [p for p in positions if p.id not in doc["positions"]]
+
+
+def extend(
+    doc: dict, positions: list[Position], model: Path, leave: Path, work: Path, threads: int
+) -> dict:
+    """Analysis `doc` with `positions` analyzed too, under the same opponent
+    leaves and candidates as the rest of it, by its `model` and `leave`."""
+    added = analyze(positions, model, leave, doc["opp_leaves"], doc["candidates"], work, threads)
+    return {**doc, "positions": {**doc["positions"], **added["positions"]}}
 
 
 def write(doc: dict, path: Path):

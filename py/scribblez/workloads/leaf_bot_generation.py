@@ -19,10 +19,12 @@ trains both models on it, and publishes them together as the next release
 The measure role's slots, any number of them, play each due release as
 LeafBot against HastyBot and against release 0, and analyze the known
 positions under it for the Positions tab, one match to a slot at a time
-(scribblez/leaf_bot_generation/measure_dispatch.py).
+(scribblez/leaf_bot_generation/measure_dispatch.py). The backfill role adds
+the positions the manifest gains later to the analyses already made
+(workloads/positions_backfill.py).
 
-Every role runs on the controller's machine or on one reached over ssh, as
-deep_bot's do.
+Every role but the backfill runs on the controller's machine or on one
+reached over ssh, as deep_bot's do.
 """
 
 import functools
@@ -37,7 +39,7 @@ from scribblez.generational.scheduler import TICK_FOR_TASK
 from scribblez.leaf_bot_generation import KINDS, LAYOUT, WORKLOAD
 from scribblez.params import ParamsError, param
 from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
-from scribblez.workloads import known_position_inputs
+from scribblez.workloads import known_position_inputs, positions_backfill
 from scribblez.workloads.base import (
     DeliveredSet,
     RoleSpec,
@@ -197,6 +199,16 @@ def finalize(spec, paths: TagPaths, params: LeafBotGenerationParams) -> LeafBotG
     return params
 
 
+def backfill_exports(paths: TagPaths, params, number: int) -> tuple[Path, Path]:
+    """The positions_backfill.Exports of release `number`: its leaf network and leave
+    inference model, which its analysis drew the opponent's leaves from."""
+    return release.export_path(paths, number, LEAF), release.export_path(paths, number, LEAVE)
+
+
+def run_backfill(ctx: WorkerContext) -> int:
+    return positions_backfill.run(ctx, backfill_exports)
+
+
 def inputs(params, mount_root: Path) -> dict[str, Path]:
     """The measure role's out-of-tag inputs: the known positions."""
     return known_position_inputs.inputs()
@@ -247,6 +259,15 @@ SPEC = WorkloadSpec(
             stats=StatsSpec(
                 unit="games", phases={"match_s": "match", "positions_s": "known positions"}
             ),
+        ),
+        RoleSpec(
+            name=positions_backfill.ROLE,
+            title="Positions backfill (GPU)",
+            runner="scribblez.workloads.leaf_bot_generation:run_backfill",
+            singleton=True,
+            kinds=("local",),
+            gpu=True,
+            stats=positions_backfill.STATS,
         ),
     ),
     scheduler=TICK_FOR_TASK,
