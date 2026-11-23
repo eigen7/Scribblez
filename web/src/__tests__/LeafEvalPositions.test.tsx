@@ -104,15 +104,15 @@ describe('LeafEvalPositions', () => {
     await waitFor(() => expect(screen.getByText('not valued')).toBeTruthy());
   });
 
-  const withTruth = (sameBelief: boolean) => {
+  const withRollouts = (sameBelief: boolean) => {
     const p = payload(20);
     return {
       ...p,
       values: [
-        { ...p.values[0], truth: 0.3, truth_rank: 2 },
-        { ...p.values[1], truth: 0.5, truth_rank: 1 },
+        { ...p.values[0], rollout: 0.3, rollout_rank: 2 },
+        { ...p.values[1], rollout: 0.5, rollout_rank: 1 },
       ],
-      truth: {
+      rollouts: {
         tag: 't1',
         run: { leave_inference: { tag: 'li', generation: 292 }, playouts: 1024, candidates: 600 },
         same_belief: sameBelief,
@@ -120,28 +120,28 @@ describe('LeafEvalPositions', () => {
       },
     };
   };
-  const serveTruth = (sameBelief: boolean) =>
+  const serveRollouts = (sameBelief: boolean) =>
     vi.stubGlobal('fetch', vi.fn((url: string) =>
       url.startsWith('/api/deep_bot_leaf_eval/position?')
-        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(withTruth(sameBelief)) } as Response)
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(withRollouts(sameBelief)) } as Response)
         : fakeFetch(url),
     ));
 
-  it("lists each move's truth beside its leaf eval and charts it", async () => {
-    serveTruth(true);
+  it("lists each move's hasty rollouts beside its leaf eval and charts them", async () => {
+    serveRollouts(true);
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
-    await waitFor(() => expect(screen.getByText('leaf #53 · 20.2% · truth #1 · 50.0%')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('leaf #53 · 20.2% · rollouts #1 · 50.0%')).toBeTruthy());
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(['#', 'move', 'points', 'leaf eval', '', 'truth', 'truth rank', 'equity rank', '']);
+    expect(headers).toEqual(['#', 'move', 'points', 'leaf eval', '', 'hasty rollout win%', 'rollout rank', 'equity rank', '']);
     const row = screen.getAllByRole('row')[1];
     expect([...row.querySelectorAll('td')].map((td) => td.textContent).slice(5, 7)).toEqual(['30.0%', '#2']);
-    expect(screen.getByText(/Truth \(tag t1\)/)).toBeTruthy();
+    expect(screen.getByText(/Hasty rollouts \(tag t1\)/)).toBeTruthy();
     expect(screen.queryByText(/another leave inference model/)).toBeNull();
-    await waitFor(() => expect(screen.getByText('· truth 50.0%')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('· hasty rollouts 50.0%')).toBeTruthy());
   });
 
-  it("warns when the truth's opponent leaves are not drawn from the analysis's belief", async () => {
-    serveTruth(false);
+  it("warns when the rollouts' opponent leaves are not drawn from the analysis's belief", async () => {
+    serveRollouts(false);
     render(<LeafEvalPositions task="deep_bot_leaf_eval" tag="v2" />);
     await waitFor(() => expect(screen.getByText(/another leave inference model/)).toBeTruthy());
   });

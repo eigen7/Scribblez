@@ -1,17 +1,17 @@
-"""The leaf_eval_truth workload: what a perfect DeepBot leaf network would
-value each legal move of every known position at (deep_bot_leaf_eval/truth.py),
-the column the deep_bot_leaf_eval Positions tab compares the network's values
-with.
+"""The leaf_eval_hasty_rollouts workload: each legal move of every known
+position played out to the game's end by hastybot-endgame
+(deep_bot_leaf_eval/hasty_rollouts.py), the column the Positions tab compares
+a leaf network's values with.
 
 Its one role takes each known position in turn: LeafBot over the monte-carlo
 leaf plays every move out `playouts` times, each against its own opponent
 leave drawn from the pinned leave inference model, and the slot delivers
-data/truth/<gcg stem>.json. A restarted slot skips the positions it already
+data/hasty_rollouts/<gcg stem>.json. A restarted slot skips the positions it already
 delivered. The leave inference model runs on TensorRT, so the slot needs a
 GPU, though the playouts are all CPU. Once every position is in, the slot
 idles until the controller, which sees the collected files, finishes it.
-py/scripts/deep_bot_leaf_eval/copy_truth.py then copies the tag's truth into
-the repo.
+py/scripts/deep_bot_leaf_eval/copy_hasty_rollouts.py then copies the tag's
+rollouts into the repo.
 """
 
 import time
@@ -20,8 +20,8 @@ from pathlib import Path
 
 from scribblez import params as params_mod
 from scribblez.deep_bot import known_positions
+from scribblez.deep_bot_leaf_eval import hasty_rollouts
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
-from scribblez.deep_bot_leaf_eval import truth
 from scribblez.params import param
 from scribblez.paths import TagPaths
 from scribblez.workloads import known_position_inputs
@@ -38,13 +38,13 @@ from scribblez.workloads.worker import WorkerStats, WorkerStopped
 LEAVE_INFERENCE = "leave_inference"
 # Where a remote slot finds the pinned leave inference model.
 LEAVE_INPUT = "inputs/leave_inference.onnx"
-ROLE = "truth"
+ROLE = "rollouts"
 # How often a slot with nothing left to compute looks for its stop.
 IDLE_SECONDS = 60
 
 
 @dataclass(frozen=True)
-class LeafEvalTruthParams:
+class LeafEvalHastyRolloutsParams:
     leave_inference_tag: str = param(
         "",
         "the leave_inference tag whose model draws the opponent's leaves: the one the "
@@ -63,7 +63,7 @@ class LeafEvalTruthParams:
     # the Positions tab's analysis values every move.
     candidates: int = param(
         0,
-        "static equity's best N moves of each position that get a truth (0: every legal move). "
+        "static equity's best N moves of each position that are played out (0: every legal move). "
         "600 covers every reference move; THAN alone has about 20,000",
     )
 
@@ -97,7 +97,7 @@ def inputs(params, mount_root: Path) -> dict[str, Path]:
 
 
 def run_settings(params) -> dict:
-    return truth.run_settings(
+    return hasty_rollouts.run_settings(
         params.leave_inference_tag,
         params.leave_inference_generation,
         params.playouts,
@@ -108,10 +108,10 @@ def run_settings(params) -> dict:
 def _deliver(ctx: WorkerContext, doc: dict, position: known_positions.Position) -> int:
     path = ctx.tag_paths().work_dir(ctx.worker_id) / f"{position.gcg.stem}.json"
     leaf_positions.write(doc, path)
-    return ctx.sink.deliver(path, truth.rel(position))
+    return ctx.sink.deliver(path, hasty_rollouts.rel(position))
 
 
-def run_truth(ctx: WorkerContext) -> int:
+def run_rollouts(ctx: WorkerContext) -> int:
     """The role's runner: each known position the slot has not delivered, then
     idle until stopped."""
     leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(ctx.params, ctx.mount_root))
@@ -120,9 +120,10 @@ def run_truth(ctx: WorkerContext) -> int:
     stats = WorkerStats(ctx)
     try:
         for p in known_position_inputs.load(ctx):
-            if (data_dir / truth.rel(p)).is_file():
+            if (data_dir / hasty_rollouts.rel(p)).is_file():
                 continue
-            doc = truth.compute(p, leave, run_settings(ctx.params), work / "ask", ctx.threads)
+            run = run_settings(ctx.params)
+            doc = hasty_rollouts.compute(p, leave, run, work / "ask", ctx.threads)
             nbytes = _deliver(ctx, doc, p)
             stats.cycle_done({"sim_s": doc["seconds"]}, units=1, nbytes=nbytes)
             print(f"{p.id}: {len(doc['values'])} moves in {doc['seconds']} s", flush=True)
@@ -134,17 +135,18 @@ def run_truth(ctx: WorkerContext) -> int:
 
 
 def computed(paths: TagPaths) -> int:
-    """How many of the known positions the tag holds a truth for."""
-    return sum((paths.data_dir / truth.rel(p)).is_file() for p in known_positions.load())
+    """How many of the known positions the tag holds the rollouts of."""
+    return sum((paths.data_dir / hasty_rollouts.rel(p)).is_file() for p in known_positions.load())
 
 
 def complete(spec: WorkloadSpec, paths: TagPaths, params) -> bool:
-    """The WorkloadSpec.complete entry: every known position has its truth."""
+    """The WorkloadSpec.complete entry: every known position is played out."""
     return computed(paths) == len(known_positions.load())
 
 
 def tick(spec: WorkloadSpec, task, hooks):
-    """The scheduler entry: finish the slot once every truth is collected."""
+    """The scheduler entry: finish the slot once every position's rollouts are
+    collected."""
     if complete(spec, hooks.paths, params_mod.validate(spec.params_cls, task.params)):
         hooks.finish(ROLE)
 
@@ -154,25 +156,25 @@ def progress(spec: WorkloadSpec, paths: TagPaths, params) -> list[tuple[str, obj
 
 
 SPEC = WorkloadSpec(
-    name="leaf_eval_truth",
-    title="Leaf eval truth for the known positions",
-    params_cls=LeafEvalTruthParams,
+    name="leaf_eval_hasty_rollouts",
+    title="Hasty rollouts of the known positions",
+    params_cls=LeafEvalHastyRolloutsParams,
     roles=(
         RoleSpec(
             name=ROLE,
-            title="Truth (GPU)",
-            runner="scribblez.workloads.leaf_eval_truth:run_truth",
+            title="Rollouts (GPU)",
+            runner="scribblez.workloads.leaf_eval_hasty_rollouts:run_rollouts",
             deps="scribblez.workloads.selfplay_gen:fetch_deps",
-            inputs="scribblez.workloads.leaf_eval_truth:inputs",
+            inputs="scribblez.workloads.leaf_eval_hasty_rollouts:inputs",
             singleton=True,
             gpu=True,
             stats=StatsSpec(unit="positions", phases={"sim_s": "playouts"}),
         ),
     ),
-    scheduler="scribblez.workloads.leaf_eval_truth:tick",
-    progress="scribblez.workloads.leaf_eval_truth:progress",
-    complete="scribblez.workloads.leaf_eval_truth:complete",
-    finalize="scribblez.workloads.leaf_eval_truth:finalize",
+    scheduler="scribblez.workloads.leaf_eval_hasty_rollouts:tick",
+    progress="scribblez.workloads.leaf_eval_hasty_rollouts:progress",
+    complete="scribblez.workloads.leaf_eval_hasty_rollouts:complete",
+    finalize="scribblez.workloads.leaf_eval_hasty_rollouts:finalize",
     primary_params=("leave_inference_tag", "leave_inference_generation", "playouts", "candidates"),
-    collected_dirs=(truth.TRUTH_DIR,),
+    collected_dirs=(hasty_rollouts.ROLLOUTS_DIR,),
 )

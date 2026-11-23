@@ -8,7 +8,7 @@
 // is, up to the playouts' noise, the mean of what a perfect leaf network would
 // predict at them, so LeafBot over it, with each opponent leave drawn its own
 // playout (noisy()), values each candidate as a perfect network would over the
-// whole belief (the leaf_eval_truth workload).
+// whole belief (the leaf_eval_hasty_rollouts workload).
 //
 // A playout seats both leaves and refills the opponent and then the mover from
 // the pool (the tiles on neither the board nor a leave) in a shuffled order,

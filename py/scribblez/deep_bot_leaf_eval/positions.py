@@ -24,8 +24,9 @@ POSITIONS_DIR = "leaf_positions"
 # so it values every move.
 ALL_MOVES = 1_000_000
 # LeafBot's seed in the analysis, which jitters its draws of the opponent's
-# leaves. Fixed, so every generation's analysis, and the truth
-# (deep_bot_leaf_eval/truth.py), value a position over the same leaves.
+# leaves. Fixed, so every generation's analysis, and the hasty rollouts
+# (deep_bot_leaf_eval/hasty_rollouts.py), value a position over the same
+# leaves.
 ANALYSIS_SEED = 1
 
 

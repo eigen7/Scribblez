@@ -1,9 +1,10 @@
-"""The leaf_eval_truth workload (workloads/leaf_eval_truth.py) and the truth
-files it writes (deep_bot_leaf_eval/truth.py): the leave inference model is
+"""The leaf_eval_hasty_rollouts workload (workloads/leaf_eval_hasty_rollouts.py)
+and the rollout files it writes (deep_bot_leaf_eval/hasty_rollouts.py): the
+leave inference model is
 pinned at task creation, the slot computes each known position once, as the
 network's analysis would ask it but over the monte-carlo leaf, the controller
 finishes it once every position is in, and the copy to the repo keeps only the
-truths of the current GCGs."""
+rollouts of the current GCGs."""
 
 import json
 from dataclasses import replace
@@ -13,21 +14,21 @@ import pytest
 from cloud.sinks import LocalSink
 from scribblez import params
 from scribblez.deep_bot import known_positions
-from scribblez.deep_bot_leaf_eval import truth
+from scribblez.deep_bot_leaf_eval import hasty_rollouts
 from scribblez.paths import TagPaths
-from scribblez.workloads import leaf_eval_truth
+from scribblez.workloads import leaf_eval_hasty_rollouts
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.leaf_eval_truth import (
+from scribblez.workloads.leaf_eval_hasty_rollouts import (
     LEAVE_INFERENCE,
     LEAVE_INPUT,
     ROLE,
     SPEC,
-    LeafEvalTruthParams,
+    LeafEvalHastyRolloutsParams,
 )
 from scribblez.workloads.worker import WorkerStopped
 
 LEAVE_TAG = "li"
-PARAMS = LeafEvalTruthParams(leave_inference_tag=LEAVE_TAG, leave_inference_generation=3)
+PARAMS = LeafEvalHastyRolloutsParams(leave_inference_tag=LEAVE_TAG, leave_inference_generation=3)
 
 
 def _leave_exports(mount: Path, gens: list[int]) -> TagPaths:
@@ -45,7 +46,8 @@ def _tag(mount: Path) -> TagPaths:
 def test_the_leave_model_pins_its_latest_export(tmp_path):
     _leave_exports(tmp_path, [3, 5])
     latest = replace(PARAMS, leave_inference_generation=-1)
-    assert leaf_eval_truth.finalize(SPEC, _tag(tmp_path), latest).leave_inference_generation == 5
+    pinned = leaf_eval_hasty_rollouts.finalize(SPEC, _tag(tmp_path), latest)
+    assert pinned.leave_inference_generation == 5
 
 
 @pytest.mark.parametrize(
@@ -54,11 +56,11 @@ def test_the_leave_model_pins_its_latest_export(tmp_path):
 def test_a_tag_without_a_usable_setup_is_refused_at_creation(tmp_path, changes):
     _leave_exports(tmp_path, [3, 5])
     with pytest.raises(params.ParamsError):
-        leaf_eval_truth.finalize(SPEC, _tag(tmp_path), replace(PARAMS, **changes))
+        leaf_eval_hasty_rollouts.finalize(SPEC, _tag(tmp_path), replace(PARAMS, **changes))
 
 
 def test_the_leave_model_and_the_known_positions_are_the_inputs(tmp_path):
-    got = leaf_eval_truth.inputs(PARAMS, tmp_path)
+    got = leaf_eval_hasty_rollouts.inputs(PARAMS, tmp_path)
     assert got.pop(LEAVE_INPUT) == TagPaths(LEAVE_TAG, LEAVE_INFERENCE, tmp_path).onnx_path(3)
     assert set(got.values()) == set(known_positions.files())
 
@@ -83,7 +85,7 @@ def _fake_compute(asked: list):
         asked.append(position.id)
         return {
             "id": position.id,
-            "gcg_hash": truth.gcg_hash(position),
+            "gcg_hash": hasty_rollouts.gcg_hash(position),
             "run": run,
             "seconds": 1.0,
             "values": {"m": 0.5},
@@ -99,20 +101,20 @@ def _stop(seconds):
 def test_the_slot_computes_each_position_once_then_idles(tmp_path, monkeypatch):
     _leave_exports(tmp_path, [3])
     asked: list[str] = []
-    monkeypatch.setattr(truth, "compute", _fake_compute(asked))
-    monkeypatch.setattr(leaf_eval_truth.time, "sleep", _stop)
+    monkeypatch.setattr(hasty_rollouts, "compute", _fake_compute(asked))
+    monkeypatch.setattr(leaf_eval_hasty_rollouts.time, "sleep", _stop)
     positions = known_positions.load()
     ctx = _ctx(tmp_path)
     paths = _tag(tmp_path)
-    assert not leaf_eval_truth.complete(SPEC, paths, PARAMS)
-    assert leaf_eval_truth.run_truth(ctx) == 0
+    assert not leaf_eval_hasty_rollouts.complete(SPEC, paths, PARAMS)
+    assert leaf_eval_hasty_rollouts.run_rollouts(ctx) == 0
     assert asked == [p.id for p in positions]
-    assert leaf_eval_truth.complete(SPEC, paths, PARAMS)
-    doc = json.loads((paths.data_dir / truth.rel(positions[0])).read_text())
-    assert doc["run"] == leaf_eval_truth.run_settings(PARAMS)
+    assert leaf_eval_hasty_rollouts.complete(SPEC, paths, PARAMS)
+    doc = json.loads((paths.data_dir / hasty_rollouts.rel(positions[0])).read_text())
+    assert doc["run"] == leaf_eval_hasty_rollouts.run_settings(PARAMS)
     # A restarted slot has nothing left to compute.
     asked.clear()
-    assert leaf_eval_truth.run_truth(ctx) == 0
+    assert leaf_eval_hasty_rollouts.run_rollouts(ctx) == 0
     assert asked == []
 
 
@@ -129,24 +131,24 @@ class _Task:
     params = {"leave_inference_tag": LEAVE_TAG, "leave_inference_generation": 3}
 
 
-def test_the_controller_finishes_the_slot_once_every_truth_is_in(tmp_path, monkeypatch):
+def test_the_controller_finishes_the_slot_once_every_position_is_in(tmp_path, monkeypatch):
     _leave_exports(tmp_path, [3])
     hooks = _Hooks(_tag(tmp_path))
-    leaf_eval_truth.tick(SPEC, _Task(), hooks)
+    leaf_eval_hasty_rollouts.tick(SPEC, _Task(), hooks)
     assert hooks.finished == []
-    monkeypatch.setattr(truth, "compute", _fake_compute([]))
-    monkeypatch.setattr(leaf_eval_truth.time, "sleep", _stop)
-    leaf_eval_truth.run_truth(_ctx(tmp_path))
-    leaf_eval_truth.tick(SPEC, _Task(), hooks)
+    monkeypatch.setattr(hasty_rollouts, "compute", _fake_compute([]))
+    monkeypatch.setattr(leaf_eval_hasty_rollouts.time, "sleep", _stop)
+    leaf_eval_hasty_rollouts.run_rollouts(_ctx(tmp_path))
+    leaf_eval_hasty_rollouts.tick(SPEC, _Task(), hooks)
     assert hooks.finished == [ROLE]
 
 
-def _write_truth(data_dir: Path, position, run: dict, gcg_hash: str | None = None):
-    path = data_dir / truth.rel(position)
+def _write_rollouts(data_dir: Path, position, run: dict, gcg_hash: str | None = None):
+    path = data_dir / hasty_rollouts.rel(position)
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = {
         "id": position.id,
-        "gcg_hash": gcg_hash or truth.gcg_hash(position),
+        "gcg_hash": gcg_hash or hasty_rollouts.gcg_hash(position),
         "run": run,
         "seconds": 1.0,
         "values": {"m": 0.25},
@@ -154,20 +156,20 @@ def _write_truth(data_dir: Path, position, run: dict, gcg_hash: str | None = Non
     path.write_text(json.dumps(doc))
 
 
-def test_the_copy_keeps_the_truths_of_the_current_gcgs(tmp_path):
+def test_the_copy_keeps_the_rollouts_of_the_current_gcgs(tmp_path):
     a, b, c = known_positions.load()[:3]
-    run = leaf_eval_truth.run_settings(PARAMS)
-    _write_truth(tmp_path, a, run)
-    _write_truth(tmp_path, b, run, gcg_hash="stale")
-    doc, skipped = truth.collect(tmp_path, [a, b, c])
-    kept = {a.id: {"gcg_hash": truth.gcg_hash(a), "values": {"m": 0.25}}}
+    run = leaf_eval_hasty_rollouts.run_settings(PARAMS)
+    _write_rollouts(tmp_path, a, run)
+    _write_rollouts(tmp_path, b, run, gcg_hash="stale")
+    doc, skipped = hasty_rollouts.collect(tmp_path, [a, b, c])
+    kept = {a.id: {"gcg_hash": hasty_rollouts.gcg_hash(a), "values": {"m": 0.25}}}
     assert doc == {"run": run, "positions": kept}
     assert skipped == [b.id, c.id]
 
 
-def test_the_copy_refuses_truths_of_different_runs(tmp_path):
+def test_the_copy_refuses_rollouts_of_different_runs(tmp_path):
     a, b = known_positions.load()[:2]
-    _write_truth(tmp_path, a, leaf_eval_truth.run_settings(PARAMS))
-    _write_truth(tmp_path, b, leaf_eval_truth.run_settings(replace(PARAMS, playouts=8)))
+    _write_rollouts(tmp_path, a, leaf_eval_hasty_rollouts.run_settings(PARAMS))
+    _write_rollouts(tmp_path, b, leaf_eval_hasty_rollouts.run_settings(replace(PARAMS, playouts=8)))
     with pytest.raises(ValueError):
-        truth.collect(tmp_path, [a, b])
+        hasty_rollouts.collect(tmp_path, [a, b])
