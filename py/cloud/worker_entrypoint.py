@@ -3,10 +3,11 @@
 subprocess of the dashboard.
 
 In a container, the image's bootstrap (docker-setup/worker/bootstrap.py)
-starts this after unpacking the bundle; for a local slot, the dashboard starts
-it directly. It handles the process concerns (environment, sinks,
-SIGTERM, the params/provenance record) and then hands off to the role's runner
-from the workload registry (scribblez/workloads/).
+starts this after unpacking the bundle, and this puts the payload's lexicon
+and Macondo files in place (cloud/worker_deps.py); for a local slot, the
+dashboard starts it directly. It handles the process concerns (environment,
+sinks, SIGTERM, the params/provenance record) and then hands off to the
+role's runner from the workload registry (scribblez/workloads/).
 
 SIGTERM (docker stop, a spot interruption, a slot paused in the dashboard)
 raises WorkerStopped out of the runner's loop. Runners flush completed output
@@ -37,7 +38,8 @@ All configuration comes from environment variables:
     SCZ_WORKER_ID                         manifest/stats identity (default: the
                                           hostname)
     SCZ_WORKER_KIND                       slot kind reported in stats: "local"
-                                          (the default) or "ssh"
+                                          (the default) or "ssh", which
+                                          installs the payload's mount files
     SCZ_BUNDLE_ID, SCZ_BUNDLE_ARCH        the bundle the dashboard copied in;
                                           recorded in the params record and
                                           stats
@@ -61,6 +63,7 @@ from scribblez.hardware import default_thread_count
 from scribblez.paths import DEFAULT_MOUNT_ROOT
 from scribblez.workloads.worker import WorkerFatal, WorkerStopped
 
+from cloud import runtime_abi, worker_deps
 from cloud.sinks import make_sink
 
 # The SCZ_* variables that configure the worker rather than the workload
@@ -144,6 +147,8 @@ def main() -> int:
         mount_root = Path(os.environ.get("SCZ_MOUNT_ROOT", DEFAULT_MOUNT_ROOT))
         sink = make_sink(spec, tag, mount_root)
         kind = os.environ.get("SCZ_WORKER_KIND", "local")
+        if kind != "local":
+            worker_deps.install(runtime_abi.PAYLOAD_DIR, mount_root)
         if role.deps:
             workloads.resolve(role.deps)(params)
         wid = worker_id()

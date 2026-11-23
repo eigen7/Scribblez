@@ -41,8 +41,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from cloud import worker_deps
-
 from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.workloads.base import StatsSpec, WorkerContext
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
@@ -277,10 +275,3 @@ def generate_cycles(
         return 0
     _publish(stats, deliverer.drain(), games_per_chunk)
     return 0
-
-
-def fetch_deps(params):
-    """Runtime data deps for HastyBot self-play: the engine's default lexicon
-    and Macondo's strategy tables."""
-    worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
-    worker_deps.fetch_macondo_strategy(worker_deps.DEFAULT_LEXICON)

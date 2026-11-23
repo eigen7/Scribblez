@@ -164,7 +164,6 @@ SPEC = WorkloadSpec(
             name=ROLE,
             title="Rollouts (GPU)",
             runner="scribblez.workloads.leaf_eval_hasty_rollouts:run_rollouts",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             inputs="scribblez.workloads.leaf_eval_hasty_rollouts:inputs",
             singleton=True,
             gpu=True,
