@@ -15,7 +15,7 @@
   },
   {
     "id": "YETI",
-    "title": "unblockable S bingo setup",
+    "title": "Nigel Richards: potential ALLEE continuation",
     "gcg": "richards-allee-yeti.gcg",
     "source": "docs/analysis/richards-johnson-exchange/README.md",
     "origin": "Richards vs. Johnson, 2025 World Cup, round 11, move 23, had Nigel Richards played B6 ALLEE at move 22 instead of exchanging",
@@ -141,7 +141,7 @@
   },
   {
     "id": "THAN",
-    "title": "THAN: decline bingo",
+    "title": "decline bingo in favor of triple-triple setup",
     "gcg": "than.gcg",
     "source": "docs/analysis/hidden_blind_spots.md#than-declining-a-76-point-bingo",
     "origin": "hidden_blind_spots v1 1792942025771220660-local-0-g37-turn12",
@@ -229,7 +229,7 @@
   },
   {
     "id": "TR(E)Y",
-    "title": "consonant-heavy bag + few bingo lanes changes leave valuations",
+    "title": "consonant-heavy bag on closed board",
     "gcg": "trey.gcg",
     "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
     "origin": "hidden_blind_spots v1 1792935012079129504-local-0-g99-turn17",
@@ -243,7 +243,7 @@
   },
   {
     "id": "AN(N)EAL",
-    "title": "super-valuable bag (2 blanks, S, Z) justifies maximizing tile turnover",
+    "title": "high-value bag",
     "gcg": "anneal.gcg",
     "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
     "origin": "hidden_blind_spots v1 1792935066706148359-local-0-g61-turn18",
