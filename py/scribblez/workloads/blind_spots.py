@@ -216,7 +216,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Surveyor",
             runner="scribblez.workloads.blind_spots:run_generate",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             stats=StatsSpec(
                 unit="positions",
                 phases={"gen_s": "self-play", "sim_s": "survey", "upload_s": "upload"},

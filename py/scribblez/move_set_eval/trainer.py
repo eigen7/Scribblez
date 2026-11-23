@@ -54,7 +54,6 @@ from dataclasses import asdict, dataclass
 
 import torch
 import torch._inductor.config as inductor_config
-from cloud import worker_deps
 
 from scribblez import params as params_mod
 from scribblez.generational import checkpoint, lifecycle, state_pair
@@ -101,12 +100,6 @@ class MsetTrainState(GenerationalState):
     """
 
     settled_epochs: int = 0
-
-
-def fetch_train_deps(params):
-    """Fetch the default lexicon, which the FFI session loads to decode the
-    pair store's rows. The pairs themselves come through the sink."""
-    worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
 
 
 def store_is_ready(store, params) -> tuple[bool, str]:

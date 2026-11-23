@@ -421,7 +421,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Generator (GPU)",
             runner="scribblez.workloads.policy_set:run_generate",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             inputs="scribblez.workloads.policy_set:inputs",
             # The rollouts, the leaf network and the leave inference model
             # all run on the GPU.
@@ -432,7 +431,6 @@ SPEC = WorkloadSpec(
             name="train",
             title="Trainer (GPU)",
             runner="scribblez.policy_set.trainer:run",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,

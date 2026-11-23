@@ -455,7 +455,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Generator (GPU)",
             runner="scribblez.workloads.move_set_eval:run_generate",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             inputs="scribblez.workloads.move_set_eval:inputs",
             gpu=True,
             stats=StatsSpec(
@@ -472,7 +471,6 @@ SPEC = WorkloadSpec(
             title="Student trainer (GPU)",
             runner="scribblez.move_set_eval.trainer:run",
             runtime=RUNTIME_TORCH,
-            deps="scribblez.move_set_eval.trainer:fetch_train_deps",
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
             # Local only: it reads its pair store, which rented generators

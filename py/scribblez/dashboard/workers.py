@@ -42,7 +42,7 @@ from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 
-from cloud import bundles, runtime_abi
+from cloud import bundles, runtime_abi, worker_deps
 from cloud.bundles import BundleManifest, source_hash
 from cloud.credentials import CloudCredentials, load_credentials
 from cloud.providers.aws import CATALOG as AWS_CATALOG
@@ -2812,11 +2812,16 @@ class WorkerManager:
         """Copy a created container's payload into it before it starts: the
         bundle's tarball for its machine's arch, and for a trainer the eval
         datasets it scores against (docker-setup/worker/bootstrap.py unpacks
-        both). A container whose copy failed, however, is removed: started as
-        it is it would have nothing to run, and a later pass would start it."""
+        both), and this machine's lexicon and Macondo files, which the worker
+        entrypoint puts in place (cloud/worker_deps.py). A container whose
+        copy failed, however, is removed: started as it is it would have
+        nothing to run, and a later pass would start it."""
         archive = self._bundle_store / f".payload-{uuid.uuid4().hex[:12]}.tar"
         try:
-            files = {"bundle.tar.gz": bundles.arch_tarball(self._bundle_store, bundle_id, arch)}
+            files = {
+                "bundle.tar.gz": bundles.arch_tarball(self._bundle_store, bundle_id, arch),
+                **worker_deps.payload_files(self.mount_root),
+            }
             if role.ingest:
                 manifest = bundles.read_manifest(self._bundle_store, bundle_id)
                 files["positions.tar.gz"] = bundles.eval_positions_path(
