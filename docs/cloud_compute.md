@@ -15,7 +15,8 @@ Generation-style roles distribute trivially. Their cycles are embarrassingly
 parallel; output files are uniquely named and land atomically, so batches
 from any number of machines merge by copying and a killed worker loses at
 most its in-flight cycle; data volumes are small; and runtime deps are light
-and fetched from public upstreams. A position_eval trainer distributes too:
+and come from the controller with the payload. A position_eval trainer
+distributes too:
 its data home (the tag's data plane, beside it) assembles its own
 generations, the controller relaying in the chunks of generators elsewhere,
 and its exports, records and checkpoint come out over ssh, collected like any
@@ -121,11 +122,15 @@ every bundle, and a `-dirty` git sha says the tree changed without saying
 into what.
 
 A container is created, then given its payload, then started. The dashboard
-copies in the pinned bundle's tarball for the slot's arch and, for a trainer,
-the eval datasets (written once per content version under the store's
-`deps/`, rather than into every tarball). At start, `bootstrap.py` unpacks
-them and execs the bundle's worker entrypoint, so even the worker-loop logic
-can change without touching the image. How the payload is handed over is the
+copies in the pinned bundle's tarball for the slot's arch; the controller's
+own lexicon and Macondo strategy files (`py/cloud/worker_deps.py`
+MOUNT_FILES: the copyrighted wordlist travels only between your own
+machines, never into an image, bundle or store); and, for a trainer, the eval
+datasets (written once per content version under the store's `deps/`,
+rather than into every tarball). At start, `bootstrap.py` unpacks the
+tarballs and execs the bundle's worker entrypoint, which puts the mount files
+in place, so even the worker-loop logic can change without touching the
+image. A worker downloads nothing. How the payload is handed over is the
 image's *bootstrap protocol*. The image push records it, and the dashboard
 refuses to deploy to an image of an older one, naming the rebuild.
 
@@ -139,9 +144,9 @@ refuses to deploy to an image of an older one, naming the rebuild.
    otherwise ignore the parameter and silently produce data unlike its
    fleetmates');
 2. dispatches to the (workload, role) runner from the workload registry;
-3. fetches the runner's declared data deps (`py/cloud/worker_deps.py`):
-   lexica and Macondo tables from their public upstreams; a train role's eval
-   datasets came in with its payload;
+3. installs the payload's lexicon and Macondo files under the mount and
+   runs the role's declared deps hook, if any (a position_eval trainer checks
+   that its eval datasets came in with its payload);
 4. writes a provenance record through its sink;
 5. loops the runner's cycle, delivering whole output files through its sink
    (`py/cloud/sinks.py`) into the container's own tree, from where the

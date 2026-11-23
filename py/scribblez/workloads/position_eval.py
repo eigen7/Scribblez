@@ -274,11 +274,8 @@ def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
 
 
 def fetch_train_deps(params):
-    """Runtime data the trainer needs beyond the bundle: the engine's default
-    lexicon (the FFI session loads it before the model is built) and the
-    position-evaluation eval datasets. Not Macondo's strategy tables: the
-    trainer plays no moves."""
-    worker_deps.fetch_lexicon(worker_deps.DEFAULT_LEXICON)
+    """Check the position-evaluation eval datasets the trainer scores against
+    are in place."""
     worker_deps.fetch_eval_positions()
 
 
@@ -299,7 +296,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Generator",
             runner="scribblez.workloads.position_eval:run_generate",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             stats=GENERATOR_STATS,
         ),
         RoleSpec(
@@ -318,7 +314,6 @@ SPEC = WorkloadSpec(
             name="match_eval",
             title="Match eval (GPU)",
             runner="scribblez.match_eval.runner:run",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             dispatch="scribblez.match_eval.dispatch:tick",
             singleton=True,
             kinds=("local", "ssh"),

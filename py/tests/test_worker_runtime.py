@@ -1,6 +1,8 @@
 """Which worker image a role runs on (RoleSpec.runtime -> RegistryConfig.
-image_for), and how a train role gets its eval datasets onto a bundle-run
-worker (cloud/bundles.py deps/ + cloud/worker_deps.py)."""
+image_for), how a train role gets its eval datasets onto a bundle-run
+worker (cloud/bundles.py deps/ + cloud/worker_deps.py), and how every
+container gets the controller's lexicon and Macondo files
+(cloud/worker_deps.py)."""
 
 import shutil
 import tarfile
@@ -126,3 +128,26 @@ def test_the_trainer_refuses_to_start_without_its_eval_datasets(tmp_path, monkey
     monkeypatch.setattr(analysis, "LARGE_DATASET", tmp_path / "absent-large")
     with pytest.raises(Exception, match="absent"):
         trainer.load_position_eval_quality(87, face_up_leaves=True)
+
+
+# --- mount files -----------------------------------------------------------
+
+
+def test_a_container_installs_the_controllers_mount_files_from_its_payload(tmp_path):
+    """What the dashboard puts in the payload (payload_files) is what the
+    worker installs, at the paths the engine reads; a restarted container,
+    whose payload is the same, installs it again."""
+    controller, payload, mount = tmp_path / "controller", tmp_path / "payload", tmp_path / "mount"
+    for rel in worker_deps.MOUNT_FILES:
+        (controller / rel).parent.mkdir(parents=True, exist_ok=True)
+        (controller / rel).write_text(rel)
+    for name, src in worker_deps.payload_files(controller).items():
+        (payload / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, payload / name)
+
+    worker_deps.install(payload, mount)
+    worker_deps.install(payload, mount)
+
+    assert "lexica/NWL23.kwg" in worker_deps.MOUNT_FILES
+    for rel in worker_deps.MOUNT_FILES:
+        assert (mount / rel).read_text() == rel

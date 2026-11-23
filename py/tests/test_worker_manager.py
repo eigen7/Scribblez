@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from cloud import worker_deps
 from cloud.bundles import BundleManifest
 from cloud.credentials import RegistryConfig
 from cloud.providers.base import Instance, MachineType, ProviderError
@@ -1681,13 +1682,28 @@ def _store_bundle(store: Path, bundle_id: str, arch: str, positions: str):
     deps.write_bytes(b"positions bytes")
 
 
-def test_a_containers_payload_is_its_bundle_and_a_trainers_datasets(tmp_path, monkeypatch):
+def _mount_files(mount_root: Path) -> dict[str, bytes]:
+    """The lexicon and Macondo files under `mount_root`, each holding its own
+    path; returns them as a payload names them."""
+    out = {}
+    for rel in worker_deps.MOUNT_FILES:
+        (mount_root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (mount_root / rel).write_bytes(rel.encode())
+        out[f"payload/{worker_deps.PAYLOAD_MOUNT}/{rel}"] = rel.encode()
+    return out
+
+
+def test_a_containers_payload_is_its_bundle_this_machines_data_and_a_trainers_datasets(
+    tmp_path, monkeypatch
+):
     """Copied in before the container starts, where the image's bootstrap
-    looks (runtime_abi.PAYLOAD_DIR): the tarball for the slot's arch, and for
-    a trainer the eval datasets it scores against."""
+    looks (runtime_abi.PAYLOAD_DIR): the tarball for the slot's arch, this
+    machine's lexicon and Macondo files, and for a trainer the eval datasets
+    it scores against."""
     manager = WorkerManager(tmp_path)
     store = tmp_path / workers_mod.bundles.STORE_REL
     _store_bundle(store, "b1", "znver3", "p1")
+    mount = _mount_files(tmp_path)
     copied = {}
 
     class _Machine:
@@ -1701,9 +1717,10 @@ def test_a_containers_payload_is_its_bundle_and_a_trainers_datasets(tmp_path, mo
     spec = workloads.get("position_eval")
     manager._copy_payload(_Machine(), "gen", spec.role("generate"), "b1", "znver3")
     manager._copy_payload(_Machine(), "tr", spec.role("train"), "b1", "znver3")
-    assert copied["gen"] == ("/opt/scribblez", {"payload/bundle.tar.gz": b"bundle bytes"})
+    assert copied["gen"] == ("/opt/scribblez", {"payload/bundle.tar.gz": b"bundle bytes", **mount})
     assert copied["tr"][1] == {
         "payload/bundle.tar.gz": b"bundle bytes",
+        **mount,
         "payload/positions.tar.gz": b"positions bytes",
     }
     assert not list(store.glob(".payload-*"))  # the archive is gone
@@ -1714,6 +1731,7 @@ def test_a_container_whose_payload_did_not_arrive_is_removed(tmp_path):
     start creates it afresh."""
     manager = WorkerManager(tmp_path)
     _store_bundle(tmp_path / workers_mod.bundles.STORE_REL, "b1", "znver3", "p1")
+    _mount_files(tmp_path)
     removed = []
 
     class _Machine:

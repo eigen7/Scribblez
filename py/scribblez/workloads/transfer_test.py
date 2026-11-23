@@ -320,7 +320,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Generator",
             runner="scribblez.workloads.transfer_test:run_generate",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             inputs="scribblez.workloads.transfer_test:inputs",
             gpu=True,
             stats=StatsSpec(

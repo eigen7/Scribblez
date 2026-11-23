@@ -162,7 +162,6 @@ SPEC = WorkloadSpec(
             name="generate",
             title="Generator (GPU)",
             runner="scribblez.hidden_blind_spots_generator:run",
-            deps="scribblez.workloads.selfplay_gen:fetch_deps",
             runtime=RUNTIME_TORCH,
             inputs="scribblez.workloads.policy_set:inputs",
             gpu=True,

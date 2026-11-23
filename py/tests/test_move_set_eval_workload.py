@@ -614,7 +614,6 @@ def test_the_generate_role_declares_the_pinned_teacher_as_its_input(tmp_path, mo
     assert move_set_eval.inputs(params, tmp_path) == {move_set_eval.TEACHER_INPUT: expected}
     assert SPEC.role("generate").inputs == "scribblez.workloads.move_set_eval:inputs"
     assert "ssh" in SPEC.role("generate").kinds
-    assert SPEC.role("train").deps == "scribblez.move_set_eval.trainer:fetch_train_deps"
 
 
 def test_a_remote_generator_takes_the_teacher_the_controller_staged(tmp_path, monkeypatch):
