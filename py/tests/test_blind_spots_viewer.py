@@ -136,6 +136,9 @@ class StubBeliefs:
     def rack_presence(self, b, uniform=False):
         return np.full(27, 0.25 if uniform else 0.5)
 
+    def leave_value(self, b):
+        return {"inferred": {"mean": 3.0, "sd": 1.0}, "uniform": {"mean": 1.0, "sd": 2.0}}
+
     def sample_racks(self, b, n, rng):
         return [{"leave": "ABC", "refill": "D" * b.refill}][:n]
 
@@ -163,6 +166,7 @@ def test_the_beliefs_sidecar_charts_each_kept_position_with_sample_racks(tag):
     assert (first["game"], first["turn"], first["leave_length"]) == (0, 2, 3)
     assert first["presence"][26] == {"tile": "?", "inferred": 0.5, "uniform": 0.25}
     assert first["racks"] == [{"leave": "ABC", "refill": "D" * (rack_sizes[0] - 3)}]
+    assert first["leave_value"]["inferred"] == {"mean": 3.0, "sd": 1.0}
 
 
 def labeled(found: Path, model: dict):
