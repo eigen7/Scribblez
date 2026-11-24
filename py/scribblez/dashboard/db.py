@@ -27,6 +27,8 @@ Tables:
   leaf_value      deep_bot_leaf_eval's value of each move at each known
                   position, per analyzed generation, for a move's history
   leaf_value_analysis  the analyses leaf_value holds, as their files were
+  opp_belief      the leaf Positions tab's opponent-rack chart at each known
+                  position, under the tag's fixed leave inference model
 
 NumPy arrays are stored as ``np.save`` BLOBs (shape + dtype preserved).
 """
@@ -154,6 +156,11 @@ CREATE TABLE IF NOT EXISTS leaf_value (
   move       TEXT,              -- a legal move there, as the pick tool writes it
   value      REAL,              -- the leaf's value of it under that generation
   PRIMARY KEY (generation, position, move)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS opp_belief (
+  position TEXT PRIMARY KEY,    -- a known position's id
+  gcg_hash TEXT,                -- its GCG as charted, so an edited one is charted again
+  chart    TEXT                 -- the chart (LeaveBeliefs.chart), as JSON
 ) WITHOUT ROWID;
 -- Unused: the Positions tab computes predictions from each generation's ONNX
 -- export on demand (dashboard/api.py). Dropped so existing databases shed it.
@@ -401,6 +408,21 @@ def read_leaf_value_history(conn: sqlite3.Connection, position: str, move: str) 
             (position, move),
         )
     ]
+
+
+def read_opp_beliefs(conn: sqlite3.Connection) -> dict[str, tuple[str, dict]]:
+    """Every charted position's (gcg_hash, chart), by position id."""
+    rows = conn.execute("SELECT position, gcg_hash, chart FROM opp_belief")
+    return {r[0]: (r[1], json.loads(r[2])) for r in rows}
+
+
+def write_opp_beliefs(conn: sqlite3.Connection, charts: dict[str, tuple[str, dict]]):
+    """Store each position's (gcg_hash, chart) in place of any held before."""
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO opp_belief (position, gcg_hash, chart) VALUES (?, ?, ?)",
+            ((p, h, json.dumps(c)) for p, (h, c) in charts.items()),
+        )
 
 
 def write_match_eval(conn: sqlite3.Connection, epoch: int, record: dict):

@@ -205,6 +205,12 @@ def backfill_exports(paths: TagPaths, params, number: int) -> tuple[Path, Path]:
     return release.export_path(paths, number, LEAF), release.export_path(paths, number, LEAVE)
 
 
+def belief_model(paths: TagPaths, params) -> tuple[Path, str]:
+    """The leave inference model the Positions tab charts the opponent's rack
+    under, and its label: release 0's, which the self-play plays."""
+    return release.export_path(paths, 0, LEAVE), "release 0, the self-play's"
+
+
 def run_backfill(ctx: WorkerContext) -> int:
     return positions_backfill.run(ctx, backfill_exports)
 

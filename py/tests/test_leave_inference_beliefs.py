@@ -117,6 +117,37 @@ def test_sample_racks_are_distinct_and_drawn_from_the_unseen_pool(model, slog):
     assert model.sample_racks(b, 10, np.random.default_rng(1)) == racks  # seeded
 
 
+def test_no_information_leave_value_is_a_uniform_draw_of_the_leave(model, slog):
+    """Under zero parameters each leave's chance is hypergeometric: the ways
+    the pool supplies its tiles over the ways to draw any leave of its
+    length."""
+    (b,) = modelled(model, slog, 1)
+    letters = model._leave_letters(b.leave_length)
+    values = model._leave_values(b.leave_length)
+    pool = b.leave_pool
+    ways = np.array(
+        [
+            np.prod(
+                [comb(int(pool[t]), int(c)) for t, c in enumerate(np.bincount(col, minlength=27))]
+            )
+            for col in letters.T
+        ],
+        dtype=np.float64,
+    )
+    probs = ways / comb(int(pool.sum()), b.leave_length)
+    mean = probs @ values
+    got = model.leave_value(b)
+    assert got["uniform"]["mean"] == pytest.approx(mean, abs=1e-6)
+    assert got["uniform"]["sd"] == pytest.approx(np.sqrt(probs @ (values - mean) ** 2), abs=1e-6)
+    # The model's random weights tilt it off the no-information prior.
+    assert got["inferred"]["mean"] != pytest.approx(mean, abs=1e-3)
+
+
+def test_an_empty_leave_has_no_value(model, slog):
+    (b,) = beliefs_at(model, slog, [0])
+    assert model.leave_value(b) is None
+
+
 def test_unseen_pool_counts_the_board_and_the_rack():
     board = [[None] * 15 for _ in range(15)]
     board[7][7:10] = ["C", "a", "T"]  # 'a' is a blank

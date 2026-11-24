@@ -2,6 +2,7 @@ import { useContext, useEffect, useMemo, useState } from 'react';
 import { TabActiveContext } from './TabActiveContext';
 import GenerationSlider from './GenerationSlider';
 import LeafEvalHistory from './LeafEvalHistory';
+import LeafOppBelief from './LeafOppBelief';
 import {
   AnswerRow, BoardColumn, BoardView, MoveRef, PositionHeader, PositionPicker, READING_COLOR, Unseen, pct,
   useKnownPositions,
@@ -20,7 +21,8 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 // by HastyBot, what a leaf trained on HastyBot's self-play should value it
 // at), each move's rollout value stands beside its leaf value. Clicking a move
 // draws it on the board and charts its value over the generations against its
-// rollout value.
+// rollout value. Beside it, the mover's belief about the opponent's rack under
+// the tag's fixed leave inference model (LeafOppBelief).
 
 const LEAF_COLOR = '#3a86d4';
 
@@ -214,14 +216,17 @@ function PositionView({ p, pending, source }: { p: Payload; pending: boolean; so
         <BoardColumn p={p} preview={preview} />
         <div className="dbp-side">
           {!pending && <Answers p={p} byMove={byMove} selected={shownMove} onSelect={setSelected} />}
-          <div style={{ width: 320 }}>
-            <Unseen p={p} />
+          <div className="dbp-side-row">
+            <div className="dbp-side-column">
+              <Unseen p={p} />
+              {!pending && preview && (
+                <LeafEvalHistory task={source.task} tag={source.tag} position={source.position} move={preview.move}
+                  display={preview.display} generation={p.generation} newest={source.newest}
+                  rollout={byMove.get(preview.move)?.rollout ?? null} />
+              )}
+            </div>
+            <LeafOppBelief task={source.task} tag={source.tag} position={source.position} />
           </div>
-          {!pending && preview && (
-            <LeafEvalHistory task={source.task} tag={source.tag} position={source.position} move={preview.move}
-              display={preview.display} generation={p.generation} newest={source.newest}
-              rollout={byMove.get(preview.move)?.rollout ?? null} />
-          )}
         </div>
       </div>
       {!pending && <ValueTable p={p} selected={shownMove} onSelect={setSelected} />}

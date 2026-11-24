@@ -80,6 +80,7 @@ class LeaveBeliefs:
         self.session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
         self.table = ffi.LeaveValueArrays()
         self._letters: dict[int, np.ndarray] = {}
+        self._values: dict[int, np.ndarray] = {}
         self._presence: dict[int, np.ndarray] = {}
 
     def rows(self, slog: Path, positions: list[tuple[int, int]]) -> np.ndarray:
@@ -126,10 +127,19 @@ class LeaveBeliefs:
     def _leave_letters(self, length: int) -> np.ndarray:
         """(length, rows) the tile index in each slot of each length-`length`
         leave."""
-        if length not in self._letters:
-            codes, _ = self.table.of_length(length)
-            self._letters[length] = codes // self.table.copies_per_tile
+        self._load_length(length)
         return self._letters[length]
+
+    def _leave_values(self, length: int) -> np.ndarray:
+        """(rows,) each length-`length` leave's value in points."""
+        self._load_length(length)
+        return self._values[length]
+
+    def _load_length(self, length: int):
+        if length not in self._letters:
+            codes, values = self.table.of_length(length)
+            self._letters[length] = codes // self.table.copies_per_tile
+            self._values[length] = values.astype(np.float64)
 
     def _leave_presence_matrix(self, length: int) -> np.ndarray:
         """(rows, 27) whether each length-`length` leave holds the tile."""
@@ -164,6 +174,22 @@ class LeaveBeliefs:
         miss = np.array([comb(rest - int(u), k) / comb(rest, k) for u in b.unseen])
         return leave + (1 - leave) * (1 - miss)
 
+    def leave_value(self, b: RackBelief) -> dict | None:
+        """The value of the leave the opponent kept, in points (the leave
+        table's, which HastyBot plays with): its mean and standard deviation
+        under the belief and under no information, a uniform draw of the
+        leave from its pool. None where the leave is empty."""
+        if b.leave_length == 0:
+            return None
+        values = self._leave_values(b.leave_length)
+        out = {}
+        for name, params in (("inferred", b.params), ("uniform", np.zeros(NUM_PARAMS))):
+            probs = self.leave_probs(params, b)
+            mean = float(probs @ values)
+            sd = float(np.sqrt(max(probs @ (values - mean) ** 2, 0.0)))
+            out[name] = {"mean": mean, "sd": sd}
+        return out
+
     def sample_racks(self, b: RackBelief, n: int, rng: np.random.Generator) -> list[dict]:
         """Up to `n` distinct racks, each a leave from the belief and a refill
         drawn without replacement from the unseen pool less it, as
@@ -186,8 +212,8 @@ class LeaveBeliefs:
     def chart(self, b: RackBelief, rng: np.random.Generator) -> dict:
         """The viewers' opponent-rack panel (web OppRackBelief's
         RackBeliefChart, less its model name): per tile the chance the rack
-        holds one under the model and under no information, and SAMPLE_RACKS
-        sample racks."""
+        holds one under the model and under no information, the kept leave's
+        value under each (leave_value), and SAMPLE_RACKS sample racks."""
         inferred = self.rack_presence(b)
         uniform = self.rack_presence(b, uniform=True)
         return {
@@ -198,6 +224,7 @@ class LeaveBeliefs:
                 {"tile": name, "inferred": float(i), "uniform": float(u)}
                 for name, i, u in zip(TILE_NAMES, inferred, uniform, strict=True)
             ],
+            "leave_value": self.leave_value(b),
             "racks": self.sample_racks(b, SAMPLE_RACKS, rng),
         }
 

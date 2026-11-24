@@ -5,7 +5,8 @@ import LeafEvalPositions from '../components/LeafEvalPositions';
 // deep_bot_leaf_eval's Positions tab against a canned data API: the leaf's
 // values and the matches' pick are the selected generation's, the slider
 // labels a generation with its match score, a click draws a move and charts
-// its value over the generations, and a move the leaf did not value says why.
+// its value over the generations, a move the leaf did not value says why, and
+// the opponent's rack is the tag's fixed leave inference model's.
 
 const empty15 = () => Array.from({ length: 15 }, () => Array<null>(15).fill(null));
 
@@ -56,8 +57,18 @@ function fakeFetch(url: string): Promise<Response> {
       ],
     });
   }
+  if (url.startsWith('/api/deep_bot_leaf_eval/belief?')) {
+    return json({ belief });
+  }
   return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: 'nope' }) } as Response);
 }
+
+const belief = {
+  modelled: true, leave_length: 3, refill: 4,
+  presence: [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ?'].map((tile) => ({ tile, inferred: 0.4, uniform: 0.3 })),
+  leave_value: { inferred: { mean: 4, sd: 6 }, uniform: { mean: 1, sd: 8 } },
+  racks: [], model: "release 0, the self-play's",
+};
 
 describe('LeafEvalPositions', () => {
   beforeEach(() => {
@@ -91,6 +102,12 @@ describe('LeafEvalPositions', () => {
     fireEvent.click(screen.getAllByText('15D .ROTIC')[0]);
     expect(screen.getByText('On the board: 15D .ROTIC')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('generation 20 · 40.4%')).toBeTruthy());
+  });
+
+  it("shows the opponent's rack under the tag's fixed leave inference model", async () => {
+    render(<LeafEvalPositions task="leaf_bot_generation" tag="release1" />);
+    await waitFor(() => expect(screen.getByText("leave inference release 0, the self-play's")).toBeTruthy());
+    expect(screen.getByText('inferred +4.0 ± 6.0 · uniform +1.0 ± 8.0')).toBeTruthy();
   });
 
   it('says when a move has no value', async () => {
