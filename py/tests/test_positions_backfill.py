@@ -106,7 +106,7 @@ def test_only_the_chosen_generations_are_backfilled(tmp_path, asked):
     ctx = _release_ctx(tmp_path)
     for g in (0, 10, 20):
         _write(ctx, g, OLD)
-    list(positions_backfill.backfill_all(ctx, leaf_bot_generation.backfill_exports, [10]))
+    list(positions_backfill.backfill_all(ctx, leaf_bot_generation.analysis_exports, [10]))
     assert len(asked) == 1
     assert [MANIFEST[-1] in _read(ctx, g)["positions"] for g in (0, 10, 20)] == [
         False,

@@ -27,8 +27,8 @@ from scribblez.workloads.base import WorkerContext
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 EXPORTS = {
-    deep_bot_leaf_eval.SPEC.name: (deep_bot_leaf_eval.SPEC, deep_bot_leaf_eval.backfill_exports),
-    leaf_bot_generation.SPEC.name: (leaf_bot_generation.SPEC, leaf_bot_generation.backfill_exports),
+    deep_bot_leaf_eval.SPEC.name: (deep_bot_leaf_eval.SPEC, deep_bot_leaf_eval.analysis_exports),
+    leaf_bot_generation.SPEC.name: (leaf_bot_generation.SPEC, leaf_bot_generation.analysis_exports),
 }
 
 

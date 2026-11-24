@@ -199,14 +199,14 @@ def finalize(spec, paths: TagPaths, params: LeafBotGenerationParams) -> LeafBotG
     return params
 
 
-def backfill_exports(paths: TagPaths, params, number: int) -> tuple[Path, Path]:
+def analysis_exports(paths: TagPaths, params, number: int) -> tuple[Path, Path]:
     """The positions_backfill.Exports of release `number`: its leaf network and leave
     inference model, which its analysis drew the opponent's leaves from."""
     return release.export_path(paths, number, LEAF), release.export_path(paths, number, LEAVE)
 
 
 def run_backfill(ctx: WorkerContext) -> int:
-    return positions_backfill.run(ctx, backfill_exports)
+    return positions_backfill.run(ctx, analysis_exports)
 
 
 def inputs(params, mount_root: Path) -> dict[str, Path]:

@@ -296,14 +296,14 @@ def run_match(ctx: WorkerContext) -> int:
     return match_runner.run(ctx, leafbot_player, analyze_positions)
 
 
-def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
+def analysis_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
     """The positions_backfill.Exports of generation `gen`: its export, and the
     matches' pinned leave inference model."""
     return paths.onnx_path(gen), leave_model_path(params, paths.mount_root)
 
 
 def run_backfill(ctx: WorkerContext) -> int:
-    return positions_backfill.run(ctx, backfill_exports)
+    return positions_backfill.run(ctx, analysis_exports)
 
 
 def run_generate(ctx: WorkerContext) -> int:
