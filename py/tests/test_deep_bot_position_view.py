@@ -82,7 +82,7 @@ def test_the_opp_rack_input_is_the_engines_summary_of_the_belief(replay, tag):
     """The engine's summary reads the same rack the Python belief does: under
     the model's parameters and under its no-information prior."""
     models = ReleaseModels.load(tag, 0)
-    b = release_positions.belief_at(models, replay, CLINKER, _view(replay, CLINKER))
+    b = release_positions.belief_at(models.beliefs, replay, CLINKER, _view(replay, CLINKER))
     assert b.modelled
     table = models.beliefs.table
     inferred = table.opp_rack_summary(b.unseen, b.params, b.leave_length, b.leave_pool)

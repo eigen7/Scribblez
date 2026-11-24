@@ -17,6 +17,13 @@ Routes (all take task + tag):
                                        them
   /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
                                        one move under every analyzed generation
+  /api/deep_bot_leaf_eval/belief       ?position=&generation= -> the mover's
+                                       belief about the opponent's rack under
+                                       the leave inference model the
+                                       generation's analysis drew from
+                                       (deep_bot_leaf_eval/opp_beliefs.py),
+                                       charted on the first request for the
+                                       generation and kept
 
 An analysis is read again only when its file changes, which happens when the
 positions backfill (workloads/positions_backfill.py) adds the positions the
@@ -33,15 +40,17 @@ from pathlib import Path
 import tornado.ioloop
 import tornado.web
 
+from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
 from scribblez.deep_bot import known_positions
 from scribblez.deep_bot.matches import HASTYBOT
 from scribblez.deep_bot.position_view import board_view, move_json
-from scribblez.deep_bot_leaf_eval import hasty_rollouts
+from scribblez.deep_bot_leaf_eval import hasty_rollouts, opp_beliefs
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
+from scribblez.workloads import deep_bot_leaf_eval, leaf_bot_generation
 
 # The likeliest moves under the leaf the table lists, besides any that the
 # reference, static equity or the pick names.
@@ -52,6 +61,16 @@ SHOWN_ROLLOUTS = 10
 # one on a tag's first request (~8 s for 127 generations), so it runs off the
 # IOLoop; one thread, so no two requests index the same generation.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# A belief request first charts the generation's positions when they are not
+# kept yet (opp_beliefs.charts), so it runs off the IOLoop too, behind no
+# history indexing; one thread, so no two requests chart the same generation.
+_BELIEF_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# Each workload's exports of an analyzed generation: (its leaf network, the
+# leave inference model its analysis drew the opponent's leaves from).
+_ANALYSIS_EXPORTS = {
+    deep_bot_leaf_eval.SPEC.name: deep_bot_leaf_eval.analysis_exports,
+    leaf_bot_generation.SPEC.name: leaf_bot_generation.analysis_exports,
+}
 
 
 def _stamp(path: Path) -> tuple[int, int]:
@@ -104,6 +123,18 @@ def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dic
         return db.read_leaf_value_history(conn, position, move)
     finally:
         conn.close()
+
+
+def belief(tag_key: tuple[str, str, str], generation: int, position: str) -> dict:
+    """The opponent-rack chart at `position` under the leave inference model
+    generation `generation`'s analysis drew from (web RackBeliefChart)."""
+    tag, task, mount_root = tag_key
+    spec = workloads.get(task)
+    params = params_mod.validate(spec.params_cls, tasks.read_params(spec, tag, mount_root))
+    paths = TagPaths(*tag_key)
+    _, leave = _ANALYSIS_EXPORTS[task](paths, params, generation)
+    chart = opp_beliefs.charts(paths, generation, leave)[position]
+    return {**chart, "model": f"of generation {generation}'s analysis"}
 
 
 def _matches(paths: TagPaths) -> dict[int, dict]:
@@ -293,8 +324,32 @@ class HistoryHandler(_Base):
         self.write({"history": series})
 
 
+class BeliefHandler(_Base):
+    """The opponent-rack belief at one known position under one analyzed
+    generation's leave inference model."""
+
+    async def get(self):
+        index = int(self.get_query_argument("position", "0"))
+        positions = known_positions.load()
+        if not 0 <= index < len(positions):
+            self.set_status(404)
+            self.write({"error": "position out of range"})
+            return
+        generation = int(self.get_query_argument("generation"))
+        if generation not in leaf_positions.analyzed(TagPaths(*self.tag_key())):
+            self.set_status(404)
+            self.write({"error": "no such analysis"})
+            return
+        args = (self.tag_key(), generation, positions[index].id)
+        chart = await tornado.ioloop.IOLoop.current().run_in_executor(
+            _BELIEF_EXECUTOR, belief, *args
+        )
+        self.write({"belief": chart})
+
+
 ROUTES = [
     (r"/api/deep_bot_leaf_eval/generations", GenerationsHandler),
     (r"/api/deep_bot_leaf_eval/position", PositionHandler),
     (r"/api/deep_bot_leaf_eval/history", HistoryHandler),
+    (r"/api/deep_bot_leaf_eval/belief", BeliefHandler),
 ]
