@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import LeaveValueCurves from './LeaveValueCurves';
 import { RackBeliefChart } from '../lib/surveyTypes';
 
 // The blind-spots viewer's opponent-rack panel: what the mover believes the
 // opponent holds, from the leave inference model (py/scribblez/blind_spots_viewer.py,
 // BeliefPanel). A grouped bar per tile -- the chance the rack holds one under
-// the model, beside the same under no information -- and sample racks, the
+// the model, beside the same under no information -- the kept leave's value
+// under each (LeaveValueCurves) where the chart has it, and sample racks, the
 // kept leave apart from the refill, all precomputed.
 
 // Series colors, validated (dataviz validate_palette.js, dark mode) against
@@ -106,6 +108,8 @@ export default function OppRackBelief({ chart }: { chart: RackBeliefChart }) {
         </span>
       </div>
       <Chart chart={chart} onHover={setHover} />
+      {chart.leave_value && <LeaveValueCurves value={chart.leave_value} colors={{ inferred: INFERRED, uniform: UNIFORM }} />}
+      {chart.leave_value === null && <div className="belief-sub leave-value-none">No kept leave is modelled here, so no leave value to chart.</div>}
       <div className="belief-samples-head">
         <span>
           Sample racks: <span className="belief-tile kept">kept</span>{' '}
