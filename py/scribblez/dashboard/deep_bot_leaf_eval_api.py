@@ -17,6 +17,11 @@ Routes (all take task + tag):
                                        them
   /api/deep_bot_leaf_eval/history      ?position=&move= -> the leaf's value of
                                        one move under every analyzed generation
+  /api/deep_bot_leaf_eval/belief       ?position= -> the mover's belief about
+                                       the opponent's rack under the tag's
+                                       fixed leave inference model
+                                       (deep_bot_leaf_eval/opp_beliefs.py),
+                                       charted on the first request and kept
 
 An analysis is read again only when its file changes, which happens when the
 positions backfill (workloads/positions_backfill.py) adds the positions the
@@ -33,15 +38,17 @@ from pathlib import Path
 import tornado.ioloop
 import tornado.web
 
+from scribblez import params as params_mod
 from scribblez import workloads
 from scribblez.dashboard import db, tasks
 from scribblez.deep_bot import known_positions
 from scribblez.deep_bot.matches import HASTYBOT
 from scribblez.deep_bot.position_view import board_view, move_json
-from scribblez.deep_bot_leaf_eval import hasty_rollouts
+from scribblez.deep_bot_leaf_eval import hasty_rollouts, opp_beliefs
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
+from scribblez.workloads import deep_bot_leaf_eval, leaf_bot_generation
 
 # The likeliest moves under the leaf the table lists, besides any that the
 # reference, static equity or the pick names.
@@ -52,6 +59,16 @@ SHOWN_ROLLOUTS = 10
 # one on a tag's first request (~8 s for 127 generations), so it runs off the
 # IOLoop; one thread, so no two requests index the same generation.
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# A belief request first charts the positions not kept yet (opp_beliefs.charts),
+# so it runs off the IOLoop too, behind no history indexing; one thread, so no
+# two requests chart the same positions.
+_BELIEF_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+# Each workload's leave inference model the opponent's rack is charted under,
+# with its label (its belief_model).
+_BELIEF_MODELS = {
+    deep_bot_leaf_eval.SPEC.name: deep_bot_leaf_eval.belief_model,
+    leaf_bot_generation.SPEC.name: leaf_bot_generation.belief_model,
+}
 
 
 def _stamp(path: Path) -> tuple[int, int]:
@@ -104,6 +121,17 @@ def history(tag_key: tuple[str, str, str], position: str, move: str) -> list[dic
         return db.read_leaf_value_history(conn, position, move)
     finally:
         conn.close()
+
+
+def belief(tag_key: tuple[str, str, str], position: str) -> dict:
+    """The opponent-rack chart at `position` under the tag's fixed leave
+    inference model (web RackBeliefChart)."""
+    tag, task, mount_root = tag_key
+    spec = workloads.get(task)
+    params = params_mod.validate(spec.params_cls, tasks.read_params(spec, tag, mount_root))
+    paths = TagPaths(*tag_key)
+    leave, label = _BELIEF_MODELS[task](paths, params)
+    return {**opp_beliefs.charts(paths, leave)[position], "model": label}
 
 
 def _matches(paths: TagPaths) -> dict[int, dict]:
@@ -293,8 +321,26 @@ class HistoryHandler(_Base):
         self.write({"history": series})
 
 
+class BeliefHandler(_Base):
+    """The opponent-rack belief at one known position."""
+
+    async def get(self):
+        index = int(self.get_query_argument("position", "0"))
+        positions = known_positions.load()
+        if not 0 <= index < len(positions):
+            self.set_status(404)
+            self.write({"error": "position out of range"})
+            return
+        args = (self.tag_key(), positions[index].id)
+        chart = await tornado.ioloop.IOLoop.current().run_in_executor(
+            _BELIEF_EXECUTOR, belief, *args
+        )
+        self.write({"belief": chart})
+
+
 ROUTES = [
     (r"/api/deep_bot_leaf_eval/generations", GenerationsHandler),
     (r"/api/deep_bot_leaf_eval/position", PositionHandler),
     (r"/api/deep_bot_leaf_eval/history", HistoryHandler),
+    (r"/api/deep_bot_leaf_eval/belief", BeliefHandler),
 ]

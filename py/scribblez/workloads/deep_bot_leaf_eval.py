@@ -302,6 +302,16 @@ def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
     return paths.onnx_path(gen), leave_model_path(params, paths.mount_root)
 
 
+def belief_model(paths: TagPaths, params) -> tuple[Path, str]:
+    """The leave inference model the Positions tab charts the opponent's rack
+    under, and its label: the matches' pinned one."""
+    label = (
+        f"{params.match_leave_inference_tag} gen {params.match_leave_inference_generation}, "
+        "the matches'"
+    )
+    return leave_model_path(params, paths.mount_root), label
+
+
 def run_backfill(ctx: WorkerContext) -> int:
     return positions_backfill.run(ctx, backfill_exports)
 

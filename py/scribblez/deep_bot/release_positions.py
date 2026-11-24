@@ -124,10 +124,12 @@ class ReleaseModels:
         }
 
 
-def belief_at(models: ReleaseModels, replay: KnownPositionsReplay, i: int, view: dict):
+def belief_at(
+    beliefs: LeaveBeliefs, replay: KnownPositionsReplay, i: int, view: dict
+) -> RackBelief:
     """The mover's belief about the opponent's rack at known position `i`,
     whose board_view is `view`."""
-    (b,) = models.beliefs.beliefs(
+    (b,) = beliefs.beliefs(
         replay.slog,
         [(i, view["turn"] - 1)],
         [unseen_pool(view["board"], view["rack"])],
@@ -171,7 +173,7 @@ def policy_candidates(
 def analyze(models: ReleaseModels, replay: KnownPositionsReplay, i: int) -> dict:
     """The release's models at known position `i`."""
     view = board_view(replay.positions[i])
-    b = belief_at(models, replay, i, view)
+    b = belief_at(models.beliefs, replay, i, view)
     return {
         # Seeded by the position, so every release draws its racks alike.
         "belief": models.beliefs.chart(b, np.random.default_rng(i)),
