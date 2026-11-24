@@ -66,4 +66,21 @@ describe('OppRackBelief', () => {
     const ys = (p: Element) => p.getAttribute('d')!.match(/V([\d.]+)/)![1];
     expect(ys(inferred)).toBe(ys(uniform));
   });
+
+  it("draws the kept leave's value as a normal curve per belief and reads them out", () => {
+    const value = { inferred: { mean: 10, sd: 5 }, uniform: { mean: 10, sd: 10 } };
+    render(<OppRackBelief chart={{ ...chart(true), leave_value: value }} />);
+    expect(document.querySelector('.leave-value-inferred')).not.toBeNull();
+    expect(document.querySelector('.leave-value-uniform')!.getAttribute('stroke-dasharray')).toBe('5 3');
+    expect(screen.getByText('inferred +10.0 ± 5.0 · uniform +10.0 ± 10.0')).toBeInTheDocument();
+    // The middle of the axis is both means: half of each curve lies below.
+    fireEvent.mouseMove(document.querySelector('.leave-value-chart')!, { clientX: 255 });
+    expect(screen.getByText('worth ≤ +10.0: inferred 50%, uniform 50%')).toBeInTheDocument();
+  });
+
+  it('has no value curves where the opponent kept no leave', () => {
+    render(<OppRackBelief chart={{ ...chart(false), leave_value: null }} />);
+    expect(document.querySelector('.leave-value')).toBeNull();
+    expect(screen.getByText('No kept leave is modelled here, so no leave value to chart.')).toBeInTheDocument();
+  });
 });

@@ -63,11 +63,20 @@ export interface SurveyMove {
 // then a uniform draw, and `inferred` equals `uniform` and is drawn as such.
 // Precomputed with sample racks (py/scribblez/blind_spots_beliefs.py) under
 // `model`; `stand_in_for` names the pools' own model when that one differs.
+// The kept leave's value in points (the leave table's), its mean and standard
+// deviation under the model and under a uniform draw of the leave.
+export interface LeaveValueMoments {
+  inferred: { mean: number; sd: number };
+  uniform: { mean: number; sd: number };
+}
+
 export interface RackBeliefChart {
   modelled: boolean;
   leave_length: number; // tiles the opponent kept at their last move
   refill: number; // tiles drawn since
   presence: { tile: string; inferred: number; uniform: number }[]; // A..Z, then '?'
+  // Null where the opponent kept no tiles; absent from charts made before it.
+  leave_value?: LeaveValueMoments | null;
   racks: { leave: string; refill: string }[];
   model: string; // "<leave_inference tag> gen <N>"
   stand_in_for?: string;

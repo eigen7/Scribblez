@@ -1665,6 +1665,13 @@ h1 {
   display: block;
   margin-top: 4px;
 }
+.leave-value {
+  margin-top: 10px;
+}
+.leave-value-chart {
+  display: block;
+  margin-top: 4px;
+}
 .belief-grid {
   stroke: rgba(255, 255, 255, 0.1);
   stroke-width: 1;
@@ -1765,6 +1772,10 @@ h1 {
 .dbp-error { color: #c0392b; font-size: 13px; margin: 6px 2px; }
 .dbp-board { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .dbp-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* The leaf tab's side panels below its answers: the unseen tiles and the
+   move's history in one column, the opponent's rack beside them. */
+.dbp-side-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.dbp-side-row > .dbp-side-column { display: flex; flex-direction: column; gap: 12px; width: 320px; }
 .dbp-panel {
   background: #f4f6f9;
   border: 1px solid #d6dce4;
