@@ -31,14 +31,14 @@ describe('the tag listing', () => {
     await waitFor(() => screen.getByText('tune-a'));
 
     getJSON.mockRejectedValue(new Error('unknown parameter'));
-    rerender(<HomePage workload={workload('policy_set')} onOpen={() => {}} />);
+    rerender(<HomePage workload={workload('leave_inference')} onOpen={() => {}} />);
     expect(screen.queryByText('tune-a')).toBeNull();
     await waitFor(() => screen.getByText(/Could not list tags: .*unknown parameter/));
   });
 
   it('shows a tag’s params error on its row', async () => {
     getJSON.mockResolvedValue({ tags: [row('ok'), row('stale', "unknown parameter 'x'")] });
-    render(<HomePage workload={workload('policy_set')} onOpen={() => {}} />);
+    render(<HomePage workload={workload('leave_inference')} onOpen={() => {}} />);
     await waitFor(() => screen.getByText("unknown parameter 'x'"));
     expect(screen.getByText('invalid params')).toBeTruthy();
     expect(screen.getByText('ok')).toBeTruthy();

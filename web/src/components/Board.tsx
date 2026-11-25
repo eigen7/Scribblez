@@ -14,10 +14,6 @@ interface BoardProps {
   onCellDrop: (row: number, col: number, payload: DragTilePayload) => void;
   // Board squares ("row,col") of the most recent move, highlighted when set.
   lastMoveCells?: Set<string>;
-  // A whole lane (a row or a column) to highlight -- used by the lane-analysis
-  // view to mark the selected lane. Every cell in it gets the `lane-highlight`
-  // class (tiles included), unlike the empty-cell-only `in-direction` cursor hint.
-  highlightLane?: { horizontal: boolean; index: number } | null;
   // Per-cell colored ring overlay, indexed [row][col]. A cell with a non-null
   // entry gets an inset-ring "halo" div drawn over it (see .board-cell-halo);
   // `title` becomes that div's hover tooltip, shown whenever the entry is
@@ -53,7 +49,7 @@ const BONUS_LABELS: Record<string, string> = {
 
 const Board: React.FC<BoardProps> = ({
   board, bonuses, candidateTiles, tileScores, cursorRow, cursorCol, cursorDir,
-  interactive, onCellClick, onCellDrop, lastMoveCells, highlightLane, cellHalos,
+  interactive, onCellClick, onCellDrop, lastMoveCells, cellHalos,
   cellHighlights, cellMasked,
 }) => {
   const dim = 15;
@@ -114,10 +110,6 @@ const Board: React.FC<BoardProps> = ({
 
               if (isCursor) cellClass += ' cursor-cell';
               else if (isInDir && !tile && !candidate) cellClass += ' in-direction';
-
-              const inLane = highlightLane != null &&
-                (highlightLane.horizontal ? highlightLane.index === r : highlightLane.index === c);
-              if (inLane) cellClass += ' lane-highlight';
 
               if (interactive && !tile) cellClass += ' clickable';
 

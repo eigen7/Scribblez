@@ -1,10 +1,7 @@
 import { ReactNode } from 'react';
 import ControlsTab from './components/ControlsTab';
-import DeepBotPositions from './components/DeepBotPositions';
-import EvidenceTrajectories from './components/EvidenceTrajectories';
 import InfoTab from './components/InfoTab';
 import LeafEvalPositions from './components/LeafEvalPositions';
-import LaneAnalysis from './components/LaneAnalysis';
 import PositionEvalAnalysis from './components/PositionEvalAnalysis';
 import { FigureTab, LossTab } from './components/TrainingTabs';
 
@@ -40,20 +37,8 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
-  max_move_per_lane: [
-    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    { name: 'Lane analysis', render: (w, t) => <LaneAnalysis task={w} tag={t} /> },
-    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
   match_arms: [
     figureTab('Arms', 'match_arms', 'match_arm', 'No arm results yet.'),
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
-  move_set_eval: [
-    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    trainingTab('mset_metrics', 'metrics', 'No per-epoch training metrics yet.'),
-    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
   leave_inference: [
@@ -70,40 +55,11 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
-  deep_bot: [
-    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    trainingTab('deep_bot_metrics', 'metrics', 'No generation scored yet.'),
-    figureTab('Matches', 'release_matches', 'release_match', 'No match results yet.'),
-    { name: 'Positions', render: (w, t) => <DeepBotPositions task={w} tag={t} /> },
-    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
   leaf_bot_generation: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
     trainingTab('leaf_bot_generation_metrics', 'metrics', 'No generation scored yet.'),
     figureTab('Matches', 'release_matches', 'release_match', 'No match results yet.'),
     { name: 'Positions', render: (w, t) => <LeafEvalPositions task={w} tag={t} /> },
-    { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
-  policy_set: [
-    {
-      name: 'Loss',
-      render: (w, t) => <LossTab task={w} tag={t} detailFigure="policy_set_loss" />,
-    },
-    trainingTab('policy_set_metrics', 'metrics', 'No per-generation metrics yet.'),
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
-  transfer_reader: [
-    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    trainingTab('transfer_reader_metrics', 'metrics', 'No validation passes yet.'),
-    { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
-  ],
-  evidence_trajectories: [
-    { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    { name: 'Trajectories', render: (w, t) => <EvidenceTrajectories task={w} tag={t} /> },
-    figureTab('Match', 'match_eval', 'match_eval', 'No match results yet.'),
-    trainingTab('evidence_metrics', 'metrics', 'No per-epoch training metrics yet.'),
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],

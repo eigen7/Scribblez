@@ -32,10 +32,8 @@ export interface PlacementHeadData {
   // anchored footprint (board legality + tile availability) covers the cell,
   // independent of the model/rollouts. A false cell is masked to a hard zero
   // server-side, so it gets neither a ring nor a tooltip, unlike a legal cell
-  // that's merely below FLOOR. Optional: only the Positions tab's payload
-  // carries it today (the Trajectories tab's move_set_eval pipeline has no
-  // masked-softmax legality step to export). Absent, buildPlacementOverlay
-  // falls back to its pre-`legal` behavior -- FLOOR alone gates the halo.
+  // that's merely below FLOOR. Absent, buildPlacementOverlay falls back to
+  // FLOOR alone gating the halo.
   legal?: boolean[][];
 }
 
