@@ -140,20 +140,6 @@
     "note": ""
   },
   {
-    "id": "THAN",
-    "title": "decline bingo in favor of triple-triple setup",
-    "gcg": "than.gcg",
-    "source": "docs/analysis/hidden_blind_spots.md#than-declining-a-76-point-bingo",
-    "origin": "hidden_blind_spots v1 1792942025771220660-local-0-g37-turn12",
-    "reference": [
-      "L1 THAN"
-    ],
-    "reference_equity_rank": 32,
-    "evidence": "a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 12.0 +- 0.4 points of win %",
-    "static_equity_best": "13H THeA.INe",
-    "note": ""
-  },
-  {
     "id": "TORI",
     "title": "QI setup",
     "gcg": "tori.gcg",
