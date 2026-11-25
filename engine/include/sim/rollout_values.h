@@ -50,7 +50,7 @@ struct BatchValues {
 };
 
 // A value at rollout leaves: the win/draw/loss probabilities at each, from
-// player 0's side. The narrow face of RolloutValues that LeafBot needs, which
+// player 0's side. The narrow face of RolloutValues that DeepBot needs, which
 // a backend with no network (sim/monte_carlo_leaf_values.h) also offers.
 class LeafValues {
  public:
@@ -69,7 +69,7 @@ class RolloutValues : public LeafValues {
   virtual BatchValues run(const RolloutBatch& batch) = 0;
   // The leaf's prediction at each of `leaves`, as the sims' leaf would be
   // valued there: a candidate's value with no rollout at all
-  // (agent/leaf_bot.h).
+  // (agent/deep_bot.h).
   std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves);
   // predict() over leaves held elsewhere, out[i] for *leaves[i]: what a
   // caller that gathers several callers' leaves into one call passes.

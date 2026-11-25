@@ -293,7 +293,7 @@ def _beside_release_0(title: str, key: str, *others: str):
     return (title, [key, f"r0_{key}", *others])
 
 
-# A multi-model trainer's read (leaf_bot_generation/trainer.py's records):
+# A multi-model trainer's read (deep_bot_generation/trainer.py's records):
 # each generation's games scored before the trainer trains on them, by the
 # newest release's models and by release 0's (the "r0_" prefix). The gap
 # between the two curves is the tag's gain over its seeds on that
@@ -330,7 +330,7 @@ def training_by_model(kinds: tuple[str, ...]) -> list[tuple]:
     ]
 
 
-LEAF_BOT_GENERATION_QUALITY = [
+DEEP_BOT_GENERATION_QUALITY = [
     *LEAVE_INFERENCE_SCORES,
     *LEAF_NETWORK_SCORES,
     # FP16 serves the leaf network: an activation past 65504 overflows
@@ -527,7 +527,7 @@ def _release_match_figure(opponent: str, rows: list[dict]):
 
 
 def release_match_grid(conn):
-    """leaf_bot_generation's Matches tab: a panel per opponent. None when no match has
+    """deep_bot_generation's Matches tab: a panel per opponent. None when no match has
     been recorded."""
     rows = db.read_release_matches(conn)
     if not rows:

@@ -3,7 +3,7 @@
 
 The leave_inference workload refits its own table every generation; this
 script fits one from any corpus, for example an existing HastyBot self-play
-tag's slogs (docs/plans/deep_bot_v0.md, "The win table"). Every
+tag's slogs (docs/plans/subtree_bot_v0.md, "The win table"). Every
 `--holdout-every`-th file (by a hash of its name) is held out, and the
 report compares the fitted table's log loss on those files with Macondo's
 bundled table.

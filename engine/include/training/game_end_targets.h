@@ -1,7 +1,7 @@
 #pragma once
 
 // Row targets from EncodeContext::game_end (game/game_end.h), from the POV
-// player's side: the end-of-game heads of docs/plans/deep_bot.md ("The search
+// player's side: the end-of-game heads of docs/plans/subtree_bot.md ("The search
 // network"). Near the end of a game, who goes out and what the other player is
 // left holding can decide it while the board barely changes, which the maps
 // do not show.

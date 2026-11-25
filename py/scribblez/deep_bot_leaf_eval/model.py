@@ -1,10 +1,11 @@
 """The DeepBot leaf evaluation model.
 
-DeepBot's rollouts end after one player moves from a full rack and the other
-replies, neither drawing. This model values that leaf from the side of the
-player who just moved: both leaves are known, and the pool (every tile on
-neither the board nor a leave) is where both refills come from. DeepBot
-evaluates one leaf per rollout, so the model is small.
+SubtreeBot's rollouts, which it was designed for, ended after one player moved
+from a full rack and the other replied, neither drawing. This model values
+such a leaf from the side of the player who just moved: both leaves are known,
+and the pool (every tile on neither the board nor a leave) is where both
+refills come from. A search evaluates one leaf per rollout, so the model is
+small.
 
 The input is the engine's leaf eval row (encoding/leaf_eval_input_encoder.h).
 The scalars reach either trunk as features: each seat's per-tile counts
@@ -37,7 +38,7 @@ each empty square (engine encoding/square_fates.h), and square_points
 fills it. Two end-of-game heads read the pooled vector: going_out (B, 3)
 logits over who goes out (the mover, the opponent, nobody), and end_points
 (B, 2), the mean and variance of the net end-of-game rack adjustment from the
-mover's side (engine training/game_end_targets.h). docs/plans/deep_bot.md
+mover's side (engine training/game_end_targets.h). docs/plans/subtree_bot.md
 ("The search network") gives their purpose: sims complete their maps and
 end-of-game outcomes with them, and residuals against them are evidence.
 

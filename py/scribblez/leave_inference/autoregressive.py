@@ -1,4 +1,4 @@
-"""The comparison head (docs/plans/deep_bot_v0.md, "The comparison head"): the
+"""The comparison head (docs/plans/subtree_bot_v0.md, "The comparison head"): the
 opponent's leave decoded one tile at a time, in sorted tile order, each step
 a 27-way softmax.
 

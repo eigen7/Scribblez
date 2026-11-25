@@ -1,18 +1,18 @@
-# Plan: one workload that advances DeepBot's generations
+# Plan: one workload that advances SubtreeBot's generations
 
 **Status: proposed 2026-11-13; steps 1 to 5 of its
-[build order](#build-order) are built.** This is step 11 of DeepBot's
-[build order](deep_bot.md#build-order) as a dashboard workload, and step 3
-of [the order of the remaining work](deep_bot_roadmap.md). Its
+[build order](#build-order) are built.** This is step 11 of SubtreeBot's
+[build order](subtree_bot.md#build-order) as a dashboard workload, and step 3
+of [the order of the remaining work](subtree_bot_roadmap.md). Its
 measurements inform the next step; no pass or kill thresholds are fixed in
 advance.
 
-**Decision.** A new workload, `deep_bot`, whose single tag is a line of
-DeepBot generations. The operator creates the tag, adds a trainer and any
+**Decision.** A new workload, `subtree_bot`, whose single tag is a line of
+SubtreeBot generations. The operator creates the tag, adds a trainer and any
 number of GPU generators, and adds or removes generator machines while it
 runs.
 
-- **Generators** play DeepBot against itself with the tag's newest models and
+- **Generators** play SubtreeBot against itself with the tag's newest models and
   deliver chunks that hold the games and everything the three trainers read.
 - **One trainer** trains the leave inference model, the leaf network and the
   policy on each completed generation, and publishes the three exports
@@ -35,10 +35,10 @@ release to a running generator.
 Today the three models are three workloads (`leave_inference`,
 `deep_bot_leaf_eval`, `policy_set`), each with its own HastyBot generators,
 and `policy_set` pins one export of the other two when its tag is created. A
-generation of DeepBot under that arrangement is three new tags made by hand
+generation of SubtreeBot under that arrangement is three new tags made by hand
 in the right order, and the games are played three times.
 
-DeepBot's games serve all three trainers at once. One game record gives the
+SubtreeBot's games serve all three trainers at once. One game record gives the
 leave inference model its rows (replay recovers every leave), the leaf
 network its rows (every turn, labelled by the game's result), and the policy
 its pools. So the loop has one corpus, and the natural unit is one tag.
@@ -51,8 +51,8 @@ its pools. So the loop has one corpus, and the natural unit is one tag.
   and the policy `π_k`, exported for the engine, with a manifest that names
   the three files and their hashes. Release 0 is the seeds. Release `k`
   (`k ≥ 1`) has trained on generations `0 … k−1`.
-- **The generating agent `A_k`:** DeepBot under the `hasty` reply model with
-  the [screen](deep_bot.md#the-screen-at-the-root), on `I_k` and `L_k`.
+- **The generating agent `A_k`:** SubtreeBot under the `hasty` reply model with
+  the [screen](subtree_bot.md#the-screen-at-the-root), on `I_k` and `L_k`.
 
 ## The loop
 
@@ -87,7 +87,7 @@ release, so the mix is on record.
 
 ### Self-play writes the pools
 
-The screen at DeepBot's root is a pool. It runs the pool labeler
+The screen at SubtreeBot's root is a pool. It runs the pool labeler
 (`PoolLabeler`) over `policy_set::pool_candidates` with the turn's belief, at
 100 raced rollouts a move: the same code, candidates and budget as
 `policy_set_pool_tool`, except that the screen leaves the pass out. Every
@@ -102,13 +102,13 @@ laptop's GPU (RTX 5000 Ada):
 | Source of pools | Games a second | Pools a second |
 |---|---|---|
 | `policy_set` tag `v1`: HastyBot games, 2 positions a game labelled by the tool | 2.7 | 5.4 |
-| DeepBot self-play, 2 positions a game labelled again by the tool | about 0.27 | about 0.5 |
-| DeepBot self-play, every searched turn's screen kept (about 20 a game) | 0.30 | about 6 |
+| SubtreeBot self-play, 2 positions a game labelled again by the tool | about 0.27 | about 0.5 |
+| SubtreeBot self-play, every searched turn's screen kept (about 20 a game) | 0.30 | about 6 |
 
 The first row is the tag's generator stats (50 games and their 100 pools in
 18.6 s). The self-play rate is 56 games in 184 s at 8 game threads, and 28
 threads give 0.27, so the GPU bounds it. The second row adds the tool's 0.19
-s a pool to each game. So with its pools kept, DeepBot self-play labels pools
+s a pool to each game. So with its pools kept, SubtreeBot self-play labels pools
 as fast as the pool tool does on HastyBot games, and the games come with
 them. Labelled a second time by the tool, the loop would produce a tenth of
 the pools `policy_set` gets today.
@@ -125,7 +125,7 @@ generator's uplink cannot carry that.
 **The pool carries the turn's sims too.** The agent gives the screen's 10
 or 32 survivors 1,000 raced rollouts each, and values a survivor that empties
 the bag by the endgame solver. Under the `policy` reply
-([roadmap](deep_bot_roadmap.md#the-policy-reply)) those sims are the ones in
+([roadmap](subtree_bot_roadmap.md#the-policy-reply)) those sims are the ones in
 which Bob replies by the policy. They are the agent's decision, and the
 policy's target is the decision, so the record holds both stages: every
 move's screen label, and each survivor's label from the turn's sims, or its
@@ -207,7 +207,7 @@ split into a model unit (build, train one epoch over a list of generation
 directories, evaluate a list of them, export, save and load its state) and
 the loop that drives it. The standalone workloads keep their loops over the
 same units, so they still run, and their results stay bit-identical. The
-`deep_bot` trainer drives the three units from one cursor.
+`subtree_bot` trainer drives the three units from one cursor.
 
 **Per generation `g`:**
 
@@ -258,9 +258,9 @@ The tag's defaults size the warmup and the averaging window in generations
 of this workload's rows, and the fine-tuning learning rates are the first
 thing the early generations tune.
 
-**Windows.** The DeepBot plan said to train `I_k` on `P_k`'s games alone,
+**Windows.** The SubtreeBot plan said to train `I_k` on `P_k`'s games alone,
 because a buffer that mixes policies converges to Bayes' rule under their
-average. This plan relaxes that to a short window of DeepBot's own
+average. This plan relaxes that to a short window of SubtreeBot's own
 generations. One generation is too few rows to train on alone without many
 passes over them, and consecutive releases differ far less than HastyBot
 differs from any of them, which is the gap that matters. `leave_window = 1`
@@ -275,7 +275,7 @@ at 40,000 pools a generation, ten generations are an hour of training for
 each release.
 
 The win tables the leave and leaf trainers refit are not carried: nothing in
-DeepBot reads them.
+SubtreeBot reads them.
 
 ## The generator
 
@@ -284,7 +284,7 @@ A GPU role on the engine image, like `policy_set`'s. Each cycle:
 1. It reads the newest release manifest it holds. A local generator reads
    the tag's `models/` in place; a remote one reads the copies the controller
    pushed.
-2. It runs `play_game` with `deepbot-endgame` in both seats under `--reply
+2. It runs `play_game` with `subtreebot-endgame` in both seats under `--reply
    hasty`, on the release's leaf network and leave inference model, hidden
    leaves, no random openings.
 3. It writes the `.forgone` sidecars and delivers the chunk.
@@ -329,8 +329,8 @@ Per generation, from the trainer, each also under release 0:
 - **The same, by the static-equity rank of the move played** (rank 0, 1 to
   9, 10 and below; the rank is in the turn's pool). This is the belief
   measurement the loop exists to move, and it replaces the per-candidate
-  table as the per-generation read. The [DeepBot plan's
-  table](deep_bot.md#generations) scores Bob's belief after each of Alice's
+  table as the per-generation read. The [SubtreeBot plan's
+  table](subtree_bot.md#generations) scores Bob's belief after each of Alice's
   candidates, most of which she does not play. After a candidate she would
   not play from her rack, a belief that follows Bayes' rule under her policy
   stays below the uniform draw, rightly: the racks that play it are not
@@ -383,7 +383,7 @@ The two opponents read differently:
 - **HastyBot is a regression read.** Under the `hasty` reply the agent's
   model of its opponent is HastyBot exactly, so release 0 is the release
   best fitted to this opponent. Later releases learn their beliefs and leaf
-  values from DeepBot's games, which describe HastyBot less well. The rate
+  values from SubtreeBot's games, which describe HastyBot less well. The rate
   can stall or fall while the agent gets stronger; a fall is still worth
   seeing.
 - **`A_0` is where the loop's own gain shows,** though only against its own
@@ -465,7 +465,7 @@ are added by hand, as `policy_set` tag `v1`'s are.
 - **The policy is trained but not played.** The `hasty` generating agent
   reads `I_k` and `L_k`. `π_k` rides in the release so that the agent can
   take it up without a change here. The [order of the remaining
-  work](deep_bot_roadmap.md) has it played as Bob's reply in the sims, and
+  work](subtree_bot_roadmap.md) has it played as Bob's reply in the sims, and
   the generating agent then switches to that reply.
 - **Bob's subtree is not in the generating agent,** and waits: it costs
   seconds a turn where the `hasty` reply costs a fifth of one. So the loop
@@ -484,7 +484,7 @@ seeds trained on 117 million rows (leave inference), 419 million (leaf) and
 
 So the policy gets several times its seed's corpus in a day. The leaf
 network gets a thousandth of its seed's rows a day, and whether rows from
-DeepBot's games move it at that rate is the open question for it: its curve
+SubtreeBot's games move it at that rate is the open question for it: its curve
 under release 0 against the newest release answers that in the first days.
 The leave inference model sits between: its target is one policy's tells,
 and 40,000 rows a generation is what the short window is for.
@@ -501,7 +501,7 @@ Each is a pull request.
    behavior. *Measure:* each standalone trainer's outputs on a fixed seed,
    before and after. Each trainer's weights and record after one generation
    on a small corpus are the same bit for bit.
-2. **The `deep_bot` trainer:** seeds and warm start, the three units on one
+2. **The `subtree_bot` trainer:** seeds and warm start, the three units on one
    cursor, evaluation before training with release 0 beside it, releases,
    the combined checkpoint and record, the re-sized clocks. Built
    2026-11-15 (`scribblez/deep_bot/`, with the params in
@@ -510,7 +510,7 @@ Each is a pull request.
    game, learning rate and clocks, so its architecture is the seed's by
    construction. Copying the seeds into a new tag and the charts come with
    the workload (step 3).
-3. **The generator and the workload,** on the trainer's machine: DeepBot
+3. **The generator and the workload,** on the trainer's machine: SubtreeBot
    self-play on the newest release, pools from the pool tool at
    `pool_positions_per_game` for now, the charts. Built 2026-11-16
    (`workloads/deep_bot.py`): a tag can be created, and the loop runs end to
@@ -524,9 +524,9 @@ Each is a pull request.
      game takes, until self-play writes the pools (step 5);
    - release 0's leave inference model, which scores 0.94 nats better than
      the uniform draw on HastyBot's games, scored 0.85 worse and 0.09
-     better on the two generations of DeepBot's. Forty games a generation
+     better on the two generations of SubtreeBot's. Forty games a generation
      settle nothing, but it is the direction the [parts'
-     match](deep_bot_roadmap.md#the-parts-measured) pointed.
+     match](subtree_bot_roadmap.md#the-parts-measured) pointed.
 4. **Releases to remote slots.** Built 2026-11-16: both roles run on ssh
    machines. The controller pushes the newest release to each generator
    that does not share the trainer's tree, and the seeds to a trainer
@@ -586,7 +586,7 @@ keeps.
 - **Three trainer roles in one tag.** The controller relays chunks to, and
   pulls generations from, the first ingesting slot only, and eviction would
   need an acknowledgment per trainer
-  ([deep_bot_v0.md](deep_bot_v0.md) notes the same). It buys training in
+  ([subtree_bot_v0.md](subtree_bot_v0.md) notes the same). It buys training in
   parallel, which is not the bottleneck.
 - **Pools from the pool tool alone.** No engine change, and a tenth of the
   pools ([above](#self-play-writes-the-pools)). It is the first form built

@@ -10,8 +10,9 @@
 // own last two exchanges. It never reads which tiles an opponent's exchange
 // returned, which only the game knows.
 //
-// DeepBot keeps one: its own_query is Alice's belief about Bob's leave at the
-// root, and own_moves feeds belief::ReplyView, Bob's view of her candidate.
+// DeepBot keeps one: its own_query is the mover's belief about the opponent's
+// leave. own_moves fed belief::ReplyView, the opponent's view of a candidate,
+// for SubtreeBot (docs/plans/subtree_bot.md).
 
 #include "belief/forgone_plays.h"
 #include "belief/leave_query.h"

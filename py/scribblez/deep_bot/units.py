@@ -1,5 +1,5 @@
-"""A multi-model trainer's units (leaf_bot_generation's two), built from the
-tag's seeds (docs/plans/deep_bot_generations.md, "Seeds and warm start").
+"""A multi-model trainer's units (deep_bot_generation's two), built from the
+tag's seeds (docs/plans/subtree_bot_generations.md, "Seeds and warm start").
 
 A seed is a rolling checkpoint copied to seeds/<kind>.pt under the tag
 (seeds.py): a standalone workload's, or a multi-model trainer's, which holds

@@ -60,7 +60,7 @@ def leave(tmp_path_factory) -> Path:
 
 
 def _tag(tmp_path: Path) -> TagPaths:
-    paths = TagPaths("t", "leaf_bot_generation", tmp_path)
+    paths = TagPaths("t", "deep_bot_generation", tmp_path)
     paths.root.mkdir(parents=True, exist_ok=True)
     return paths
 
@@ -131,7 +131,7 @@ def test_a_position_lacking_or_edited_is_charted_again(tmp_path, charted, leave,
 
 
 class BeliefRouteTest(tornado.testing.AsyncHTTPTestCase):
-    """A leaf_bot_generation tag's belief is release 0's leave inference
+    """A deep_bot_generation tag's belief is release 0's leave inference
     model's."""
 
     def get_app(self):
@@ -145,7 +145,7 @@ class BeliefRouteTest(tornado.testing.AsyncHTTPTestCase):
 
     def _get(self, position: int):
         return self.fetch(
-            f"/api/deep_bot_leaf_eval/belief?task=leaf_bot_generation&tag=t&position={position}"
+            f"/api/deep_bot_leaf_eval/belief?task=deep_bot_generation&tag=t&position={position}"
         )
 
     def test_a_position_is_charted_under_release_0(self):

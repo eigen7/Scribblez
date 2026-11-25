@@ -2,7 +2,7 @@
 params, trained one epoch over a window of generations, evaluated on game
 directories, and exported for the engine. The leave_inference trainer drives
 one beside its win table; the deep_bot trainer
-(docs/plans/deep_bot_generations.md) drives it beside two other models.
+(docs/plans/subtree_bot_generations.md) drives it beside two other models.
 
 The unit owns the model, its optimizer and the optimizer's arm. The trainer
 owns the cursor, the checkpoint and the record.

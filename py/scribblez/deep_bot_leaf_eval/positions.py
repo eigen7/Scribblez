@@ -1,10 +1,10 @@
 """A leaf export's view of the known positions (deep_bot/known_positions.py),
-what deep_bot_leaf_eval's Positions tab shows: LeafBot's value of every legal
-move at each position (engine agent/leaf_bot.h, its opponent leaves drawn from
+what deep_bot_leaf_eval's Positions tab shows: DeepBot's value of every legal
+move at each position (engine agent/deep_bot.h, its opponent leaves drawn from
 the matches' leave inference model), the move's points, its rank under that
 value and under static equity, and the pick the matches would make there: the
 best of HastyBot's top `candidates`. It values each move over more opponent
-leaves than a match's LeafBot does, so that pick is what the matches' LeafBot
+leaves than a match's DeepBot does, so that pick is what the matches' DeepBot
 would play with that many draws, which a match's might not.
 
 The match slot computes it after each match (workloads/deep_bot_leaf_eval.py)
@@ -23,10 +23,10 @@ from scribblez.paths import TagPaths
 
 # The data/ subdirectory the analyses are delivered into.
 POSITIONS_DIR = "leaf_positions"
-# LeafBot's candidates in the analysis: more than any position's legal moves,
+# DeepBot's candidates in the analysis: more than any position's legal moves,
 # so it values every move.
 ALL_MOVES = 1_000_000
-# LeafBot's seed in the analysis, which jitters its draws of the opponent's
+# DeepBot's seed in the analysis, which jitters its draws of the opponent's
 # leaves. Fixed, so every generation's analysis, and the hasty rollouts
 # (deep_bot_leaf_eval/hasty_rollouts.py), value a position over the same
 # leaves.
@@ -52,18 +52,18 @@ def analyzed(paths: TagPaths) -> list[int]:
 def player_spec(
     model: Path | str, leave: Path, opp_leaves: int, candidates: int = ALL_MOVES
 ) -> str:
-    """LeafBot valuing static equity's best `candidates` moves (by default
-    every legal move) with leaf `model`, an export or LeafBot's monte-carlo
+    """DeepBot valuing static equity's best `candidates` moves (by default
+    every legal move) with leaf `model`, an export or DeepBot's monte-carlo
     leaf."""
     return (
-        f"--type=leafbot --leaf-model={model} --leave-inference={leave} "
+        f"--type=deepbot --leaf-model={model} --leave-inference={leave} "
         f"--candidates={candidates} --opp-leaves={opp_leaves} --seed={ANALYSIS_SEED}"
     )
 
 
 def match_pick(record: dict, candidates: int) -> str:
-    """The move the matches' LeafBot (its `candidates` best by static equity)
-    plays at the position the pick tool's `record` (of LeafBot over every
+    """The move the matches' DeepBot (its `candidates` best by static equity)
+    plays at the position the pick tool's `record` (of DeepBot over every
     move) is of: the best valued of those candidates. A position with a single
     legal move has no values, and its record's pick is the matches' too."""
     top = [v for v in record.get("values", []) if 1 <= v["equity_rank"] <= candidates]

@@ -19,7 +19,7 @@
 // stops after that many plies, and a leaf stands in for the rest of the game:
 // either the position-evaluation model's readout at the horizon (its outcome
 // probabilities and predicted final delta), or a win table's P(win) for the
-// horizon's side to move (docs/plans/deep_bot.md, "Sims"). A rollout whose
+// horizon's side to move (docs/plans/subtree_bot.md, "Sims"). A rollout whose
 // game ends before the horizon, or whose horizon falls in the endgame,
 // contributes its exact terminal outcome instead.
 

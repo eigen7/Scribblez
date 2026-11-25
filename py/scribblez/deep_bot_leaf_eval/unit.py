@@ -2,7 +2,7 @@
 trained one epoch over a window of generations, evaluated on game
 directories beside two win tables, and exported for the engine. The
 deep_bot_leaf_eval trainer drives one; the deep_bot trainer
-(docs/plans/deep_bot_generations.md) drives it beside two other models.
+(docs/plans/subtree_bot_generations.md) drives it beside two other models.
 
 The unit owns the model, its optimizer and the optimizer's arm. The trainer
 owns the cursor, the checkpoint and the record.

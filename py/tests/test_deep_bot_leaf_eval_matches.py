@@ -1,6 +1,6 @@
 """deep_bot_leaf_eval's match_eval role: the leave inference model the matches
 draw opponent leaves from is pinned at task creation and staged for a remote
-slot, and each assigned export plays as LeafBot under hidden leaves."""
+slot, and each assigned export plays as DeepBot under hidden leaves."""
 
 import json
 from dataclasses import replace
@@ -94,11 +94,11 @@ def _ctx(mount: Path, sink=None, **overrides) -> WorkerContext:
 def test_an_export_plays_as_leafbot_under_hidden_leaves(tmp_path):
     leave = _leave_exports(tmp_path, [3]).onnx_path(3)
     model = tmp_path / "model_epoch_0010.onnx"
-    spec, face_up = deep_bot_leaf_eval.leafbot_player(
+    spec, face_up = deep_bot_leaf_eval.deepbot_player(
         _ctx(tmp_path, match_candidates=6, match_opp_leaves=8), model
     )
     assert spec == (
-        f"--type=leafbot-endgame --leaf-model={model} --leave-inference={leave} "
+        f"--type=deepbot-endgame --leaf-model={model} --leave-inference={leave} "
         "--candidates=6 --opp-leaves=8 --name=model"
     )
     assert face_up is False
@@ -128,7 +128,7 @@ def test_the_match_role_plays_the_assigned_export_as_leafbot(tmp_path, monkeypat
     ctx = _ctx(tmp_path, sink=LocalSink(paths.root), match_pairs=3, analysis_opp_leaves=64)
     assert deep_bot_leaf_eval.run_match(ctx) == 0
     ((spec0, spec1, pairs, face_up),) = played
-    assert spec0.startswith(f"--type=leafbot-endgame --leaf-model={model} ")
+    assert spec0.startswith(f"--type=deepbot-endgame --leaf-model={model} ")
     assert (spec1, pairs, face_up) == ("--type=hastybot-endgame", 3, False)
     assert [p.name for p in paths.match_results_dir.glob("*.json")] == ["gen_000020-w0.json"]
     # The same export analyzed the known positions, delivered apart from the

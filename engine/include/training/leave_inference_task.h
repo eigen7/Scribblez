@@ -1,6 +1,6 @@
 #pragma once
 
-// The leave inference training task (docs/plans/deep_bot_v0.md, "Rows"): a
+// The leave inference training task (docs/plans/subtree_bot_v0.md, "Rows"): a
 // pre-move row from the observer's side, LeaveInferenceInputEncoder's input,
 // labelled with the opponent's leave from replay.
 //

@@ -1,5 +1,5 @@
-"""The tilted-prior NLL of the opponent's true leave (docs/plans/deep_bot.md,
-"The leave inference model"; docs/plans/deep_bot_v0.md, "The loss").
+"""The tilted-prior NLL of the opponent's true leave (docs/plans/subtree_bot.md,
+"The leave inference model"; docs/plans/subtree_bot_v0.md, "The loss").
 
 The model's 29 floats define, over the leave table's rows of the leave's
 length,

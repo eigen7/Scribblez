@@ -27,7 +27,7 @@ Usage:
     ./py/scripts/migrate_tag_params.py position_eval --tag footprints-official \
         --drop mask_placement
 
-    ./py/scripts/migrate_tag_params.py leaf_bot_generation --all \
+    ./py/scripts/migrate_tag_params.py deep_bot_generation --all \
         --set analysis_opp_leaves=64 --dry-run
 """
 

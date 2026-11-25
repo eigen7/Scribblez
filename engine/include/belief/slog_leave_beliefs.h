@@ -1,7 +1,7 @@
 #pragma once
 
 // The opponent's leave beliefs at positions of one .slog, from the leave
-// inference model (docs/plans/deep_bot_v0.md, "Workload 2"): what the survey
+// inference model (docs/plans/subtree_bot_v0.md, "Workload 2"): what the survey
 // tool's --leave-inference sims under. Each position's model input is the
 // training row itself, decoded by BlockDecoder's kLeaveInference task from the
 // .slog and its .forgone sidecar, so the model sees exactly the rows it was

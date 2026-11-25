@@ -1,6 +1,6 @@
 #pragma once
 
-// The leave inference model's input (docs/plans/deep_bot_v0.md, "Workload 1:
+// The leave inference model's input (docs/plans/subtree_bot_v0.md, "Workload 1:
 // leave_inference"): what the player to move (the observer) can see of a
 // position and of the last few moves, from which the model infers the tiles
 // the opponent kept at their last move. A standalone encoder, so the position
@@ -40,7 +40,7 @@
 // counts stay zero and only the number shows.
 //
 // A row whose observer's private history is hidden (LeaveHistory::hide_private)
-// is the row of an observer whose past someone else is modelling: DeepBot's
+// is the row of an observer whose past someone else is modelling: SubtreeBot's
 // Alice, asking what Bob believes about her rack after her candidate
 // (belief/reply_query.h), knows the rack she samples for him but not his past
 // racks or exchanges. Its indicator is set, the observer's exchanges are zero,
@@ -69,7 +69,7 @@ namespace scribblez {
 class Dictionary;
 
 // The format version of the leave inference model's input and output
-// (docs/plans/deep_bot_v0.md, "Versions"). Bump it whenever a row's layout or
+// (docs/plans/subtree_bot_v0.md, "Versions"). Bump it whenever a row's layout or
 // meaning changes; models stamp it and loaders accept only this version.
 inline constexpr int kLeaveInferenceFormatVersion = 4;
 

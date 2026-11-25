@@ -1,4 +1,4 @@
-"""The leaf_bot_generation trainer (scribblez/leaf_bot_generation/trainer.py):
+"""The deep_bot_generation trainer (scribblez/deep_bot_generation/trainer.py):
 release 0 from the seeds, a generation scored under the newest release and
 release 0, trained and published as the next release, and the checkpoint
 that both resumes the tag and seeds the next generation's tag."""
@@ -21,26 +21,26 @@ if not LEAVES.exists():
 from cloud.sinks import LocalSink  # noqa: E402
 from scribblez import workloads  # noqa: E402
 from scribblez.deep_bot import LEAF, LEAVE, release, seeds, unit_set, units  # noqa: E402
+from scribblez.deep_bot_generation import KINDS, LAYOUT, trainer  # noqa: E402
 from scribblez.generational import lifecycle  # noqa: E402
 from scribblez.generational.records import TrainRecorder  # noqa: E402
-from scribblez.leaf_bot_generation import KINDS, LAYOUT, trainer  # noqa: E402
 from scribblez.leave_inference import forgone  # noqa: E402
 from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.position_eval.trainer import OutputDeliverer  # noqa: E402
 from scribblez.selfplay import run_games  # noqa: E402
-from scribblez.workloads import leaf_bot_generation  # noqa: E402
+from scribblez.workloads import deep_bot_generation  # noqa: E402
+from scribblez.workloads.deep_bot_generation import DeepBotGenerationParams  # noqa: E402
 from scribblez.workloads.deep_bot_leaf_eval import DeepBotLeafEvalParams  # noqa: E402
-from scribblez.workloads.leaf_bot_generation import LeafBotGenerationParams  # noqa: E402
 from scribblez.workloads.leave_inference import LeaveInferenceParams  # noqa: E402
 
 CPU = torch.device("cpu")
-SPEC = workloads.get("leaf_bot_generation")
+SPEC = workloads.get("deep_bot_generation")
 # The smallest seeds, and a tag whose generation is the tests' one game.
 SEED_PARAMS = {
     LEAVE: LeaveInferenceParams(trunk_channels=8, num_blocks=1, batch_size=2),
     LEAF: DeepBotLeafEvalParams(trunk="conv", width=8, depth=1, batch_size=2),
 }
-PARAMS = LeafBotGenerationParams(games_per_generation=1, leave_window=1, leaf_window=1)
+PARAMS = DeepBotGenerationParams(games_per_generation=1, leave_window=1, leaf_window=1)
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +111,7 @@ def test_a_generation_is_scored_trained_and_published_and_seeds_the_next_tag(
     by_kind = units.build_units(tag, PARAMS, CPU, KINDS)
     baseline = units.build_units(tag, PARAMS, CPU, KINDS)
     recorder, ctx, staged = _context(tag, monkeypatch)
-    state = trainer.LeafBotGenerationState()
+    state = trainer.DeepBotGenerationState()
     trainer.ensure_newest_release(by_kind, tag, "g1", False, state)
     assert release.newest(tag) == 0
     assert all((tag.root / rel).is_file() for rel in LAYOUT.files(0))
@@ -136,15 +136,15 @@ def test_a_generation_is_scored_trained_and_published_and_seeds_the_next_tag(
     assert record["loss_leave"] > 0 and record["loss_leaf"] > 0
 
     resumed = units.build_units(tag, PARAMS, CPU, KINDS)
-    assert unit_set.resume(resumed, tag, CPU, trainer.LeafBotGenerationState) == state
+    assert unit_set.resume(resumed, tag, CPU, trainer.DeepBotGenerationState) == state
     assert all(_equal_weights(resumed[k].model, by_kind[k].model) for k in KINDS)
     assert not _equal_weights(baseline[LEAVE].model, by_kind[LEAVE].model)
 
     # The next generation's tag starts from this one's trained models, with
     # this tag's architecture and its own clocks.
     following = SPEC.paths("g2", tag.mount_root)
-    params = LeafBotGenerationParams(seed_tag="g1", leave_window=3)
-    leaf_bot_generation.finalize(SPEC, following, params)
+    params = DeepBotGenerationParams(seed_tag="g1", leave_window=3)
+    deep_bot_generation.finalize(SPEC, following, params)
     seeded = units.build_units(following, params, CPU, KINDS)
     assert all(_equal_weights(seeded[k].model, by_kind[k].model) for k in KINDS)
     assert seeded[LEAF].params.width == SEED_PARAMS[LEAF].width
@@ -153,7 +153,7 @@ def test_a_generation_is_scored_trained_and_published_and_seeds_the_next_tag(
 
 def test_a_remote_trainers_release_reaches_the_controller(tag, monkeypatch):
     by_kind = units.build_units(tag, PARAMS, CPU, KINDS)
-    trainer.ensure_newest_release(by_kind, tag, "g1", True, trainer.LeafBotGenerationState())
+    trainer.ensure_newest_release(by_kind, tag, "g1", True, trainer.DeepBotGenerationState())
 
     home = TagPaths("g1", SPEC.name, tag.mount_root / "controller")
     pulled = home.root / release.OUTBOX

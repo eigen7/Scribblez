@@ -1,8 +1,8 @@
 #pragma once
 
-// LeafBot (--type=leafbot): the DeepBot leaf network
-// (py/scribblez/deep_bot_leaf_eval) as a player, with no search; the harness
-// that measures how good an evaluator the leaf is. Each turn it values each of
+// DeepBot (--type=deepbot): the leaf network (py/scribblez/deep_bot_leaf_eval)
+// as a player, so far with no search (docs/plans/deep_bot.md plans the rest);
+// the harness that measures how good an evaluator the leaf is. Each turn it values each of
 // HastyBot's top `candidates` moves by static equity at the position right
 // after it: from its own side, the opponent to move, both leaves known
 // (encoding/leaf_eval_input_encoder.h), which is the row the leaf trained on
@@ -17,7 +17,7 @@
 // equity) on ties, and its decision reports the candidates' values
 // (MoveDecision::values). A candidate that empties the bag is valued like any
 // other, since the leaf trains on every turn the game did not end at. Hidden
-// leaves only, before the endgame: EndgameAgent<LeafBot> solves the turns
+// leaves only, before the endgame: EndgameAgent<DeepBot> solves the turns
 // with the bag empty.
 
 #include "agent/agent.h"
@@ -53,9 +53,9 @@ std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws);
 // Every draw of `draws`, repeats included, each weighted equally.
 std::vector<WeightedLeave> equal_weights(const std::vector<Rack>& draws);
 
-class LeafBot : public Agent {
+class DeepBot : public Agent {
  public:
-  static constexpr const char* kType = "leafbot";
+  static constexpr const char* kType = "deepbot";
   // The --leaf-model that values leaves by playouts instead of a network:
   // what a perfect network would predict (sim/monte_carlo_leaf_values.h).
   static constexpr const char* kMonteCarloLeaf = "monte-carlo";
@@ -79,7 +79,7 @@ class LeafBot : public Agent {
     uint64_t seed = 0;
   };
 
-  // What LeafBot values candidates with: the leaf network (shared by every
+  // What DeepBot values candidates with: the leaf network (shared by every
   // game of the process, which gathers concurrent games' leaves into one
   // call), and the leave inference model's forward pass with the leave table
   // its beliefs are over. An empty `predict` draws the opponent's leaves from
@@ -90,22 +90,22 @@ class LeafBot : public Agent {
     std::shared_ptr<const LeaveValueArrays> table;
   };
 
-  // Builds the backend Params names (leaf_bot_factory.cpp, which reaches CUDA
+  // Builds the backend Params names (deep_bot_factory.cpp, which reaches CUDA
   // and TensorRT).
-  explicit LeafBot(const Params& params);
-  LeafBot(const Params& params, Backend backend);
+  explicit DeepBot(const Params& params);
+  DeepBot(const Params& params, Backend backend);
 
   MoveDecision make_move(const MoveRequest& req) override;
   void begin_game(const BeginGameRequest& req) override;
   void observe_turn(const MoveRequest& req) override;
   void observe_move(const Move& move) override;
 
-  // Build from `--player "--type=leafbot [options]"` tokens, with --type and
+  // Build from `--player "--type=deepbot [options]"` tokens, with --type and
   // --name already stripped. Throws on bad input.
-  static std::unique_ptr<LeafBot> from_spec(const std::vector<std::string>& tokens, int thread_id,
+  static std::unique_ptr<DeepBot> from_spec(const std::vector<std::string>& tokens, int thread_id,
                                             const std::string& name);
   static std::string options_help();
-  // Parse LeafBot's options, plus any a derived agent registered in `extra`.
+  // Parse DeepBot's options, plus any a derived agent registered in `extra`.
   static Params parse_params(const std::vector<std::string>& tokens, int thread_id,
                              const std::string& name,
                              boost::program_options::options_description& extra,

@@ -70,7 +70,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_values.cpp
   src/sim/sim_maps.cpp
   src/agent/best_bot.cpp
-  src/agent/leaf_bot.cpp
+  src/agent/deep_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
@@ -174,7 +174,7 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
-  # The leave inference model's runtime (docs/plans/deep_bot_v0.md, "Serving").
+  # The leave inference model's runtime (docs/plans/subtree_bot_v0.md, "Serving").
   src/belief/leave_inference_net.cpp
   src/belief/served_leave_model.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -194,7 +194,7 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent), LeafBot's factory,
+# The model-driven agents (NeuralAgent, NeuralSimAgent), DeepBot's factory,
 # and SimAgent's factory, which can load a leaf model: every agent source that reaches
 # TensorRT, kept out of scribblez_core for the same reason as scribblez_nn.
 # Every consumer that parses --player specs links it.
@@ -208,7 +208,7 @@ add_library(scribblez_neural_agents STATIC
   src/agent/neural_service_options.cpp
   src/agent/neural_sim_agent.cpp
   src/agent/neural_sim_agent_factory.cpp
-  src/agent/leaf_bot_factory.cpp)
+  src/agent/deep_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
@@ -328,7 +328,7 @@ target_link_libraries(gcg_to_slog PRIVATE
   Threads::Threads)
 
 # Forgone-play (.forgone) sidecars for .slog data, the leave inference model's
-# lexical input (docs/plans/deep_bot_v0.md).
+# lexical input (docs/plans/subtree_bot_v0.md).
 add_executable(forgone_play_tool apps/forgone_play_tool.cpp)
 target_link_libraries(forgone_play_tool PRIVATE
   scribblez_core
@@ -431,7 +431,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(search_tests
     tests/test_best_bot.cpp
     tests/test_endgame.cpp
-    tests/test_leaf_bot.cpp
+    tests/test_deep_bot.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp
     tests/test_monte_carlo_sim.cpp

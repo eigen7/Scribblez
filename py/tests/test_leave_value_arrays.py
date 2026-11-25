@@ -17,7 +17,7 @@ if not LEAVES.exists():
 
 from scribblez.ffi import LeaveValueArrays  # noqa: E402
 
-# From docs/plans/deep_bot.md; they depend only on the tile distribution.
+# From docs/plans/subtree_bot.md; they depend only on the tile distribution.
 ROW_COUNTS = {1: 27, 2: 373, 3: 3509, 4: 25254, 5: 148150, 6: 737311}
 
 

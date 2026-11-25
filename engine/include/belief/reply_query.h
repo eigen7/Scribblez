@@ -1,7 +1,7 @@
 #pragma once
 
 // The opponent's view of one of the chooser's candidates
-// (docs/plans/deep_bot.md, "Bob's subtree"): the leave inference query the
+// (docs/plans/subtree_bot.md, "Bob's subtree"): the leave inference query the
 // opponent, holding a sampled rack, would make about the leave the candidate
 // keeps: one per (candidate, rack sampled for the opponent) models the
 // opponent's belief about the chooser's rack.

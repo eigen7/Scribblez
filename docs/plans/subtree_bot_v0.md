@@ -1,18 +1,18 @@
-# DeepBot v0: the leave inference model and the policy-set model
+# SubtreeBot v0: the leave inference model and the policy-set model
 
 **Status: proposed 2026-10-14, build plan added 2026-10-15; steps 1-11
 built, the last three (GPU label generation) on 2026-10-23.** The
-implementation plan for the first two models of [deep_bot.md](deep_bot.md),
+implementation plan for the first two models of [subtree_bot.md](subtree_bot.md),
 each trained from HastyBot-vs-HastyBot games in standard Scrabble (hidden
 leaves):
 
-1. **[The leave inference model](deep_bot.md#the-leave-inference-model),**
+1. **[The leave inference model](subtree_bot.md#the-leave-inference-model),**
    `I_0`.
-2. **[The policy-set model](deep_bot.md#the-policy-set-model),** in
+2. **[The policy-set model](subtree_bot.md#the-policy-set-model),** in
    both of its forms. Training both on the same data lets the measurements
    choose between them.
 
-The design of each model is in [deep_bot.md](deep_bot.md). This document
+The design of each model is in [subtree_bot.md](subtree_bot.md). This document
 covers what is specific to v0:
 - the data source and the dashboard workloads;
 - the engine and Python work, and where each piece lives;
@@ -103,11 +103,11 @@ Python stamps and checks the engine's value and never keeps its own copy.
 ## The win table
 
 The policy-set model's label rollouts stop at a
-[versioned win table](deep_bot.md#sims).
+[versioned win table](subtree_bot.md#sims).
 
 **It is a side product of the `leave_inference` workload.** That workload
 already plays the games the table is fitted from, under the policy the leave
-inference model learns. deep_bot.md's generations pair them for that reason:
+inference model learns. subtree_bot.md's generations pair them for that reason:
 "its games train the next leave inference model and fit the next win
 table". The trainer refits the table from its window every generation and
 delivers it beside that generation's ONNX. A consumer that pins one
@@ -222,7 +222,7 @@ position encoder's `InputEncodingSpec` and its version are untouched.
 
 The encoder reads only this value. The agent will build the same value for a
 query whose most recent move is Alice's candidate
-([deep_bot.md](deep_bot.md#the-leave-inference-model)), without a `.slog`,
+([subtree_bot.md](subtree_bot.md#the-leave-inference-model)), without a `.slog`,
 so serving needs no second encoder.
 
 **Spatial planes (15 × 15):**
@@ -358,7 +358,7 @@ have none.
   exchanged a tile the observer later drew.
 - **Encoding:** per slot and tile kind, `[applies, margin / 100]`, zero when
   it does not apply. With the slots, the exchange counts and the hidden-history
-  indicator ([deep_bot.md](deep_bot.md#beliefs)'s "Bob's private past is
+  indicator ([subtree_bot.md](subtree_bot.md#beliefs)'s "Bob's private past is
   hidden"), the row has 454 scalars, and `kLeaveInferenceFormatVersion` is 4.
 - **Generation:** the workload's generators run `forgone_play_tool` over each
   chunk before delivering it, and the trainer over its held-out games.
@@ -429,7 +429,7 @@ pool, the observer's unseen pool, and the leave table.
 v0's only engine consumer is the survey tool: one query per position, about
 300 samples. The GPU-batched sampler and Algorithm 2 serve the agent's
 ~2,000 queries per turn, so they are built with Bob's subtree
-([deep_bot.md](deep_bot.md#build-order), step 4). The CPU sampler is their
+([subtree_bot.md](subtree_bot.md#build-order), step 4). The CPU sampler is their
 parity reference.
 
 #### Serving
@@ -608,9 +608,9 @@ A generator worker's cycle:
 3. **Record forgone plays** with `forgone_play_tool`, which the leave
    inference model's input needs.
 4. **Label each position** with `policy_set_pool_tool`, on the GPU, over the
-   design's [candidate set](deep_bot.md#labels): up to `rollouts` (default
+   design's [candidate set](subtree_bot.md#labels): up to `rollouts` (default
    100) per candidate, raced. A rollout is the candidate, Bob's and Alice's
-   mechanical replies, and the [leaf network](deep_bot.md#sims), the form
+   mechanical replies, and the [leaf network](subtree_bot.md#sims), the form
    the network is trained on.
 5. **Deliver the chunk's pool records** (below) as the `.slog`'s sidecar.
 
@@ -630,7 +630,7 @@ into its `.pool`. Per position:
 - **The batch.** Each candidate, applied to the board, is a rollout position:
   the board, the chooser's leave, the scores, and for an exchange the tiles
   it returns to the bag. The candidates are one group of the
-  [GPU sims](deep_bot.md#sims): they share the unseen pool and the
+  [GPU sims](subtree_bot.md#sims): they share the unseen pool and the
   per-rollout opponent leaves, so rollout `i` holds the same opponent rack
   and draws from the same shuffled bag under every candidate.
 - **Racing, in rounds.** The rounds end at the checkpoints in
@@ -712,7 +712,7 @@ pins its teacher:
 ### The opponent-rack input
 
 The policy-set model reads the chooser's belief about the opponent's rack
-([design](deep_bot.md#the-policy-set-model)) as `OppRackSummary`
+([design](subtree_bot.md#the-policy-set-model)) as `OppRackSummary`
 (`belief/opp_rack_summary.h`), which describes the rack the sims draw:
 
 - **Presence, 27 floats:** per tile kind, the probability that the rack holds
@@ -769,7 +769,7 @@ the pool record itself (`pools.Pool`), not from replay.
 
 ### The forms
 
-The forms are defined in the [design](deep_bot.md#the-policy-set-model);
+The forms are defined in the [design](subtree_bot.md#the-policy-set-model);
 these are v0's choices. Both use the move set model's encoders (the board
 trunk, `MoveEncoder`, `CrossCheckEncoder`), trained from scratch. Today's
 move set checkpoints are face-up and differ in their input blocks.
@@ -789,7 +789,7 @@ that builds the board rows (`ffi.policy_set_positions`).
   the encoder's own attention, and the gain head reads them.
 - Every set starts from the seed, the position's static-equity top move
   (the largest equity input), so no target is a gain over an empty set
-  ([deep_bot.md](deep_bot.md#form-1-greedy-selection-with-cached-steps)).
+  ([subtree_bot.md](subtree_bot.md#form-1-greedy-selection-with-cached-steps)).
 - Rows come by subset assembly. Per position, draw subsets `S`: the seed
   plus 0 to `N_max − 2` more moves, biased toward high-value moves as
   deployment sets are. A batch of subsets per position shares one trunk
@@ -798,7 +798,7 @@ that builds the board rows (`ffi.policy_set_positions`).
   of `S`, of its expected improvement over `s`:
   `E[max(0, μ_a − μ_s)] = Δ̂·Φ(Δ̂/se) + se·φ(Δ̂/se)`, with `Δ̂` the two
   moves' mean paired difference over the rollouts both ran and `se` its
-  standard error ([deep_bot.md](deep_bot.md#form-1-greedy-selection-with-cached-steps)
+  standard error ([subtree_bot.md](subtree_bot.md#form-1-greedy-selection-with-cached-steps)
   says why the least). The sample margin over the set's best is 0 for about
   98% of moves once the seed is in `S`, and the pools' paired standard
   errors (median 3.5 points) exceed the margins they label (median 1 point),
@@ -893,7 +893,7 @@ Per generation and form, on held-out pools, for `N` in {1, 2, 4, 8, 16}:
 | `eval_tail_recall_N` | recall on pools whose sim-best move is outside the static-equity top 10 |
 
 Each metric is reported beside the same metric for the static-equity top `N`,
-the baseline every DeepBot set has to beat. The figure plots recall and
+the baseline every SubtreeBot set has to beat. The figure plots recall and
 regret against `N` per form, over generations.
 
 ### Cost

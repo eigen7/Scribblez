@@ -1,6 +1,6 @@
 #pragma once
 
-// The rollout backend LeafBot's leaf network runs on: the CUDA kernel with a
+// The rollout backend DeepBot's leaf network runs on: the CUDA kernel with a
 // leaf network (gpu/gpu_rollout_values.h), or the CPU reference with the
 // synthetic leaf, for the test suites, which hide the GPU.
 

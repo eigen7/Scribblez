@@ -1,4 +1,4 @@
-"""A multi-model tag's seeds (docs/plans/deep_bot_generations.md, "Seeds and
+"""A multi-model tag's seeds (docs/plans/subtree_bot_generations.md, "Seeds and
 warm start"): one rolling checkpoint per model, copied under the new tag at
 seeds/<kind>.pt when it is created, so that the tag does not depend on its
 sources afterwards. A trainer on an ssh machine gets them from the controller

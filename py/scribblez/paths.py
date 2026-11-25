@@ -221,7 +221,7 @@ class TagPaths:
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
-    # The leave inference trainer's companion (docs/plans/deep_bot_v0.md): each
+    # The leave inference trainer's companion (docs/plans/subtree_bot_v0.md): each
     # generation's win table. A subdirectory, like the evidence trainer's
     # companions, keeps it out of onnx_sidecars, which ship with every model.
     def win_table_path(self, epoch: int) -> Path:

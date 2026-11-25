@@ -82,7 +82,7 @@ struct LeafState {
   uint32_t cross_mask[2][kSquares];  // per view, as the rollout left them
 };
 
-// What a rollout settled exactly, for the maps of docs/plans/deep_bot.md
+// What a rollout settled exactly, for the maps of docs/plans/subtree_bot.md
 // ("Sims"), from player 0's side. Per square: who filled it during the
 // rollout's plies and whether in a bingo (encoding/square_fates.h's classes,
 // which hasty_rollout_task.cpp asserts these match), with the signed points

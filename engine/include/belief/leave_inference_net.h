@@ -1,6 +1,6 @@
 #pragma once
 
-// The leave inference model's TensorRT engine (docs/plans/deep_bot_v0.md,
+// The leave inference model's TensorRT engine (docs/plans/subtree_bot_v0.md,
 // "Serving"): rows of encoding/leave_inference_input_encoder.h in, each
 // position's belief::LeaveParams out, for belief::LeaveSampler. It drives
 // NeuralNet<LeaveInferenceSpec> directly, as agent/move_proposal_nets.h does.

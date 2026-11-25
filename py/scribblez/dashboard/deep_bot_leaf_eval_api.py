@@ -1,7 +1,7 @@
 """Data for the Positions tab of deep_bot_leaf_eval and of
-leaf_bot_generation: one known position at a time under one generation's
+deep_bot_generation: one known position at a time under one generation's
 analysis (deep_bot_leaf_eval/positions.py), which a match slot delivered
-with that generation's match against HastyBot. A leaf_bot_generation tag's
+with that generation's match against HastyBot. A deep_bot_generation tag's
 "generation" is a release. Registered with the rest of the data plane by
 api.make_app().
 
@@ -48,7 +48,7 @@ from scribblez.deep_bot_leaf_eval import hasty_rollouts, opp_beliefs
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.paths import TagPaths
 from scribblez.sim_survey_viewer import TILE_SCORES, bonuses
-from scribblez.workloads import deep_bot_leaf_eval, leaf_bot_generation
+from scribblez.workloads import deep_bot_generation, deep_bot_leaf_eval
 
 # The likeliest moves under the leaf the table lists, besides any that the
 # reference, static equity or the pick names.
@@ -67,7 +67,7 @@ _BELIEF_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 # with its label (its belief_model).
 _BELIEF_MODELS = {
     deep_bot_leaf_eval.SPEC.name: deep_bot_leaf_eval.belief_model,
-    leaf_bot_generation.SPEC.name: leaf_bot_generation.belief_model,
+    deep_bot_generation.SPEC.name: deep_bot_generation.belief_model,
 }
 
 
@@ -136,7 +136,7 @@ def belief(tag_key: tuple[str, str, str], position: str) -> dict:
 
 def _matches(paths: TagPaths) -> dict[int, dict]:
     """The tag's match results against HastyBot by generation, from
-    deep_bot_leaf_eval's match eval or by release from leaf_bot_generation's
+    deep_bot_leaf_eval's match eval or by release from deep_bot_generation's
     release matches; none before its first."""
     if not paths.dashboard_db.is_file():
         return {}

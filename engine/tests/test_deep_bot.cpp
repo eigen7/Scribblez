@@ -1,4 +1,4 @@
-// LeafBot on the CPU reference with the synthetic leaf (the suites hide the
+// DeepBot on the CPU reference with the synthetic leaf (the suites hide the
 // GPU): it plays whole games, deterministically for a seed; plays the
 // candidate the leaf values best, whatever its static equity; values each at
 // the position after it, over opponent leaves of the length the opponent
@@ -7,8 +7,8 @@
 // candidate that empties the bag like any other. Skips without the NWL23
 // lexicon and HastyBot's leave values.
 
+#include "agent/deep_bot.h"
 #include "agent/hasty_bot.h"
-#include "agent/leaf_bot.h"
 #include "game/game.h"
 #include "lexicon/dictionary.h"
 #include "lexicon/hasty_equity.h"
@@ -49,9 +49,9 @@ std::shared_ptr<const LeaveValueArrays> leave_table() {
   return table;
 }
 
-LeafBot::Params small_params(uint64_t seed) {
+DeepBot::Params small_params(uint64_t seed) {
   return {.thread_id = 0,
-          .name = "LeafBot",
+          .name = "DeepBot",
           .leaf_model = "synthetic",
           .candidates = 4,
           .opp_leaves = 3,
@@ -166,7 +166,7 @@ class PassingBot : public Agent {
   MoveDecision make_move(const MoveRequest&) override { return MoveDecision{Move::pass()}; }
 };
 
-LeafBot::Backend backend(std::shared_ptr<LeafValues> values, belief::LeaveParamsFn predict = {}) {
+DeepBot::Backend backend(std::shared_ptr<LeafValues> values, belief::LeaveParamsFn predict = {}) {
   return {.values = std::move(values), .predict = std::move(predict), .table = leave_table()};
 }
 
@@ -185,11 +185,11 @@ std::vector<Move> play(Agent& bot, bool first = true) {
 
 }  // namespace
 
-TEST(LeafBot, PlaysWholeGamesTheSameForASeed) {
+TEST(DeepBot, PlaysWholeGamesTheSameForASeed) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
-  LeafBot a(small_params(3),
+  DeepBot a(small_params(3),
             backend(std::make_shared<CpuRolloutValues>(nwl23(), synthetic_leaf())));
-  LeafBot b(small_params(3),
+  DeepBot b(small_params(3),
             backend(std::make_shared<CpuRolloutValues>(nwl23(), synthetic_leaf())));
   const std::vector<Move> first = play(a);
   EXPECT_GT(first.size(), 10u);
@@ -197,7 +197,7 @@ TEST(LeafBot, PlaysWholeGamesTheSameForASeed) {
 }
 
 // Static equity only chooses the candidates; the leaf chooses among them.
-TEST(LeafBot, PlaysTheCandidateTheLeafFavours) {
+TEST(DeepBot, PlaysTheCandidateTheLeafFavours) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
@@ -207,11 +207,11 @@ TEST(LeafBot, PlaysTheCandidateTheLeafFavours) {
   ASSERT_EQ(ranked.size(), 4u);
   Board favoured = board;
   favoured.apply(ranked[3]);
-  LeafBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
+  DeepBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
   EXPECT_EQ(bot.make_move(req).move, ranked[3]);
 }
 
-TEST(LeafBot, ValuesEachCandidateAtThePositionAfterIt) {
+TEST(DeepBot, ValuesEachCandidateAtThePositionAfterIt) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
@@ -221,7 +221,7 @@ TEST(LeafBot, ValuesEachCandidateAtThePositionAfterIt) {
   const std::vector<WeightedLeave> opp = {{Rack::from_string("QU"), 0.25},
                                           {Rack::from_string("EE"), 0.75}};
   auto values = std::make_shared<RecordingValues>();
-  LeafBot bot(small_params(1), backend(values));
+  DeepBot bot(small_params(1), backend(values));
   EXPECT_EQ(bot.values(req, moves, opp).size(), moves.size());
   ASSERT_EQ(values->seen.size(), 4u);
   for (size_t i = 0; i < 4; ++i) {
@@ -239,16 +239,16 @@ TEST(LeafBot, ValuesEachCandidateAtThePositionAfterIt) {
 
 // Moving first, the opponent has kept nothing yet, as the leaf's training rows
 // have it; after its first move, the leaves are its rack less what it played.
-TEST(LeafBot, DrawsTheOpponentsLeavesAtTheLengthItKept) {
+TEST(DeepBot, DrawsTheOpponentsLeavesAtTheLengthItKept) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   auto first = std::make_shared<RecordingValues>();
-  LeafBot a(small_params(1), backend(first));
+  DeepBot a(small_params(1), backend(first));
   const std::vector<Move> moves = play(a, /*first=*/true);
   ASSERT_FALSE(first->seen.empty());
   EXPECT_EQ(first->seen.front().leaves[1].size(), 0);
 
   auto second = std::make_shared<RecordingValues>();
-  LeafBot b(small_params(1), backend(second));
+  DeepBot b(small_params(1), backend(second));
   const std::vector<Move> replies = play(b, /*first=*/false);
   ASSERT_FALSE(second->seen.empty());
   // HastyBot's opening move kept RACK_SIZE minus the tiles it played.
@@ -256,11 +256,11 @@ TEST(LeafBot, DrawsTheOpponentsLeavesAtTheLengthItKept) {
 }
 
 // A pass keeps the whole rack, a leave longer than the leave table holds:
-// the opponent's leaves are then racks of the tiles LeafBot cannot see.
-TEST(LeafBot, DrawsAWholeRackAfterTheOpponentPasses) {
+// the opponent's leaves are then racks of the tiles DeepBot cannot see.
+TEST(DeepBot, DrawsAWholeRackAfterTheOpponentPasses) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   auto values = std::make_shared<RecordingValues>();
-  LeafBot bot(small_params(1), backend(values));
+  DeepBot bot(small_params(1), backend(values));
   PassingBot passer;
   Game g(bot, passer, nwl23(), /*seed=*/1);
   g.play();
@@ -270,7 +270,7 @@ TEST(LeafBot, DrawsAWholeRackAfterTheOpponentPasses) {
   EXPECT_EQ(after_pass->leaves[1].size(), RACK_SIZE);
 }
 
-TEST(LeafBot, AsksTheModelForTheOpponentsLeaveAtEachModelledTurn) {
+TEST(DeepBot, AsksTheModelForTheOpponentsLeaveAtEachModelledTurn) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   int calls = 0;
   belief::LeaveParamsFn predict = [&](const float*, int count, belief::LeaveParams* out) {
@@ -278,13 +278,13 @@ TEST(LeafBot, AsksTheModelForTheOpponentsLeaveAtEachModelledTurn) {
     ASSERT_EQ(count, 1);
     out[0] = belief::LeaveParams{};
   };
-  LeafBot bot(small_params(4),
+  DeepBot bot(small_params(4),
               backend(std::make_shared<CpuRolloutValues>(nwl23(), synthetic_leaf()), predict));
   play(bot);
   EXPECT_GE(calls, 5);  // every turn but the first, a bingo's or a pass's, and the late ones
 }
 
-TEST(LeafBot, ItsDecisionReportsEachCandidatesValue) {
+TEST(DeepBot, ItsDecisionReportsEachCandidatesValue) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
@@ -293,7 +293,7 @@ TEST(LeafBot, ItsDecisionReportsEachCandidatesValue) {
   const std::vector<Move> ranked = equity_top_k(req, 4);
   Board favoured = board;
   favoured.apply(ranked[2]);
-  LeafBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
+  DeepBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
   const MoveDecision d = bot.make_move(req);
   ASSERT_EQ(d.values.size(), ranked.size());
   for (size_t i = 0; i < ranked.size(); ++i) {
@@ -304,7 +304,7 @@ TEST(LeafBot, ItsDecisionReportsEachCandidatesValue) {
 }
 
 // A candidate that empties the bag is valued like any other.
-TEST(LeafBot, ValuesTheCandidatesThatEmptyTheBag) {
+TEST(DeepBot, ValuesTheCandidatesThatEmptyTheBag) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
@@ -314,7 +314,7 @@ TEST(LeafBot, ValuesTheCandidatesThatEmptyTheBag) {
   ASSERT_TRUE(std::ranges::any_of(ranked, [](const Move& m) { return m.num_glyphs() >= 3; }));
   Board favoured = board;
   favoured.apply(ranked[1]);
-  LeafBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
+  DeepBot bot(small_params(1), backend(std::make_shared<FavouringValues>(favoured)));
   const MoveDecision d = bot.make_move(req);
   ASSERT_EQ(d.values.size(), ranked.size());
   EXPECT_EQ(d.move, ranked[1]);
@@ -322,14 +322,14 @@ TEST(LeafBot, ValuesTheCandidatesThatEmptyTheBag) {
 
 // A value is the leaf's weighted mean over the leaves: with a leaf that wins
 // only where the opponent holds the Q, the leave weights are the value.
-TEST(LeafBot, AValueIsTheLeafsMeanOverTheLeavesWeighted) {
+TEST(DeepBot, AValueIsTheLeafsMeanOverTheLeavesWeighted) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
   const Rack hidden;
   const MoveRequest req{board, nwl23(), rack, hidden, 0, 0, 86};
   const std::vector<Move> moves = equity_top_k(req, 1);
-  LeafBot bot(small_params(1), backend(std::make_shared<QHolderLoses>()));
+  DeepBot bot(small_params(1), backend(std::make_shared<QHolderLoses>()));
   const std::vector<double> v =
     bot.values(req, moves, {{Rack::from_string("QU"), 0.25}, {Rack::from_string("EE"), 0.75}});
   ASSERT_EQ(v.size(), 1u);
@@ -338,7 +338,7 @@ TEST(LeafBot, AValueIsTheLeafsMeanOverTheLeavesWeighted) {
 
 // The leaf is asked whole candidates at a time, no more than kLeavesPerCall
 // leaves a call, and each candidate's value is as one call would have it.
-TEST(LeafBot, AsksTheLeafAFewCandidatesAtATime) {
+TEST(DeepBot, AsksTheLeafAFewCandidatesAtATime) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   const Board board;
   const Rack rack = Rack::from_string("AEINRST");
@@ -347,19 +347,19 @@ TEST(LeafBot, AsksTheLeafAFewCandidatesAtATime) {
   const std::vector<Move> moves = equity_top_k(req, 5);
   ASSERT_EQ(moves.size(), 5u);
   // Two candidates' leaves fit in a call, a quarter of them holding the Q.
-  const size_t n = LeafBot::kLeavesPerCall / 2 - 1;
+  const size_t n = DeepBot::kLeavesPerCall / 2 - 1;
   std::vector<WeightedLeave> opp;
   for (size_t i = 0; i < n; ++i)
     opp.push_back({Rack::from_string(i % 4 == 0 ? "QU" : "EE"), 1.0 / double(n)});
   auto recorder = std::make_shared<CallRecorder>();
-  LeafBot bot(small_params(1), backend(recorder));
+  DeepBot bot(small_params(1), backend(recorder));
   const std::vector<double> v = bot.values(req, moves, opp);
   EXPECT_EQ(recorder->sizes, (std::vector<size_t>{2 * n, 2 * n, n}));
   const double expected = double(n - (n + 3) / 4) / double(n);
   for (double x : v) EXPECT_NEAR(x, expected, 1e-12);
 }
 
-TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
+TEST(DeepBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
   const std::vector<WeightedLeave> w =
     weighted_leaves({Rack::from_string("AB"), Rack::from_string("CD"), Rack::from_string("BA"),
                      Rack::from_string("AB")});
@@ -369,7 +369,7 @@ TEST(LeafBot, RepeatedDrawsAreValuedOnceWeightedByTheirCount) {
   EXPECT_DOUBLE_EQ(w[1].weight, 0.25);
 }
 
-TEST(LeafBot, EqualWeightsKeepEveryDraw) {
+TEST(DeepBot, EqualWeightsKeepEveryDraw) {
   const std::vector<WeightedLeave> w =
     equal_weights({Rack::from_string("AB"), Rack::from_string("CD"), Rack::from_string("AB")});
   ASSERT_EQ(w.size(), 3u);
@@ -379,13 +379,13 @@ TEST(LeafBot, EqualWeightsKeepEveryDraw) {
 
 // Under a noisy leaf, every draw is valued, repeats included: each call holds
 // the candidates times the draws, even where the opponent's leave is known to
-// be empty (LeafBot's first turn here), which is played out once per draw.
-TEST(LeafBot, ANoisyLeafValuesEveryDraw) {
+// be empty (DeepBot's first turn here), which is played out once per draw.
+TEST(DeepBot, ANoisyLeafValuesEveryDraw) {
   if (!have_data()) GTEST_SKIP() << "no NWL23 lexicon or leave values";
   auto noisy = std::make_shared<NoisyRecorder>();
-  LeafBot::Params p = small_params(1);
+  DeepBot::Params p = small_params(1);
   p.opp_leaves = 64;  // far more draws than one-tile leaves the pool can hold
-  LeafBot bot(p, backend(noisy));
+  DeepBot bot(p, backend(noisy));
   play(bot);
   ASSERT_FALSE(noisy->sizes.empty());
   EXPECT_TRUE(std::ranges::any_of(noisy->sizes, [](size_t n) { return n >= 64; }));
@@ -393,7 +393,7 @@ TEST(LeafBot, ANoisyLeafValuesEveryDraw) {
   for (size_t n : noisy->sizes) EXPECT_EQ(n % 64, 0u) << n;
 }
 
-TEST(LeafBot, TheBestValueIsTheEarliestOnTies) {
+TEST(DeepBot, TheBestValueIsTheEarliestOnTies) {
   const Move m = Move::pass();
   EXPECT_EQ(best_value({{m, 0.2}, {m, 0.5}, {m, 0.5}, {m, 0.1}}), 1u);
   EXPECT_EQ(best_value({{m, 0.7}}), 0u);

@@ -342,10 +342,10 @@ instantiations per physical placement). We manage this through:
 
 **Deduplication.** Moves that produce identical board states (same tiles in
 same positions, regardless of which physical tile is the blank) are collapsed.
-This eliminates the majority of blank-induced duplicates. (The roadmap scores
-every legal move without filtering instead: its one-pass Q-head makes large
-move sets cheap, and blanks with different letters produce genuinely
-different boards. See [roadmap.md](roadmap.md#its-destination).)
+This eliminates the majority of blank-induced duplicates. (DeepBot values
+every legal move without filtering instead, since blanks with different
+letters produce genuinely different boards; which moves a turn values is the
+prefilter research of [plans/deep_bot.md](plans/deep_bot.md#the-prefilter-as-research).)
 
 **Batch evaluation.** After deduplication, the remaining `N` moves are encoded
 and passed to the Q-head in a single forward pass. Typical `N` after

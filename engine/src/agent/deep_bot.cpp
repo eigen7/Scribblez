@@ -1,4 +1,4 @@
-#include "agent/leaf_bot.h"
+#include "agent/deep_bot.h"
 
 #include "agent/hasty_bot.h"
 #include "game/bag.h"
@@ -12,7 +12,7 @@
 #include <utility>
 
 // The production constructor and the option parsing live in
-// leaf_bot_factory.cpp.
+// deep_bot_factory.cpp.
 
 namespace scribblez {
 
@@ -59,39 +59,39 @@ size_t best_value(const std::vector<CandidateValue>& values) {
   return best;
 }
 
-LeafBot::LeafBot(const Params& params, Backend backend)
+DeepBot::DeepBot(const Params& params, Backend backend)
     : Agent(params.thread_id, params.name), params_(params), backend_(std::move(backend)) {
   if (!backend_.values || !backend_.table)
-    throw util::Exception("leafbot: the backend needs a leaf and a leave table");
+    throw util::Exception("deepbot: the backend needs a leaf and a leave table");
 }
 
-void LeafBot::begin_game(const BeginGameRequest&) {
+void DeepBot::begin_game(const BeginGameRequest&) {
   recorder_.begin_game();
   ply_ = 0;
   ++games_;
 }
 
-void LeafBot::observe_turn(const MoveRequest& req) {
+void DeepBot::observe_turn(const MoveRequest& req) {
   // The rack make_move() would have recorded, which later queries' masks read.
   if (req.bag_size > 0) recorder_.own_query(req);
 }
 
-void LeafBot::observe_move(const Move& move) {
+void DeepBot::observe_move(const Move& move) {
   recorder_.observe(move);
   ++ply_;
 }
 
-uint64_t LeafBot::turn_seed() const {
+uint64_t DeepBot::turn_seed() const {
   return util::splitmix64(params_.seed ^ util::splitmix64((games_ << 16) | uint64_t(ply_)));
 }
 
-MoveDecision LeafBot::make_move(const MoveRequest& req) {
+MoveDecision DeepBot::make_move(const MoveRequest& req) {
   // EndgameAgent solves the turns with the bag empty, so this is its fallback,
   // and every later turn is one too: no query will read the racks not
   // recorded since.
   if (req.bag_size == 0) return hasty_best_move_wmp(req);
   if (!req.opp_rack.empty())
-    throw util::Exception("leafbot: hidden leaves only, but the opponent's rack is face up");
+    throw util::Exception("deepbot: hidden leaves only, but the opponent's rack is face up");
   // Every other turn records the rack, which later queries' masks read.
   const belief::LeaveQuery q = recorder_.own_query(req);
   const std::vector<Move> moves = equity_top_k(req, params_.candidates);
@@ -102,7 +102,7 @@ MoveDecision LeafBot::make_move(const MoveRequest& req) {
   return decision;
 }
 
-std::vector<CandidateValue> LeafBot::valued(const MoveRequest& req, const std::vector<Move>& moves,
+std::vector<CandidateValue> DeepBot::valued(const MoveRequest& req, const std::vector<Move>& moves,
                                             const belief::LeaveQuery& q) const {
   const std::vector<double> v = values(req, moves, opp_leaves(q));
   std::vector<CandidateValue> out;
@@ -111,12 +111,12 @@ std::vector<CandidateValue> LeafBot::valued(const MoveRequest& req, const std::v
   return out;
 }
 
-std::vector<WeightedLeave> LeafBot::opp_leaves(const belief::LeaveQuery& q) const {
+std::vector<WeightedLeave> DeepBot::opp_leaves(const belief::LeaveQuery& q) const {
   const std::vector<Rack> draws = opp_draws(q);
   return backend_.values->noisy() ? equal_weights(draws) : weighted_leaves(draws);
 }
 
-std::vector<Rack> LeafBot::opp_draws(const belief::LeaveQuery& q) const {
+std::vector<Rack> DeepBot::opp_draws(const belief::LeaveQuery& q) const {
   // Before the opponent's first move, and after a move that kept nothing, the
   // leave is empty, as the leaf's training rows have it. It is still drawn
   // opp_leaves times: a noisy leaf plays each draw out apart.
@@ -140,7 +140,7 @@ std::vector<Rack> LeafBot::opp_draws(const belief::LeaveQuery& q) const {
   return draws;
 }
 
-std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQuery& q) const {
+std::shared_ptr<const belief::LeaveSampler> DeepBot::belief(const belief::LeaveQuery& q) const {
   if (backend_.predict && q.modelled())
     return belief::beliefs_of({&q, 1}, backend_.predict, *backend_.table)[0];
   // No model's belief (none loaded, or a row its training masks, such as after
@@ -149,7 +149,7 @@ std::shared_ptr<const belief::LeaveSampler> LeafBot::belief(const belief::LeaveQ
                                                       *backend_.table);
 }
 
-std::vector<double> LeafBot::values(const MoveRequest& req, const std::vector<Move>& moves,
+std::vector<double> DeepBot::values(const MoveRequest& req, const std::vector<Move>& moves,
                                     const std::vector<WeightedLeave>& opp) const {
   req.board.ensure_movegen_caches(req.dict);
   std::vector<double> out(moves.size(), 0.0);
@@ -161,7 +161,7 @@ std::vector<double> LeafBot::values(const MoveRequest& req, const std::vector<Mo
   return out;
 }
 
-void LeafBot::value_chunk(const MoveRequest& req, std::span<const Move> moves,
+void DeepBot::value_chunk(const MoveRequest& req, std::span<const Move> moves,
                           const std::vector<WeightedLeave>& opp, std::span<double> out) const {
   // Each candidate's post-move board is built once (incrementally from the
   // live board's caches) and paired with every opponent leave.

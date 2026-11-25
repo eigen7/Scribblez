@@ -1,7 +1,7 @@
-# DeepBot: the order of the remaining work
+# SubtreeBot: the order of the remaining work
 
 **Status: proposed 2026-11-15, not built.** This orders what remains of
-[deep_bot.md](deep_bot.md)'s build order, and replaces the order of its steps
+[subtree_bot.md](subtree_bot.md)'s build order, and replaces the order of its steps
 11 to 13. Its measurements inform the next step; no pass or kill thresholds
 are fixed in advance.
 
@@ -10,7 +10,7 @@ one that searches Bob's reply, then make Bob's reply a learned policy.
 
 - **First, the `hasty` agent,** which is Macondo's BestBot in outline with
   our parts in it: brought level with BestBot on the last turn, its parts
-  measured one at a time, and advanced by [generations](deep_bot_generations.md).
+  measured one at a time, and advanced by [generations](subtree_bot_generations.md).
 - **Then the policy as Bob's reply** inside the sims: a transformer, trained
   on the pools, which should learn to block a setup because the pools' labels
   reward the block.
@@ -25,7 +25,7 @@ one that searches Bob's reply, then make Bob's reply a learned policy.
   that it is not far off. Bob's subtree costs seconds a turn.
 - **The subtree's reply is too noisy to train or measure against today.** At
   20 racks a second run of the subtree agrees with the first at 45% of racks,
-  no more often than HastyBot's move does ([build order](deep_bot.md#build-order),
+  no more often than HastyBot's move does ([build order](subtree_bot.md#build-order),
   step 10).
 - **What the subtree is for is Bob's informed reply:** above all, that he
   blocks a setup. Under the `hasty` reply Bob never blocks on purpose, so the
@@ -38,7 +38,7 @@ one that searches Bob's reply, then make Bob's reply a learned policy.
 
 ## The agent beside BestBot
 
-| | BestBot | DeepBot, `hasty` reply | Switch in DeepBot today |
+| | BestBot | SubtreeBot, `hasty` reply | Switch in SubtreeBot today |
 |---|---|---|---|
 | Candidates | static equity's top 40, or 80 late | every legal move but the pass, screened by 100 raced rollouts, the best 10 (32 late) kept | `--screen-rollouts 0` |
 | Opponent's rack | drawn uniformly | a leave from the leave inference model, the rest drawn | omit the model |
@@ -57,7 +57,7 @@ play wins 0.346, and win 0.324 with the endgame solver making it.
 ## The parts, measured
 
 Step 2 of [the order](#the-order), 2026-11-16. The `hasty` agent with the
-endgame solver's replies (`deepbot-endgame`, leaf network `v1` generation
+endgame solver's replies (`subtreebot-endgame`, leaf network `v1` generation
 1049, leave inference model `v1` generation 292) against itself with one
 part off: 1,000 mirrored pairs a match on the dev laptop, 28 threads. The
 win rate and spread are the full agent's, with standard errors over pairs.
@@ -70,17 +70,17 @@ win rate and spread are the full agent's, with standard errors over pairs.
 
 A match's games a second count both seats, so they mix the two agents.
 
-- **Mirrored pairs pay between two DeepBots.** A pair's two games correlate
+- **Mirrored pairs pay between two SubtreeBots.** A pair's two games correlate
   at -0.44 to -0.48 in the win and -0.57 to -0.63 in the spread, so the
   win rate's standard error is 0.8 points where 2,000 unpaired games give
   1.1.
 - **Leave inference shows no effect.** The model is the standalone tag's,
-  trained on HastyBot's games, and here it reads DeepBot's moves. The loop
-  retrains it on DeepBot's, so the match is read again on a release.
+  trained on HastyBot's games, and here it reads SubtreeBot's moves. The loop
+  retrains it on SubtreeBot's, so the match is read again on a release.
 - **The screen shows no gain in wins, and costs 7.7 points of spread.** It
   is also most of a turn's GPU time: from the two rates, a seat's turns
   cost about 1.7 s a game with the screen and 0.45 s without. At the
-  [blind spots](deep_bot.md#the-screen-at-the-root) the screen is what
+  [blind spots](subtree_bot.md#the-screen-at-the-root) the screen is what
   finds the moves outside equity's top 10; in games those finds have not
   turned into wins. That fits the reading that hasty sims overvalue what
   the screen brings in, a setup or a fish that an opponent who searches
@@ -91,10 +91,10 @@ A match's games a second count both seats, so they mix the two agents.
   games a second against 0.17.
 
 The screen stays in the generating agent for now. It is where the
-[policy's pools](deep_bot_generations.md#self-play-writes-the-pools) come
+[policy's pools](subtree_bot_generations.md#self-play-writes-the-pools) come
 from, and the pools must hold the moves equity ranks low for the policy to
 learn one: by the pools' labels, equity's top 8 miss the best move a
-quarter of the time late in the game ([Candidates](deep_bot.md#candidates)).
+quarter of the time late in the game ([Candidates](subtree_bot.md#candidates)).
 What the match prices is the alternative: without the screen the same GPU
 plays between three and four times the games.
 
@@ -111,8 +111,8 @@ Each step names what it measures.
 1. **An exact last turn under the `hasty` reply.** Built 2026-11-15: the
    endgame solver makes Bob's reply to a candidate that empties the bag, as
    it does under `subtree` ([When Alice's move empties the
-   bag](deep_bot.md#when-alices-move-empties-the-bag), with its numbers).
-   `deepbot-endgame --peg 1`, BestBot's pre-endgame solver, is exact for the
+   bag](subtree_bot.md#when-alices-move-empties-the-bag), with its numbers).
+   `subtreebot-endgame --peg 1`, BestBot's pre-endgame solver, is exact for the
    turn with one tile in the bag and too slow to play with, a median of 86
    seconds a turn. *Measure:* the picks at the 149 positions against the
    pre-endgame solver's ranks (`blind_spot_picks.py --peg-ranks`), and the
@@ -123,11 +123,11 @@ Each step names what it measures.
    race. Also here: why the agent wins 62% of its games against HastyBot at
    a mean spread near zero. *Measure:* each match's win rate and spread.
 3. **Generations under the `hasty` reply:**
-   [deep_bot_generations.md](deep_bot_generations.md), its seven steps.
+   [subtree_bot_generations.md](subtree_bot_generations.md), its seven steps.
    *Measure:* as that plan lists, the matches against HastyBot and release 0
    among them.
 4. **The policy as a transformer.** Its form is chosen offline, on the
-   `policy_set` workload and a `deep_bot` tag's self-played pools, so it can
+   `policy_set` workload and a `subtree_bot` tag's self-played pools, so it can
    overlap step 3; the chosen form then seeds a tag and trains every
    generation. See [The policy](#the-policy). *Measure:* its
    cross-entropy on its own training pools against the floor; held out, how
@@ -151,13 +151,13 @@ When time allows, in no fixed order:
   with a network call between them, after which a rollout of more plies and
   a win-table leaf are parameters. They complete step 2's table.
 - **The luck correction** over kept match games
-  ([the matches](deep_bot_generations.md#the-matches)). Step 2's matches look
+  ([the matches](subtree_bot_generations.md#the-matches)). Step 2's matches look
   for effects of a point or two, where it would pay soonest.
 - **A convolutional trunk under the policy,** on step 4's readings and step
   5's speed.
 - **A match against BestBot** on a release, on idle cores.
 
-Waiting, with their designs as [deep_bot.md](deep_bot.md) has them: Bob's
+Waiting, with their designs as [subtree_bot.md](subtree_bot.md) has them: Bob's
 subtree in the generating agent and the root correction head (the end of its
 step 11), the store input (step 12), steering and the learned budget (step
 13), and the `alice-subtree` reply. The subtree stays in the agent as it is,
@@ -166,7 +166,7 @@ and reads the known positions beside the agent being matured.
 ### The continuation heads while the store waits
 
 The ownership, points, going-out and end-of-game heads
-([The search network](deep_bot.md#the-search-network)) predict what a sim's
+([The search network](subtree_bot.md#the-search-network)) predict what a sim's
 maps will show, so that the store can hold what the sims found beyond the
 prediction. With the store waiting, nothing reads them in play: only Bob's
 subtree asks a sim for its maps.
@@ -180,7 +180,7 @@ subtree asks a sim for its maps.
   network. Step 4 reads it for the policy with an arm at
   `lambda_continuation = 0`. The leaf network's arm, its four map and
   end-of-game weights at 0, is run with the leaf's next experiment.
-- **The store as an input to Bob's policy** is deep_bot.md's design as it
+- **The store as an input to Bob's policy** is subtree_bot.md's design as it
   stands: the search network is the policy with a store-attention block.
   Under the `policy` reply it needs no second reply at a rack. The racks
   differ, so their top moves do, and what one rack's reply showed informs
@@ -189,7 +189,7 @@ subtree asks a sim for its maps.
   by sampling some racks' replies from the policy, at the same one
   evaluation a rack.
 - **Its evidence has to be Bob's.** [Each side's items stay on their
-  side](deep_bot.md#the-evidence-store): Alice's sims run with her actual
+  side](subtree_bot.md#the-evidence-store): Alice's sims run with her actual
   rack, and a Bob who read their outcomes would learn what she holds. With
   his subtree gone there are no sims from his side, so each rollout would
   carry a second continuation after his reply, her rack drawn from his
@@ -231,7 +231,7 @@ tried under it later:
 - **The labels are the agent's decision at its own turn:** the pool's `q`,
   the chance the move is the sim's best, with the survivors' labels taken
   from the turn's sims and not the screen ([Self-play writes the
-  pools](deep_bot_generations.md#self-play-writes-the-pools)). Under the
+  pools](subtree_bot_generations.md#self-play-writes-the-pools)). Under the
   `hasty` reply that is ten times the rollouts on the near-top moves, where
   the policy is weakest, and the endgame solver's value for a play that
   empties the bag. Under the `policy` reply the survivors' sims have the
@@ -244,7 +244,7 @@ tried under it later:
   `policy_set` tags), a pool is the pool tool's: the screen's sims and no
   more. There a block still scores well at a position after a setup, since
   the rollouts in which it is not blocked have the opponent cash it. Setups
-  are rare in HastyBot's games, and commoner in DeepBot's.
+  are rare in HastyBot's games, and commoner in SubtreeBot's.
 
 The subtree's reply is not the reference for whether the policy blocks: it
 is too noisy at the racks it runs. The pools are, and the known setups.

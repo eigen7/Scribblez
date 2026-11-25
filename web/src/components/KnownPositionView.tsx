@@ -5,7 +5,7 @@ import UnseenTiles from './UnseenTiles';
 import { PlacedTile, TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 
-// What the leaf Positions tab (deep_bot_leaf_eval's and leaf_bot_generation's)
+// What the leaf Positions tab (deep_bot_leaf_eval's and deep_bot_generation's)
 // shows of a known position (positions/NWL23/known-positions): the board before the move with
 // a move previewed on it, both racks, the unseen tiles, and the picker over
 // the positions. A tab adds its models' outputs beside them.

@@ -2,11 +2,11 @@
 
 #include "agent/agent.h"
 #include "agent/best_bot.h"
+#include "agent/deep_bot.h"
 #include "agent/endgame_agent.h"
 #include "agent/greedy_agent.h"
 #include "agent/hasty_bot.h"
 #include "agent/human_web_agent.h"
-#include "agent/leaf_bot.h"
 #include "agent/neural_agent.h"
 #include "agent/neural_sim_agent.h"
 #include "agent/sim_agent.h"
@@ -54,14 +54,14 @@ constexpr std::array<PlayerType, 12> kPlayerTypes{{
   {"bestbot", "BestBot", &BestBot::options_help, &build_agent<&BestBot::from_spec>},
   {"bestbot-endgame", "EndgameBestBot", &EndgameAgent<BestBot>::options_help,
    &build_agent<&EndgameAgent<BestBot>::from_spec>},
+  {"deepbot", "DeepBot", &DeepBot::options_help, &build_agent<&DeepBot::from_spec>},
+  {"deepbot-endgame", "EndgameDeepBot", &EndgameAgent<DeepBot>::options_help,
+   &build_agent<&EndgameAgent<DeepBot>::from_spec>},
   {"greedy", "Greedy", &GreedyAgent::options_help, &build_agent<&GreedyAgent::from_spec>},
   {"human", "You", &HumanWebAgent::options_help, &build_human},
   {"hastybot", "HastyBot", &HastyBot::options_help, &build_agent<&HastyBot::from_spec>},
   {"hastybot-endgame", "EndgameHastyBot", &EndgameAgent<HastyBot>::options_help,
    &build_agent<&EndgameAgent<HastyBot>::from_spec>},
-  {"leafbot", "LeafBot", &LeafBot::options_help, &build_agent<&LeafBot::from_spec>},
-  {"leafbot-endgame", "EndgameLeafBot", &EndgameAgent<LeafBot>::options_help,
-   &build_agent<&EndgameAgent<LeafBot>::from_spec>},
   {"neural", "Neural", &NeuralAgent::options_help, &build_agent<&NeuralAgent::from_spec>},
   {"neural-sim", "NeuralSim", &NeuralSimAgent::options_help,
    &build_agent<&NeuralSimAgent::from_spec>},

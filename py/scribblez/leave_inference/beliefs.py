@@ -7,7 +7,7 @@ table.
 
 The model predicts only the leave the opponent kept at their last move; their
 rack is that leave plus a refill drawn uniformly from the rest of the
-observer's unseen pool (docs/plans/deep_bot.md, "The leave inference model").
+observer's unseen pool (docs/plans/subtree_bot.md, "The leave inference model").
 Where the row carries no belief (turn 0, a pass, an empty leave, or an empty
 bag) the leave is empty and the whole rack is a uniform draw. Zero parameters
 are the model's own no-information prior, so the uniform reading goes through

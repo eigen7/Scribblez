@@ -3,7 +3,7 @@ position played out to the game's end by hastybot-endgame
 (deep_bot_leaf_eval/hasty_rollouts.py), the column the Positions tab compares
 a leaf network's values with.
 
-Its one role takes each known position in turn: LeafBot over the monte-carlo
+Its one role takes each known position in turn: DeepBot over the monte-carlo
 leaf plays every move out `playouts` times, each against its own opponent
 leave drawn from the pinned leave inference model, and the slot delivers
 data/hasty_rollouts/<gcg stem>.json. A restarted slot skips the positions it already

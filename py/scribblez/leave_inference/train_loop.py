@@ -1,5 +1,5 @@
 """One training epoch of the leave inference model, and its held-out eval
-(docs/plans/deep_bot_v0.md, "Eval metrics").
+(docs/plans/subtree_bot_v0.md, "Eval metrics").
 
 Rows without information (turn 0, an empty leave, a pass) carry no loss: the
 loader cannot skip them, so each batch masks them out here. The model runs

@@ -1,4 +1,4 @@
-"""The leave inference trainer's held-out games (docs/plans/deep_bot_v0.md,
+"""The leave inference trainer's held-out games (docs/plans/subtree_bot_v0.md,
 "Held-out data: regenerated").
 
 The trainer plays them itself, HastyBot against HastyBot at a fixed seed, so

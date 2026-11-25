@@ -2,7 +2,7 @@
 """Add the known positions a tag's analyses lack, without the dashboard: the
 backfill role's runner (workloads/positions_backfill.py) on chosen
 generations, for a quick look or a tag with few analyses. A deep_bot_leaf_eval
-generation is an export's, a leaf_bot_generation one a release's. Not while
+generation is an export's, a deep_bot_generation one a release's. Not while
 the tag's backfill slot runs, which would rewrite the same files.
 
     py/scripts/deep_bot_leaf_eval/backfill_positions.py \\
@@ -22,13 +22,13 @@ from cloud.sinks import LocalSink
 from scribblez import params as params_mod
 from scribblez.dashboard import tasks
 from scribblez.paths import add_mount_root_argument
-from scribblez.workloads import deep_bot_leaf_eval, leaf_bot_generation, positions_backfill
+from scribblez.workloads import deep_bot_generation, deep_bot_leaf_eval, positions_backfill
 from scribblez.workloads.base import WorkerContext
 from util.argparse_ext import ArgumentDefaultsHelpFormatter
 
 EXPORTS = {
     deep_bot_leaf_eval.SPEC.name: (deep_bot_leaf_eval.SPEC, deep_bot_leaf_eval.backfill_exports),
-    leaf_bot_generation.SPEC.name: (leaf_bot_generation.SPEC, leaf_bot_generation.backfill_exports),
+    deep_bot_generation.SPEC.name: (deep_bot_generation.SPEC, deep_bot_generation.backfill_exports),
 }
 
 

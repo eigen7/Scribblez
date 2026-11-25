@@ -1,6 +1,6 @@
-"""The leaf_bot_generation workload (scribblez/workloads/leaf_bot_generation.py)
+"""The deep_bot_generation workload (scribblez/workloads/deep_bot_generation.py)
 and its measure role: seeds copied at creation, generators on release 0, and
-the matches spread over several measure slots (leaf_bot_generation/
+the matches spread over several measure slots (deep_bot_generation/
 measure_dispatch.py) and played by each (measure.py)."""
 
 import json
@@ -13,19 +13,19 @@ from scribblez import workloads
 from scribblez.dashboard import api, db, deep_bot_leaf_eval_api, plots
 from scribblez.dashboard.slot_files import LocalSlotFiles
 from scribblez.deep_bot import LEAF, LEAVE, known_positions, matches, release, seeds
+from scribblez.deep_bot_generation import KINDS, LAYOUT, measure, measure_dispatch
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.generational import lifecycle
-from scribblez.leaf_bot_generation import KINDS, LAYOUT, measure, measure_dispatch
 from scribblez.match_eval import harness
 from scribblez.params import ParamsError
 from scribblez.paths import DONE_SUFFIX, TagPaths
-from scribblez.workloads import leaf_bot_generation, selfplay_gen
+from scribblez.workloads import deep_bot_generation, selfplay_gen
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.leaf_bot_generation import LeafBotGenerationParams
+from scribblez.workloads.deep_bot_generation import DeepBotGenerationParams
 from scribblez.workloads.selfplay_gen import ChunkSidecar
 
-SPEC = workloads.get("leaf_bot_generation")
-PARAMS = LeafBotGenerationParams(
+SPEC = workloads.get("deep_bot_generation")
+PARAMS = DeepBotGenerationParams(
     seed_leave_tag="i", seed_leaf_tag="l", match_games=4, match_seed=7, match_every_generations=2
 )
 
@@ -46,7 +46,7 @@ def _publish(paths: TagPaths, number: int):
 
 def test_a_tag_takes_one_kind_of_seed():
     with pytest.raises(ParamsError, match="not both"):
-        LeafBotGenerationParams(seed_tag="g1", seed_leaf_tag="l")
+        DeepBotGenerationParams(seed_tag="g1", seed_leaf_tag="l")
     with pytest.raises(ParamsError, match="even"):
         replace(PARAMS, match_games=3)
     assert replace(PARAMS, leave_window=2, leaf_window=5).window == 5
@@ -58,7 +58,7 @@ def test_creating_a_tag_copies_the_standalone_seeds(tmp_path):
         _checkpoint(TagPaths(tag, seeds.WORKLOADS[kind], tmp_path), kind)
     paths = SPEC.paths("t", tmp_path)
 
-    assert leaf_bot_generation.finalize(SPEC, paths, PARAMS) == PARAMS
+    assert deep_bot_generation.finalize(SPEC, paths, PARAMS) == PARAMS
 
     for kind in KINDS:
         assert seeds.seed_path(paths, kind).read_text() == kind
@@ -72,9 +72,9 @@ def test_creating_a_tag_copies_the_standalone_seeds(tmp_path):
 def test_a_tag_seeded_from_the_previous_generation_copies_its_checkpoint_for_both(tmp_path):
     _checkpoint(SPEC.paths("g1", tmp_path), "generation 1")
     paths = SPEC.paths("g2", tmp_path)
-    params = LeafBotGenerationParams(seed_tag="g1")
+    params = DeepBotGenerationParams(seed_tag="g1")
 
-    leaf_bot_generation.finalize(SPEC, paths, params)
+    deep_bot_generation.finalize(SPEC, paths, params)
 
     assert [seeds.seed_path(paths, kind).read_text() for kind in KINDS] == ["generation 1"] * 2
 
@@ -83,9 +83,9 @@ def test_a_missing_seed_refuses_the_tag_before_anything_is_copied(tmp_path):
     _checkpoint(TagPaths("i", seeds.WORKLOADS[LEAVE], tmp_path), LEAVE)
     paths = SPEC.paths("t", tmp_path)
     with pytest.raises(ParamsError, match="deep_bot_leaf_eval tag 'l' has no checkpoint"):
-        leaf_bot_generation.finalize(SPEC, paths, PARAMS)
-    with pytest.raises(ParamsError, match="leaf_bot_generation tag 'g0' has no checkpoint"):
-        leaf_bot_generation.finalize(SPEC, paths, LeafBotGenerationParams(seed_tag="g0"))
+        deep_bot_generation.finalize(SPEC, paths, PARAMS)
+    with pytest.raises(ParamsError, match="deep_bot_generation tag 'g0' has no checkpoint"):
+        deep_bot_generation.finalize(SPEC, paths, DeepBotGenerationParams(seed_tag="g0"))
     assert not seeds.seed_path(paths, LEAVE).exists()
 
 
@@ -121,13 +121,13 @@ def test_every_cycle_plays_leafbot_on_release_0_with_its_forgone_plays(tmp_path,
 
     monkeypatch.setattr(selfplay_gen, "run_games", run_games)
     sidecar = ChunkSidecar((".forgone",), write_forgone)
-    monkeypatch.setattr(leaf_bot_generation, "FORGONE_SIDECAR", sidecar)
+    monkeypatch.setattr(deep_bot_generation, "FORGONE_SIDECAR", sidecar)
 
-    assert leaf_bot_generation.run_generate(_ctx(tmp_path, "generate", max_cycles=2)) == 0
+    assert deep_bot_generation.run_generate(_ctx(tmp_path, "generate", max_cycles=2)) == 0
 
     leaf, leave = (release.export_path(paths, 0, kind) for kind in (LEAF, LEAVE))
     want = (
-        f"--type=leafbot-endgame --leaf-model={leaf} --leave-inference={leave} "
+        f"--type=deepbot-endgame --leaf-model={leaf} --leave-inference={leave} "
         "--candidates=10 --opp-leaves=16"
     )
     assert played == [want, want]  # release 1 changes nothing
@@ -143,7 +143,7 @@ def test_every_cycle_plays_leafbot_on_release_0_with_its_forgone_plays(tmp_path,
 
 def test_a_generator_without_release_0_fails(tmp_path):
     with pytest.raises(FileNotFoundError, match="no release 0"):
-        leaf_bot_generation.run_generate(_ctx(tmp_path, "generate"))
+        deep_bot_generation.run_generate(_ctx(tmp_path, "generate"))
     assert workloads.resolve(SPEC.role("generate").tag_files)(SPEC.paths("t", tmp_path), None) == []
 
 
@@ -333,7 +333,7 @@ def test_the_match_against_release_0_plays_its_leafbot(paths, tmp_path, monkeypa
 
     inbox = paths.match_inbox_dir("local-1")
     assert played == [
-        f"--type=leafbot-endgame --leaf-model={inbox / release.export_rel(0, LEAF)} "
+        f"--type=deepbot-endgame --leaf-model={inbox / release.export_rel(0, LEAF)} "
         f"--leave-inference={inbox / release.export_rel(0, LEAVE)} "
         "--candidates=10 --opp-leaves=16"
     ]
@@ -341,10 +341,10 @@ def test_the_match_against_release_0_plays_its_leafbot(paths, tmp_path, monkeypa
 
 
 def test_the_training_tab_draws_each_model_beside_release_0(paths):
-    keys = {k for group in plots.LEAF_BOT_GENERATION_QUALITY for k in group[1]}
+    keys = {k for group in plots.DEEP_BOT_GENERATION_QUALITY for k in group[1]}
     assert {"leave_eval_nll_vs_uniform", "r0_leaf_eval_wld_nll", "loss_leaf"} <= keys
     conn = db.connect(paths.dashboard_db)
-    assert api.FIGURES["leaf_bot_generation_metrics"](conn, {}, str(paths.mount_root)) is None
+    assert api.FIGURES["deep_bot_generation_metrics"](conn, {}, str(paths.mount_root)) is None
     db.write_metrics(conn, 0, {"positions": 1, **dict.fromkeys(keys, 0.5)})
-    assert api.FIGURES["leaf_bot_generation_metrics"](conn, {}, str(paths.mount_root)) is not None
+    assert api.FIGURES["deep_bot_generation_metrics"](conn, {}, str(paths.mount_root)) is not None
     conn.close()

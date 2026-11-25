@@ -1,7 +1,7 @@
-"""A release's matches (docs/plans/deep_bot_generations.md, "The matches"):
-what leaf_bot_generation's measure role's worker
-(leaf_bot_generation/measure.py) and the controller's tick
-(leaf_bot_generation/measure_dispatch.py) agree on. The opponents, how a finished match travels,
+"""A release's matches (docs/plans/subtree_bot_generations.md, "The matches"):
+what deep_bot_generation's measure role's worker
+(deep_bot_generation/measure.py) and the controller's tick
+(deep_bot_generation/measure_dispatch.py) agree on. The opponents, how a finished match travels,
 where the controller keeps it, and the estimate a chart draws.
 
 Every game is kept: a row per game (play_game's --results-file line: its

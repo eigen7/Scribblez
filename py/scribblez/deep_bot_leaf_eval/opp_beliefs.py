@@ -3,7 +3,7 @@ deep_bot_leaf_eval_api.py): at each known position, the mover's belief about
 the opponent's rack (LeaveBeliefs.chart: each tile's chance of being on it
 and the value of the leave they kept, beside the same under no information)
 under the tag's fixed leave inference model, the one its games draw the
-opponent's leaves from: a leaf_bot_generation tag's release 0, which its
+opponent's leaves from: a deep_bot_generation tag's release 0, which its
 self-play plays, or a deep_bot_leaf_eval tag's pinned matches' model. So it
 is one chart a position for the tag's whole life, whatever generation the
 tab shows.

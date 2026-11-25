@@ -55,9 +55,9 @@ export const WORKLOAD_TABS: Record<string, WorkloadTab[]> = {
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
     { name: 'Info', render: (w, t) => <InfoTab task={w} tag={t} /> },
   ],
-  leaf_bot_generation: [
+  deep_bot_generation: [
     { name: 'Loss', render: (w, t) => <LossTab task={w} tag={t} /> },
-    trainingTab('leaf_bot_generation_metrics', 'metrics', 'No generation scored yet.'),
+    trainingTab('deep_bot_generation_metrics', 'metrics', 'No generation scored yet.'),
     figureTab('Matches', 'release_matches', 'release_match', 'No match results yet.'),
     { name: 'Positions', render: (w, t) => <LeafEvalPositions task={w} tag={t} /> },
     { name: 'Controls', render: (w, t) => <ControlsTab task={w} tag={t} /> },
