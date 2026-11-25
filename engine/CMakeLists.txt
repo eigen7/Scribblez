@@ -90,6 +90,7 @@ add_library(scribblez_core STATIC
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/forgone_play_log.cpp
+  src/data/belief_log.cpp
   src/data/sidecar_io.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
@@ -336,6 +337,16 @@ target_link_libraries(forgone_play_tool PRIVATE
   Boost::program_options
   Threads::Threads)
 
+# Belief (.belief) sidecars for .slog data, the leaf network's belief-mode
+# input (docs/plans/deep_bot_belief_leaf.md). Serves the leave inference model
+# through TensorRT.
+add_executable(belief_sidecar_tool apps/belief_sidecar_tool.cpp)
+target_link_libraries(belief_sidecar_tool PRIVATE
+  scribblez_nn
+  scribblez_core
+  Boost::program_options
+  Threads::Threads)
+
 # One-shot: v10 .slog corpora to v11 (apps/slog_migrate_v11.cpp says when to delete it).
 add_executable(slog_migrate_v11 apps/slog_migrate_v11.cpp)
 target_link_libraries(slog_migrate_v11 PRIVATE
@@ -416,6 +427,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_gcg_reader.cpp
     tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp
+    tests/test_belief_log.cpp
     tests/test_leave_value_arrays.cpp
     tests/test_rack_inference.cpp
     tests/test_square_fates.cpp

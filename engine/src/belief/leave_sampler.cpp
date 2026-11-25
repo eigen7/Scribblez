@@ -106,8 +106,9 @@ LeaveMoments LeaveSampler::moments() const {
     // A leave holds a kind iff it holds that kind's first copy.
     for (int slot = 0; slot < length_; ++slot) {
       const uint8_t code = codes_[slot][r];
-      if (code % LeaveValueArrays::kCopiesPerTile == 0)
-        m.presence[code / LeaveValueArrays::kCopiesPerTile] += p;
+      const int kind = code / LeaveValueArrays::kCopiesPerTile;
+      if (code % LeaveValueArrays::kCopiesPerTile == 0) m.presence[kind] += p;
+      m.expected[kind] += p;
     }
     m.value_mean += p * values_[r];
     value_sq += p * values_[r] * values_[r];
