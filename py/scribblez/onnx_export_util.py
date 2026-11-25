@@ -1,4 +1,5 @@
-"""Shared machinery for the ONNX exporters (position_eval, move_set_eval).
+"""Shared machinery for the ONNX exporters (position_eval, leave_inference,
+deep_bot_leaf_eval).
 
 Every exporter traces through export_graph, which owns the steps every export
 needs: the module in eval mode and each submodule's mode restored afterwards,
@@ -109,17 +110,6 @@ def architecture_signature(path: Path) -> str:
     m.ClearField("metadata_props")
     h = hashlib.md5(m.SerializeToString(deterministic=True))
     h.update(repr(weights).encode())
-    return h.hexdigest()
-
-
-def weight_fingerprint(model: torch.nn.Module) -> str:
-    """A fingerprint of the model's weights. Graphs that must come from the same
-    model (the move-proposal cache/step pair) carry it so a loader can reject a
-    mismatched pair."""
-    h = hashlib.sha256()
-    for name, tensor in sorted(model.state_dict().items()):
-        h.update(name.encode())
-        h.update(tensor.detach().cpu().contiguous().numpy().tobytes())
     return h.hexdigest()
 
 

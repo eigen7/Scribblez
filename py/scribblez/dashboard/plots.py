@@ -181,51 +181,6 @@ TRAINING = [
     ("Fraction of steps clipped", ["clip_frac"]),
     ("Epoch time (s)", ["elapsed_s"]),
 ]
-# The evidence trainer's go/no-go read: the conditioned pass against the plain
-# one on the same held-out rows, overall and on the evidence-bearing (prefix >
-# 0) rows, plus the proves-best head's gain error. The gain hit rates are on the
-# Loss tab's Accuracy panel. An unfrozen run (the whole model following the sim
-# signal) also records the frozen student's soft-CE, the fixed reference its
-# moving plain pass is read against.
-EVIDENCE_QUALITY = [
-    (
-        "Held-out WLD soft-CE: student reference vs plain vs conditioned",
-        ["student_wld_ce", "plain_wld_ce", "cond_wld_ce"],
-    ),
-    (
-        "Held-out WLD soft-CE, evidence-bearing rows",
-        ["student_wld_ce_ev", "plain_wld_ce_ev", "cond_wld_ce_ev"],
-    ),
-    ("Held-out value MAE: conditioned vs plain", ["cond_value_mae", "plain_value_mae"]),
-    ("Proves-best gain MAE", ["gain_mae", "gain_mae_ev"]),
-    # On the Trajectories tab's hand-maintained position set, over every
-    # position and evidence prefix: the rank of the sim-best candidate under
-    # each value (0 = best), and how often each value's argmax is that
-    # candidate.
-    (
-        "Position set: sim-best rank, conditioned vs plain",
-        ["posset_cond_rank", "posset_plain_rank"],
-    ),
-    ("Position set: sim-best hit rate", ["posset_cond_hit", "posset_plain_hit"]),
-]
-# Move-set-eval distillation quality: the teacher win-equity the student's
-# top-K forfeits (lower is better), with the incumbent ranking's regret@1 (played
-# move, then equity head) as the reference line. The recall/Spearman curves are
-# on the Loss tab's Accuracy panel.
-MSET_QUALITY = [
-    ("Teacher-value regret (win-equity)", ["regret1", "regret3", "regret5", "regret1_baseline"]),
-    # Exchanges only: how well the student ranks which tiles to keep, against
-    # the incumbent leave-value ordering, and how often the teacher's best
-    # exchange survives the global top-K.
-    (
-        "Exchange rank regret (win-equity)",
-        ["exch_rank_regret", "exch_rank_regret_baseline"],
-    ),
-    (
-        "Best-exchange retention@K",
-        ["exch_retention1", "exch_retention3", "exch_retention5", "exch_retention1_baseline"],
-    ),
-]
 # position_eval's model-vs-Monte-Carlo quality curves on its held-out position
 # set, shown on the Loss tab beneath the training curves.
 POST_MOVE_QUALITY = [
@@ -255,27 +210,6 @@ POST_MOVE_QUALITY = [
             "eval_place_top1_opp_win",
             "eval_place_top1_self_win",
         ],
-    ),
-]
-# The SupremeBot M1a reader's validation read (scribblez/transfer_test/loss.py):
-# the within-row expected-score error at the full context, on held-out and
-# probed candidates, against the teacher prior's (the reader starts there), and
-# the validation losses. The training losses are on the Loss tab. The score and
-# expected terms are beta-NLL, weighted by the predicted variance, so their
-# values compare only with themselves over a run.
-TRANSFER_READER_QUALITY = [
-    (
-        "Held-out candidates: within-row expected-score RMSE",
-        ["heldout_rmse_reader", "heldout_rmse_prior"],
-    ),
-    (
-        "Probed candidates: within-row expected-score RMSE",
-        ["probed_rmse_reader", "probed_rmse_prior"],
-    ),
-    ("Validation loss", ["val_total"]),
-    (
-        "Validation loss terms",
-        ["val_wld", "val_score", "val_expected", "val_footprint", "val_rank"],
     ),
 ]
 # The leave inference model's read (the record scribblez/leave_inference/
@@ -351,83 +285,6 @@ LEAF_EVAL_QUALITY = [
     ("Held-out end-of-game points RMSE (points)", ["eval_end_points_rmse"]),
     ("End-of-game points: predicted variance / squared error", ["eval_end_points_var_ratio"]),
 ]
-# The policy-set read (scribblez/policy_set/trainer.py's record, its metrics
-# from policy_set/metrics.py): on the held-out pools, each form's sets against
-# the static-equity top N (the "equity_" prefix) at each set size N, and what
-# the pools are like, the window's beside the held-out set's. The forms' loss
-# terms are POLICY_SET_LOSS, on the Loss tab.
-# policy_set/metrics.py's SET_SIZES, copied: importing it would load the engine
-# library (policy_set/pools.py reads format_layout at import).
-POLICY_SET_SIZES = (1, 2, 4, 8, 16)
-POLICY_SET_FORMS = ("slot", "greedy", "policy", "equity")
-POLICY_SET_QUALITY = (
-    [
-        (
-            f"{title} at N={n} (held-out)",
-            [f"{form}_eval_{metric}_{n}" for form in POLICY_SET_FORMS],
-        )
-        for title, metric in (
-            ("Recall of the sim-best move", "recall"),
-            ("Regret (win probability)", "regret"),
-        )
-        for n in POLICY_SET_SIZES
-    ]
-    + [
-        (
-            f"{title} at N=8 (held-out)",
-            [f"{form}_eval_{metric}_8" for form in POLICY_SET_FORMS],
-        )
-        for title, metric in (
-            ("Cover (q in the set)", "cover"),
-            ("Recall where the sim-best is outside the equity top 10", "tail_recall"),
-        )
-    ]
-    + [
-        (
-            "Policy form: the policy's entropy and the labels' (held-out, nats)",
-            ["policy_eval_entropy", "eval_label_entropy"],
-        ),
-        (
-            "Policy form: value head's error (win probability) and variance ratio (held-out)",
-            ["policy_eval_value_mae", "policy_eval_value_var_ratio"],
-        ),
-        (
-            "Policy form: share of positions whose played move is a candidate (held-out)",
-            ["policy_eval_played_share"],
-        ),
-        # Per form: each form's gradient is clipped on its own.
-        (
-            "Gradient norm before clipping, by form",
-            ["grad_norm_slot", "grad_norm_greedy", "grad_norm_policy"],
-            {"log": True},
-        ),
-        # Health: a divergence shows as a growing norm, a dead or collapsed
-        # head as a spread near 0.
-        (
-            "Parameter norm, by form",
-            ["param_norm_slot", "param_norm_greedy", "param_norm_policy"],
-            {"log": True},
-        ),
-        (
-            "Score spread over a position's candidates (held-out)",
-            ["slot_eval_spread", "greedy_eval_spread", "policy_eval_spread"],
-        ),
-        ("Slot form: pointer scale", ["slot_eval_pointer_scale"]),
-        ("Pools", ["pools", "eval_pools"]),
-        ("Mean candidates per pool", ["pool_size", "eval_pool_size"]),
-        ("Mean label entropy (nats)", ["label_entropy", "eval_label_entropy"]),
-        # A pool's stakes: its leader's win probability over the pass's.
-        ("Mean stakes (win probability)", ["stakes", "eval_stakes"]),
-        (
-            "Stakes' effective sample size, as a share of the pools",
-            ["stakes_ess_share", "eval_stakes_ess_share"],
-        ),
-        (
-            "Share of pools whose sim-best is outside the equity top 10",
-            ["tail_share", "eval_tail_share"],
-        ),
-    ]
-)
 
 
 def _beside_release_0(title: str, key: str, *others: str):
@@ -436,12 +293,11 @@ def _beside_release_0(title: str, key: str, *others: str):
     return (title, [key, f"r0_{key}", *others])
 
 
-# A multi-model trainer's read (deep_bot/trainer.py's and
-# leaf_bot_generation/trainer.py's records): each generation's games scored
-# before the trainer trains on them, by the newest release's models and by
-# release 0's (the "r0_" prefix). The gap between the two curves is the tag's
-# gain over its seeds on that generation's games; either curve alone also
-# moves with the games, which deep_bot's newer releases play.
+# A multi-model trainer's read (leaf_bot_generation/trainer.py's records):
+# each generation's games scored before the trainer trains on them, by the
+# newest release's models and by release 0's (the "r0_" prefix). The gap
+# between the two curves is the tag's gain over its seeds on that
+# generation's games.
 LEAVE_INFERENCE_SCORES = [
     _beside_release_0(
         "Leave inference: NLL vs the uniform prior (nats per leave)", "leave_eval_nll_vs_uniform"
@@ -474,44 +330,6 @@ def training_by_model(kinds: tuple[str, ...]) -> list[tuple]:
     ]
 
 
-DEEP_BOT_QUALITY = [
-    *LEAVE_INFERENCE_SCORES,
-    # The same score where it should move most: after a move static equity
-    # ranks low, the leave is the tell (deep_bot/belief_by_rank.py).
-    *(
-        _beside_release_0(
-            f"Leave inference: NLL vs uniform after a move of static-equity rank {title}",
-            f"leave_eval_nll_vs_uniform_rank_{band}",
-        )
-        for band, title in (("0", "0"), ("1_9", "1 to 9"), ("10_up", "10 or lower"))
-    ),
-    (
-        "Share of moves played, by static-equity rank",
-        [f"leave_eval_played_rank_{band}_share" for band in ("0", "1_9", "10_up")],
-    ),
-    *LEAF_NETWORK_SCORES,
-    *(
-        _beside_release_0(
-            f"Policy: {title} at N={n}", f"policy_eval_{metric}_{n}", f"equity_eval_{metric}_{n}"
-        )
-        for title, metric in (
-            ("recall of the sim-best move", "recall"),
-            ("regret (win probability)", "regret"),
-        )
-        for n in (1, 8)
-    ),
-    _beside_release_0(
-        "Policy: recall at N=8 where the sim-best is outside the equity top 10",
-        "policy_eval_tail_recall_8",
-        "equity_eval_tail_recall_8",
-    ),
-    ("Pools in the generation", ["eval_pools"]),
-    ("Share of pools whose sim-best is outside the equity top 10", ["eval_tail_share"]),
-    # Below 1 where generators were still on an older release when their
-    # chunks arrived: the price of not parking them while the trainer works.
-    ("Share of the generation's games played on the newest release", ["newest_release_share"]),
-    *training_by_model(("leave", "leaf", "policy")),
-]
 LEAF_BOT_GENERATION_QUALITY = [
     *LEAVE_INFERENCE_SCORES,
     *LEAF_NETWORK_SCORES,
@@ -519,68 +337,6 @@ LEAF_BOT_GENERATION_QUALITY = [
     # (scribblez/norm_inputs.py).
     _beside_release_0("Leaf network: largest activation", "leaf_activation_peak"),
     *training_by_model(("leave", "leaf")),
-]
-# The Loss tab's per-term panel for policy_set: each form's loss terms,
-# training beside held-out, which the stacked training loss above it cannot
-# show.
-POLICY_SET_LOSS = [
-    ("Slot form: coverage loss by N (training)", [f"loss_slot_{n}" for n in POLICY_SET_SIZES]),
-    (
-        "Slot form: coverage loss by N (held-out)",
-        [f"slot_eval_loss_{n}" for n in POLICY_SET_SIZES],
-    ),
-    (
-        "Greedy form: gain loss (training, held-out)",
-        ["loss_greedy_gain", "greedy_eval_loss_gain"],
-    ),
-    # The labels' entropy is the floor no policy's cross-entropy goes below.
-    (
-        "Policy form: cross-entropy against q (held-out) and the labels' entropy",
-        ["policy_eval_ce", "eval_label_entropy"],
-    ),
-    # Stakes-weighted when policy_stakes_weighting is set.
-    ("Policy form: loss (training, held-out)", ["loss_policy_ce", "policy_eval_loss_ce"]),
-    (
-        "Policy form: stakes-weighted cross-entropy against q (held-out)",
-        ["policy_eval_stakes_ce"],
-    ),
-    (
-        "Policy form: value head's moment losses (training, held-out)",
-        [
-            "loss_policy_value_mean",
-            "policy_eval_loss_value_mean",
-            "loss_policy_value_var",
-            "policy_eval_loss_value_var",
-        ],
-    ),
-    # The continuation heads, at the candidate each position's game played.
-    (
-        "Policy form: ownership and going-out cross-entropies (training, held-out)",
-        [
-            "loss_policy_ownership",
-            "policy_eval_loss_ownership",
-            "loss_policy_going_out",
-            "policy_eval_loss_going_out",
-        ],
-    ),
-    (
-        "Policy form: square points' moment losses (training, held-out)",
-        [
-            "loss_policy_square_points_mean",
-            "policy_eval_loss_square_points_mean",
-            "loss_policy_square_points_var",
-            "policy_eval_loss_square_points_var",
-        ],
-    ),
-    (
-        "Policy form: end-of-game points' moment losses (training, held-out)",
-        [
-            "loss_policy_end_points_mean",
-            "policy_eval_loss_end_points_mean",
-            "loss_policy_end_points_var",
-            "policy_eval_loss_end_points_var",
-        ],
-    ),
 ]
 # Figures per row of every learning-curve grid.
 SERIES_NCOLS = 2
@@ -726,7 +482,7 @@ def match_eval_grid(conn):
 # match's standard error is several points, a window's about one.
 RELEASE_MATCH_WINDOW = 10
 
-# deep_bot's opponents (deep_bot/matches.py), as the chart titles them.
+# A release's opponents (deep_bot/matches.py), as the chart titles them.
 RELEASE_OPPONENT_TITLES = {"hastybot": "HastyBot", "release_0": "release 0"}
 
 
@@ -771,7 +527,7 @@ def _release_match_figure(opponent: str, rows: list[dict]):
 
 
 def release_match_grid(conn):
-    """deep_bot's Matches tab: a panel per opponent. None when no match has
+    """leaf_bot_generation's Matches tab: a panel per opponent. None when no match has
     been recorded."""
     rows = db.read_release_matches(conn)
     if not rows:

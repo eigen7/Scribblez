@@ -28,8 +28,6 @@ import json
 import re
 from pathlib import Path
 
-import numpy as np
-
 from scribblez.dashboard import db
 from scribblez.generational.records import write_controls_file
 from scribblez.paths import TagPaths
@@ -76,12 +74,6 @@ def _ingest_generation(conn, paths: TagPaths, record: dict):
     db.write_metrics(conn, gen, {**record["metrics"], "positions": positions})
     for e in record["control_events"]:
         db.write_control_event(conn, e["positions"], e["name"], e["value"], t=e["t"])
-    tables = [t for t in record["preds"] if t in db.PRED_TABLES]  # retired ones left unread
-    if tables:
-        with np.load(paths.records_dir / f"gen_{gen:06d}.npz") as npz:
-            for table in tables:
-                arrays = {name: npz[f"{table}/{name}"] for name in db.PRED_TABLES[table].arrays}
-                db.PRED_TABLES[table].write(conn, gen, positions, arrays)
 
 
 def ingest(paths: TagPaths, conn) -> list[str]:

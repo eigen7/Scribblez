@@ -4,7 +4,7 @@ that hosts the control plane (master_api.py, workers.py).
 The data plane serves what the React app renders for a tag: the tag list, a
 cheap change token for polling, run meta and live controls, each metrics
 figure as a Bokeh ``json_item`` (plots.py) with incremental updates
-(figure_delta.py), and the Lane analysis and Positions tabs, whose predictions
+(figure_delta.py), and the Positions tabs, whose predictions
 come from the DB or are computed on demand from a generation's ONNX export.
 
 One server serves every run: task and tag are request parameters, and each
@@ -32,24 +32,21 @@ import tornado.ioloop
 import tornado.web
 from bokeh.embed import json_item
 
-from scribblez import lane_analysis, workloads
 from scribblez import params as params_mod
+from scribblez import workloads
 from scribblez.dashboard import (
     db,
-    deep_bot_api,
     deep_bot_leaf_eval_api,
     figure_delta,
     master_api,
     plots,
     tasks,
-    trajectories_api,
 )
 from scribblez.dashboard.control_db import ShadowControl
 from scribblez.dashboard.tag_queue import TagQueue
 from scribblez.dashboard.workers import WorkerManager
 from scribblez.ffi import (
     InputArm,
-    analyze_gcg,
     analyze_position_eval_gcg,
     analyze_position_eval_gcg_leaves,
     collapse_position_eval_placement,
@@ -61,9 +58,6 @@ from scribblez.paths import TagPaths
 from scribblez.position_eval import analysis as position_eval_analysis
 from scribblez.position_eval.model import PLACEMENT_HEAD_NAMES
 from scribblez.workloads.position_eval import PositionEvalParams
-
-# The lane-union tile kinds in order: 26 letters then the collapsed blank.
-_LANE_KINDS = [chr(ord("A") + k) for k in range(26)] + ["?"]
 
 # How often the reconcile pass runs. It is the only observer of ssh containers
 # and rented machines, and the only thing that acts on a scheduler gate, so its
@@ -108,26 +102,6 @@ def _training_metrics(conn, params, mount_root):
     return plots.series_grid(conn, plots.TRAINING) if _row_count(conn, "metrics") else None
 
 
-def _mset_metrics(conn, params, mount_root):
-    """move_set_eval's Training tab: the generic curves plus distillation quality."""
-    groups = plots.TRAINING + plots.MSET_QUALITY
-    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
-
-
-def _evidence_metrics(conn, params, mount_root):
-    """evidence_trajectories' Training tab: the generic curves plus the
-    conditioned-vs-plain quality figures."""
-    groups = plots.TRAINING + plots.EVIDENCE_QUALITY
-    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
-
-
-def _transfer_reader_metrics(conn, params, mount_root):
-    """transfer_reader's Training tab: the generic curves plus the reader's
-    validation read."""
-    groups = plots.TRAINING + plots.TRANSFER_READER_QUALITY
-    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
-
-
 def _leave_inference_metrics(conn, params, mount_root):
     """leave_inference's Training tab: the generic curves plus the model's
     held-out read and the win table's."""
@@ -135,30 +109,11 @@ def _leave_inference_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
-def _policy_set_metrics(conn, params, mount_root):
-    """policy_set's Training tab: the generic curves, the forms' coverage of
-    the held-out pools beside the baseline's, and the pools' statistics."""
-    groups = plots.TRAINING + plots.POLICY_SET_QUALITY
-    return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
-
-
-def _policy_set_loss(conn, params, mount_root):
-    """policy_set's Loss-tab panel below the stacked loss: each form's loss
-    terms, training beside held-out."""
-    return plots.series_grid(conn, plots.POLICY_SET_LOSS) if _row_count(conn, "metrics") else None
-
-
 def _leaf_eval_metrics(conn, params, mount_root):
     """deep_bot_leaf_eval's Training tab: the generic curves plus the model's
     held-out read beside the win tables'."""
     groups = plots.TRAINING + plots.LEAF_EVAL_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
-
-
-def _deep_bot_metrics(conn, params, mount_root):
-    """deep_bot's Training tab: each generation scored under the newest
-    release and under release 0, and the three models' training curves."""
-    return plots.series_grid(conn, plots.DEEP_BOT_QUALITY) if _row_count(conn, "metrics") else None
 
 
 def _leaf_bot_generation_metrics(conn, params, mount_root):
@@ -188,14 +143,8 @@ FIGURES = {
     "loss": _loss,
     "eval_quality": _eval_quality,
     "training_metrics": _training_metrics,
-    "mset_metrics": _mset_metrics,
-    "evidence_metrics": _evidence_metrics,
-    "transfer_reader_metrics": _transfer_reader_metrics,
     "leave_inference_metrics": _leave_inference_metrics,
-    "policy_set_metrics": _policy_set_metrics,
-    "policy_set_loss": _policy_set_loss,
     "leaf_eval_metrics": _leaf_eval_metrics,
-    "deep_bot_metrics": _deep_bot_metrics,
     "leaf_bot_generation_metrics": _leaf_bot_generation_metrics,
     "match_eval": _match_eval,
     "release_matches": _release_matches,
@@ -237,97 +186,6 @@ def _open(mount_root: str, task: str, tag: str) -> sqlite3.Connection | None:
     one, so a request for an unknown tag leaves nothing behind."""
     path = Path(TagPaths(tag, task, mount_root).dashboard_db)
     return db.connect(path) if path.exists() else None
-
-
-# --- Lane analysis tab (max_move_per_lane) ---------------------------------
-# The position dataset and its ground truth (board + per-lane best moves) are
-# fixed, so they are computed by the engine once and cached; only the
-# per-generation predictions come from the tag's DB.
-
-# The score head's last bin, a catch-all for scores >= 99 (as in the C++ label
-# encoding).
-_TOP_SCORE_BIN = 99
-
-
-@lru_cache(maxsize=1)
-def _dataset_files() -> tuple:
-    return tuple(lane_analysis.dataset_gcgs(lane_analysis.DEFAULT_DATASET))
-
-
-@lru_cache(maxsize=64)
-def _ground_truth(position: int) -> tuple:
-    """(name, engine analysis bundle) for a dataset position: the board and its
-    per-lane ground truth."""
-    gcg = _dataset_files()[position]
-    bundle, _input = analyze_gcg(gcg.read_text())
-    return gcg.stem, bundle
-
-
-def _pred_placed(occ_lane: np.ndarray) -> list:
-    """A predicted lane union (15, 27) as per-cell letter lists, the shape of the
-    ground truth's `placed`, so the UI can diff them cell by cell."""
-    return [[_LANE_KINDS[k] for k in range(27) if occ_lane[c, k]] for c in range(15)]
-
-
-def _merge_lane(gt: dict, occ_lane, pmf_lane, has_lane) -> dict:
-    """A lane's ground truth, plus the model's prediction and its correctness
-    when a prediction exists."""
-    o = dict(gt)
-    if occ_lane is None:
-        return o
-    pred_placed = _pred_placed(occ_lane)
-    pred_bin = int(np.argmax(pmf_lane))
-    o["pred_placed"] = pred_placed
-    o["pred_score_bin"] = pred_bin
-    o["pred_score_pmf"] = [float(x) for x in pmf_lane]
-    o["pred_has_move"] = float(has_lane)
-    if gt["has_move"]:
-        o["move_correct"] = all(
-            set(a) == set(b) for a, b in zip(gt["placed"], pred_placed, strict=True)
-        )
-        o["score_correct"] = pred_bin == min(gt["max_score"], _TOP_SCORE_BIN)
-    return o
-
-
-def _merge_axis(gt_axis, occ, pmf, has, base: int) -> list:
-    return [
-        _merge_lane(
-            gt_axis[i],
-            None if occ is None else occ[base + i],
-            None if pmf is None else pmf[base + i],
-            None if has is None else has[base + i],
-        )
-        for i in range(15)
-    ]
-
-
-def lane_position_payload(conn, position: int, generation) -> dict:
-    """The Lane analysis tab's view of one position: board and rack, and each
-    lane's ground truth merged with the selected generation's prediction."""
-    name, bundle = _ground_truth(position)
-    pred = (
-        db.read_lane_pred(conn, generation, position)
-        if (conn is not None and generation is not None)
-        else None
-    )
-    occ = pred["occ"] if pred else None
-    pmf = pred["score_pmf"] if pred else None
-    has = pred["has_move"] if pred else None
-    la = bundle["lane_analysis"]
-    return {
-        "name": name,
-        "on_move": bundle["on_move"],
-        "board": bundle["board"],
-        "bonuses": bundle["bonuses"],
-        "rack": bundle["rack"],
-        "tile_scores": bundle["tile_scores"],
-        "generation": generation,
-        "has_prediction": pred is not None,
-        "lanes": {
-            "rows": _merge_axis(la["rows"], occ, pmf, has, 0),
-            "cols": _merge_axis(la["cols"], occ, pmf, has, 15),
-        },
-    }
 
 
 # --- Positions tab (position_eval) -----------------------------------------
@@ -761,59 +619,6 @@ class FigureDeltaHandler(_Base):
             conn.close()
 
 
-class LanePositionsHandler(_Base):
-    """The lane-analysis dataset's positions (the UI's position selector)."""
-
-    def get(self):
-        try:
-            self.write({"positions": [gcg.stem for gcg in _dataset_files()]})
-        except OSError:
-            self.write({"positions": []})
-
-
-class LaneGenerationsHandler(_Base):
-    """The model generations a tag has lane-analysis predictions for (the slider)."""
-
-    def get(self):
-        conn = self._open_conn()
-        if conn is None:
-            self.write({"generations": []})
-            return
-        try:
-            self.write({"generations": db.read_lane_generations(conn)})
-        finally:
-            conn.close()
-
-
-class LanePositionHandler(_Base):
-    """One position's lane view. `generation` defaults to the newest recorded."""
-
-    def get(self):
-        files = _dataset_files()
-        position = int(self.get_query_argument("position", "0"))
-        if not 0 <= position < len(files):
-            self.set_status(404)
-            self.write({"error": "position out of range"})
-            return
-        conn = self._open_conn()
-        try:
-            generation = self._resolve_generation(conn)
-            self.write(lane_position_payload(conn, position, generation))
-        except OSError:  # lexicon unavailable -> can't build ground truth
-            self.set_status(503)
-            self.write({"error": "lexicon unavailable; cannot compute ground truth"})
-        finally:
-            if conn is not None:
-                conn.close()
-
-    def _resolve_generation(self, conn):
-        arg = self.get_query_argument("generation", "latest")
-        if conn is not None and arg in ("", "latest"):
-            gens = db.read_lane_generations(conn)
-            return gens[-1]["generation"] if gens else None
-        return int(arg) if arg not in ("", "latest") else None
-
-
 class PositionEvalPositionsHandler(_Base):
     """The position_eval dataset's positions (the UI's position selector)."""
 
@@ -942,15 +747,10 @@ def make_app(
             (r"/api/controls", ControlsHandler),
             (r"/api/figure/([a-z_]+)", FigureHandler),
             (r"/api/figure_delta/([a-z_]+)", FigureDeltaHandler),
-            (r"/api/lane/positions", LanePositionsHandler),
-            (r"/api/lane/generations", LaneGenerationsHandler),
-            (r"/api/lane/position", LanePositionHandler),
             (r"/api/position_eval/positions", PositionEvalPositionsHandler),
             (r"/api/position_eval/generations", PositionEvalGenerationsHandler),
             (r"/api/position_eval/position", PositionEvalPositionHandler),
             (r"/api/position_eval/alt_leave", PositionEvalAltLeaveHandler),
-            *trajectories_api.ROUTES,
-            *deep_bot_api.ROUTES,
             *deep_bot_leaf_eval_api.ROUTES,
         ],
         mount_root=mount_root,

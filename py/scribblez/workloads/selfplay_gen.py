@@ -1,5 +1,5 @@
 """The generate role shared by the generational-training workloads
-(position_eval, max_move_per_lane).
+(position_eval, leave_inference, deep_bot_leaf_eval).
 
 Generators know nothing about generations. Each cycle plays one .slog chunk of
 self-play games into its own subdirectory of the worker's private work dir and
@@ -17,15 +17,15 @@ std::random_device. Any deterministic seed partition across a fleet would risk
 two workers playing the same games, so the corpus is deliberately not
 reproducible.
 
-A workload whose rows read per-.slog sidecars (leave_inference's .forgone,
-policy_set's .pool and .group) passes a ChunkSidecar: each chunk gets its
+A workload whose rows read per-.slog sidecars (leave_inference's .forgone)
+passes a ChunkSidecar: each chunk gets its
 sidecars written before delivery, and each sidecar is delivered just before
 its .slog, so the scheduler never sees a .slog whose sidecars are not already
 staged (scheduler.py).
 
-A workload whose player changes while the tag runs (deep_bot, which plays its
-newest release) drives generate_cycles itself with a function that names each
-cycle's player and sidecar writer.
+A workload whose player could change while the tag runs drives
+generate_cycles itself with a function that names each cycle's player and
+sidecar writer.
 
 The work dir is wiped on start. A crash mid-cycle can leave a truncated .slog,
 so leftovers are never delivered; a restart loses at most the in-flight chunk
@@ -74,14 +74,12 @@ class ChunkSidecar(NamedTuple):
 
 
 class Cycle(NamedTuple):
-    """What one generator cycle plays: the --player spec of both seats;
-    write(chunk_dir, threads), which writes the chunk's sidecars that the
-    games do not (None: there are none); and how many turns of each game the
-    games themselves write the pool sidecars of (selfplay.run_games)."""
+    """What one generator cycle plays: the --player spec of both seats, and
+    write(chunk_dir, threads), which writes the chunk's sidecars (None: there
+    are none)."""
 
     player_spec: str
     write_sidecars: Callable[[Path, int], None] | None = None
-    pool_positions_per_game: int = 0
 
 
 def _deliver_chunk_dir(
@@ -259,7 +257,6 @@ def generate_cycles(
                 player_spec=plan.player_spec,
                 random_opening_mean=random_opening_mean,
                 face_up_leaves=face_up_leaves,
-                pool_positions_per_game=plan.pool_positions_per_game,
             )
             if rc != 0:
                 _publish(stats, deliverer.drain(), games_per_chunk)

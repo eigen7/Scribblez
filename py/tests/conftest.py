@@ -27,7 +27,7 @@ the terminal edge, which leaves a wide gap on a wide terminal, and reports no
 time. This replaces the terminal reporter with one that prints each test file
 as
 
-    [ 69%] [   7.241s] py/tests/test_transfer_test_evaluate.py ......
+    [ 69%] [   7.241s] py/tests/test_leaf_eval_rows.py ......
 
 where the time is the file's wall clock, module fixtures included. A file's
 line is due when its last collected test finishes, and the percentage counts

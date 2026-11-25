@@ -20,8 +20,8 @@ import numpy as np
 
 from scribblez.dashboard import db
 from scribblez.deep_bot import known_positions
+from scribblez.deep_bot.known_position_beliefs import KnownPositionsReplay, belief_at
 from scribblez.deep_bot.position_view import board_view
-from scribblez.deep_bot.release_positions import KnownPositionsReplay, belief_at
 from scribblez.deep_bot_leaf_eval.hasty_rollouts import gcg_hash
 from scribblez.leave_inference.beliefs import LeaveBeliefs
 from scribblez.paths import TagPaths

@@ -3,10 +3,10 @@ leaf_bot_generation: one known position at a time under one generation's
 analysis (deep_bot_leaf_eval/positions.py), which a match slot delivered
 with that generation's match against HastyBot. A leaf_bot_generation tag's
 "generation" is a release. Registered with the rest of the data plane by
-api.make_app(). The known positions themselves come from
-/api/deep_bot/positions.
+api.make_app().
 
-Routes (all take task + tag):
+Routes (all but the first take task + tag):
+  /api/known_positions                 the known positions, in manifest order
   /api/deep_bot_leaf_eval/generations  the analyzed generations (the slider),
                                        with their rows trained and match score
   /api/deep_bot_leaf_eval/position     ?position=&generation= -> the board,
@@ -275,6 +275,12 @@ class _Base(tornado.web.RequestHandler):
         )
 
 
+class KnownPositionsHandler(tornado.web.RequestHandler):
+    def get(self):
+        positions = known_positions.load()
+        self.write({"positions": [{"id": p.id, "title": p.title} for p in positions]})
+
+
 class GenerationsHandler(_Base):
     def get(self):
         self.write({"generations": generation_list(TagPaths(*self.tag_key()))})
@@ -339,6 +345,7 @@ class BeliefHandler(_Base):
 
 
 ROUTES = [
+    (r"/api/known_positions", KnownPositionsHandler),
     (r"/api/deep_bot_leaf_eval/generations", GenerationsHandler),
     (r"/api/deep_bot_leaf_eval/position", PositionHandler),
     (r"/api/deep_bot_leaf_eval/history", HistoryHandler),

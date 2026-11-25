@@ -2,6 +2,7 @@
 store, its frozen fields in task.json and its control state in the control
 store, re-read only when task.json changes under it."""
 
+import dataclasses
 import json
 import os
 
@@ -16,7 +17,8 @@ from scribblez.generational import lifecycle
 
 @pytest.fixture
 def spec():
-    return workloads.get("transfer_test")
+    """A workload with no end condition (no WorkloadSpec.complete)."""
+    return dataclasses.replace(workloads.get("position_eval"), complete="")
 
 
 @pytest.fixture
@@ -158,13 +160,13 @@ def _failed_slot() -> tasks.WorkerRecord:
     ],
 )
 def test_state_of_a_workload_without_an_end_condition(store, spec, slots, expected):
-    """transfer_test has no WorkloadSpec.complete: it is complete while every slot
-    is finished."""
+    """Without a WorkloadSpec.complete, a tag is complete while every slot is
+    finished."""
     assert store.state(spec, _save(store, spec, workers=slots), None) == expected
 
 
 def _entry(bundle: str = queue_mod.BUNDLE_NONE) -> QueueEntry:
-    return QueueEntry("transfer_test", "t", 0.0, bundle=bundle)
+    return QueueEntry("position_eval", "t", 0.0, bundle=bundle)
 
 
 @pytest.mark.parametrize(

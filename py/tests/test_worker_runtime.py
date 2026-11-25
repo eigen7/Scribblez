@@ -14,7 +14,7 @@ from cloud.runtime_abi import RUNTIME_ENGINE, RUNTIME_TORCH
 from cloud.worker_entrypoint import WORKER_ENV_VARS
 from scribblez import workloads
 from scribblez.workloads.base import RoleSpec, WorkloadSpec
-from scribblez.workloads.transfer_test import TransferTestParams
+from scribblez.workloads.position_eval import PositionEvalParams
 
 
 @pytest.mark.parametrize(
@@ -32,16 +32,10 @@ def test_the_torch_image_is_the_engine_image_under_a_suffixed_tag(image, torch_i
     assert registry.image_for(RUNTIME_TORCH) == torch_image
 
 
-# The roles besides trainers whose runner imports what only the torch image
-# has: hidden_blind_spots' generator runs the leave inference model under
-# onnxruntime for the viewer's beliefs.
-TORCH_IMAGE_GENERATORS = {("hidden_blind_spots", "generate")}
-
-
 def test_train_roles_take_the_torch_runtime_and_the_rest_the_engine():
     for spec in workloads.WORKLOADS.values():
         for role in spec.roles:
-            torch = role.name == "train" or (spec.name, role.name) in TORCH_IMAGE_GENERATORS
+            torch = role.name == "train"
             assert role.runtime == (RUNTIME_TORCH if torch else RUNTIME_ENGINE), (
                 spec.name,
                 role.name,
@@ -53,7 +47,7 @@ def test_a_role_naming_no_such_runtime_is_refused():
         WorkloadSpec(
             name="x",
             title="x",
-            params_cls=TransferTestParams,
+            params_cls=PositionEvalParams,
             roles=(RoleSpec(name="r", title="r", runner="a:b", runtime="cuda"),),
         )
 

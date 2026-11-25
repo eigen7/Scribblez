@@ -1,5 +1,5 @@
-"""Tests for the compiled-lexicon modules: the registry, the soft-traversal
-module's contract and semantics, and its integration into the lane model."""
+"""Tests for the compiled-lexicon modules: the registry, and the modules'
+contracts and semantics."""
 
 import pytest
 import torch
@@ -14,7 +14,6 @@ from scribblez.lexical_tool.modules import (
     parse_module_opts,
     resolve_lane_ffn_mult,
 )
-from scribblez.max_move_per_lane.model import MaxMovePerLaneModel, compute_loss
 
 WORDS = ["CAT", "CAR", "CARE", "CARES", "CATS", "AT"]
 
@@ -68,13 +67,7 @@ def test_straight_through_is_exact_and_differentiable():
     assert mod2.query.weight.grad.abs().sum() > 0
 
 
-def _model_with(module):
-    return MaxMovePerLaneModel(
-        31, 27, trunk_channels=8, num_blocks=1, lane_layers=1, lexicon_module=module
-    )
-
-
-def test_oracle_crosscheck_signals_and_integration():
+def test_oracle_crosscheck_signals():
     orc = OracleCrosscheckLexicon(channels=8, compiled=_lexicon())
     out = orc(torch.zeros(1, 15, 8), _board("CA"))
     assert out.cell_residual.shape == (1, 15, 8)
@@ -97,13 +90,8 @@ def test_oracle_crosscheck_signals_and_integration():
     orc(torch.zeros(1, 15, 8), _board("CAT")).cell_residual.sum().backward()
     assert orc.readout.weight.grad.abs().sum() > 0
 
-    out = _model_with(OracleCrosscheckLexicon(channels=8, compiled=_lexicon()))(
-        torch.zeros(2, 31, 15, 15), torch.rand(2, 27)
-    )
-    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)
 
-
-def test_kv_memory_retrieval_and_integration():
+def test_kv_memory_retrieval():
     # Nine words with distinct letter counts fill the 3x3 slot grid: with
     # WORDS' six, the top-3 retrieval can land on the three empty slots, and
     # then every gradient is zero.
@@ -122,11 +110,6 @@ def test_kv_memory_retrieval_and_integration():
     assert kv.query.weight.grad.abs().sum() > 0
     assert kv.subkeys1.grad.abs().sum() > 0
     assert kv.readout.weight.grad.abs().sum() > 0
-
-    out = _model_with(KvMemoryLexicon(channels=8, compiled=_lexicon()))(
-        torch.zeros(2, 31, 15, 15), torch.rand(2, 27)
-    )
-    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)
 
 
 def test_parse_module_opts():
@@ -189,39 +172,6 @@ def test_acceptance_semantics():
     assert accept[0] < 0.1 and accept[1] < 0.1 and accept[4] < 0.1
 
 
-def test_model_integration_matches_shapes():
-    sp, sc, b = 31, 27, 2
-    spatial = torch.zeros(b, sp, 15, 15)
-    scalar = torch.rand(b, sc)
-    targets = {
-        "lane_occupancy": (torch.rand(b, 30, 15, 27) > 0.8).float(),
-        "lane_score": torch.randint(0, 100, (b, 30)),
-        "lane_mask": (torch.rand(b, 30) > 0.3).float(),
-    }
-
-    base = MaxMovePerLaneModel(sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2)
-    mod = SoftTraversalLexicon(channels=32, compiled=_lexicon(), topk=8)
-    # No FFN override (full width), so the module is purely additive; the shrink
-    # is covered separately by test_lane_ffn_mult_override.
-    withlex = MaxMovePerLaneModel(
-        sp, sc, trunk_channels=32, num_blocks=2, lane_layers=2, lexicon_module=mod
-    )
-
-    out_base = base(spatial, scalar)
-    out_lex = withlex(spatial, scalar)
-    assert {k: v.shape for k, v in out_base.items()} == {k: v.shape for k, v in out_lex.items()}
-
-    # In add mode the module adds parameters and trains end-to-end.
-    assert sum(p.numel() for p in withlex.parameters()) > sum(p.numel() for p in base.parameters())
-    compute_loss(out_lex, targets, lambda_occ=100.0)["total"].backward()
-    assert withlex.lexicon_module.query.weight.grad.abs().sum() > 0
-
-
-def _lane_ffn_width(model):
-    """The lane transformer's FFN hidden width (where an internal lexicon lives)."""
-    return model.lane.encoder.layers[0].linear1.out_features
-
-
 def test_resolve_lane_ffn_mult():
     # "add" mode never overrides the FFN width.
     assert (
@@ -247,27 +197,3 @@ def test_resolve_lane_ffn_mult():
     assert (
         resolve_lane_ffn_mult("replace", has_module=False, starve_ffn=True, replace_ffn_mult=1) == 1
     )
-
-
-def test_lane_ffn_mult_override():
-    sp, sc, c = 31, 27, 32
-
-    def make(lane_ffn_mult):
-        return MaxMovePerLaneModel(
-            sp,
-            sc,
-            trunk_channels=c,
-            num_blocks=1,
-            lane_layers=1,
-            ffn_mult=4,
-            lane_ffn_mult=lane_ffn_mult,
-        )
-
-    assert _lane_ffn_width(make(None)) == 4 * c  # no override -> default ffn_mult width
-    assert _lane_ffn_width(make(1)) == c  # shrunk
-
-    # An override of 0 is attention-only, clamped to a 1-unit FFN, and still runs.
-    m0 = make(0)
-    assert _lane_ffn_width(m0) == 1
-    out = m0(torch.zeros(2, sp, 15, 15), torch.rand(2, sc))
-    assert out["lane_occupancy_logits"].shape == (2, 30, 15, 27)

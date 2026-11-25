@@ -17,9 +17,6 @@ Record keys carry their model's name (`leave_`, `leaf_`), and release 0's
 scores the further prefix `r0_`. The two training losses are `loss_<model>`,
 the names the dashboard's Loss tab stacks. The rolling checkpoint is what a
 later tag of this workload seeds from (deep_bot/unit_set.py).
-
-deep_bot's trainer (deep_bot/trainer.py) is the same loop over three models,
-with the policy's checks and the known positions' analysis besides.
 """
 
 import functools

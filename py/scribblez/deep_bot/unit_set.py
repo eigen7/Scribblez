@@ -10,7 +10,7 @@ from dataclasses import asdict
 
 from torch import nn
 
-from scribblez.deep_bot import LEAF, POLICY, release, units
+from scribblez.deep_bot import LEAF, release, units
 from scribblez.generational import checkpoint, lifecycle
 from scribblez.paths import TagPaths
 from scribblez.train_common import timed_print
@@ -48,10 +48,7 @@ def checkpoint_config(params, by_kind: dict) -> dict:
     """The tag's params, and each unit's params with its versions."""
     return {
         "params": asdict(params),
-        "units": {
-            kind: asdict(unit.params) | units.unit_versions(kind, unit)
-            for kind, unit in by_kind.items()
-        },
+        "units": {kind: asdict(unit.params) | unit.versions() for kind, unit in by_kind.items()},
     }
 
 
@@ -74,13 +71,6 @@ def resume(by_kind: dict, paths: TagPaths, device, state_cls: type):
     return state
 
 
-def _train_unit(kind: str, unit, window, gen: int, rows: int, cpu):
-    """`unit`'s epoch over `window`; the policy's reads no CPU controls."""
-    if kind == POLICY:
-        return unit.train(window, gen, rows)
-    return unit.train(window, gen, rows, cpu)
-
-
 def _epoch_loss(kind: str, result) -> float:
     return result.losses["total"] if kind == LEAF else result.loss
 
@@ -94,7 +84,7 @@ def train(by_kind: dict, paths: TagPaths, params, state, cpu) -> dict:
     record = {}
     for kind, unit in by_kind.items():
         window = lifecycle.window_dirs(paths, gen, units.window(params, kind))
-        result, elapsed = _train_unit(kind, unit, window, gen, getattr(state, f"{kind}_rows"), cpu)
+        result, elapsed = unit.train(window, gen, getattr(state, f"{kind}_rows"), cpu)
         setattr(state, f"{kind}_rows", result.rows_trained)
         record |= {
             f"loss_{kind}": _epoch_loss(kind, result),

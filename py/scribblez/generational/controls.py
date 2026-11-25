@@ -3,9 +3,8 @@ trainers.
 
 The "rows-clock" is the count of training rows seen so far. The WSD schedule
 is a pure function of it, which is what lets a resumed trainer pick up the
-schedule from its checkpoint cursor alone. The evidence and max_move_per_lane
-trainers run it directly (WsdLrController); position_eval and move_set_eval
-reach it through the `wsd` optimizer arm (optim.py).
+schedule from its checkpoint cursor alone. Trainers reach it through the
+`wsd` optimizer arm (optim.py).
 
 The CPU controls (C++ DataLoader workers, torch intra-op threads) are knobs
 the operator can move mid-run from the dashboard's Controls tab. They reach

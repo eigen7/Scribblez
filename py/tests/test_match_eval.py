@@ -12,7 +12,6 @@ from scribblez.match_eval.harness import RoundResult
 from scribblez.paths import DONE_SUFFIX, MATCH_RESULTS_DIR, POSITION_EVAL, TagPaths
 from scribblez.sim_evidence.slog_meta import game_metas, read_slog_bytes
 from scribblez.workloads.base import WorkerContext
-from scribblez.workloads.evidence_trajectories import EvidenceTrajectoriesParams
 from scribblez.workloads.position_eval import SPEC, PositionEvalParams
 
 
@@ -262,33 +261,3 @@ def test_a_workloads_own_files_go_out_before_the_result(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path, sink=RecordingSink(paths.root), match_pairs=1)
     runner.run(ctx, after_match=lambda c, model, gen: [(extra, f"extras/gen_{gen}.json")])
     assert order == ["extras/gen_7.json", f"{MATCH_RESULTS_DIR}/gen_000007-w0.json"]
-
-
-def test_a_move_proposal_export_plays_as_ultimatebot(tmp_path):
-    """The player spec follows the export's shape: a lone model is the neural
-    agent; a model with its step graph beside it (delivered under step/, as
-    the evidence trainer exports it) is UltimateBot at the tag's own sim
-    configuration, truncation included only when the tag sims truncated."""
-    model = tmp_path / "model_epoch_0004.onnx"
-    model.touch()
-    plain = runner._model_player_spec(model, PositionEvalParams())
-    assert plain == f"--type=neural --model={model} --name=model"
-
-    (tmp_path / "step").mkdir()
-    step = tmp_path / "step" / model.name
-    step.touch()
-    terminal = EvidenceTrajectoriesParams(rollouts=250, match_max_sims=7)
-    spec = runner._model_player_spec(model, terminal)
-    assert spec == (
-        f"--type=ultimatebot --cache-model={model} --step-model={step} "
-        "--rollouts=250 --max-sims=7 --name=model"
-    )
-    truncated = EvidenceTrajectoriesParams(
-        rollouts=1000, horizon=3, leaf_model="/tags/pe/models/model_epoch_0863.onnx"
-    )
-    spec = runner._model_player_spec(model, truncated)
-    assert spec == (
-        f"--type=ultimatebot --cache-model={model} --step-model={step} "
-        "--rollouts=1000 --max-sims=10 --sim-horizon=3 "
-        "--leaf-model=/tags/pe/models/model_epoch_0863.onnx --name=model"
-    )

@@ -5,7 +5,6 @@ of independently-known values, not a re-mirror of the structs."""
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
@@ -22,48 +21,15 @@ def test_struct_dtypes_pin_known_layouts():
     assert move.fields["glyphs"][0].shape == (7,)
     assert move.fields["square_mask"][1] == 12  # after the zeroed padding byte
 
-    record = struct_dtype("SobsRecord")
-    assert record.fields["move"][0] == move  # nested reference resolves
-    # The sim observation is a dense footprint-class histogram.
-    assert record.fields["obs"][0].fields["opp_next_count"][0].shape == (2927,)
-
-    assert struct_dtype("MsetFileHeader").fields["model_hash"][0] == np.dtype("S64")
-    assert struct_dtype("SlogTurnBlob").itemsize == 24
-    assert struct_dtype("ProbeFileHeader").itemsize == 96
-    assert struct_dtype("ProbeCandidate").fields["move"][0] == move
-    assert struct_dtype("ProbeRecord").itemsize == 44
-    # Replayed probe state: racks are tile-code strings, padded with no-tile codes.
-    assert struct_dtype("ProbeRootState").itemsize == 18
-    assert struct_dtype("ProbeCandidateState").fields["leave"][0] == np.dtype("S7")
-    assert struct_dtype("ProbeStartState").itemsize == 28
-    assert struct_dtype("ProbeTurnState").fields["score_diff"][1] == 24
+    turn = struct_dtype("SlogTurnBlob")
+    assert turn.itemsize == 24
+    assert turn.fields["move"][0] == move  # nested reference resolves
 
 
 def test_magics_spell_their_extensions():
-    from scribblez.move_set_eval.targets import MSET_MAGIC
     from scribblez.sim_evidence.slog_meta import SLOG_MAGIC
-    from scribblez.sim_evidence.sobs import SOBS_MAGIC
 
-    assert MSET_MAGIC == int.from_bytes(b"MSET", "little")
-    assert SOBS_MAGIC == int.from_bytes(b"SOBS", "little")
     assert SLOG_MAGIC == int.from_bytes(b"SLOG", "little")
-    from scribblez.ffi import format_layout
-
-    assert format_layout()["constants"]["sprobe"]["magic"] == int.from_bytes(b"SPRB", "little")
-
-
-def test_glyph_char_follows_the_engine_code_table():
-    """glyph_char's code table is a deliberate replica of glyph.h's (the
-    encoding is effectively frozen); this pin and its C++ twin
-    (Glyph.CodeTablePinnedForCrossLanguageReaders) keep the two in lockstep."""
-    from scribblez.sim_evidence.sobs import glyph_char
-
-    assert glyph_char(0) == "?"  # empty
-    assert glyph_char(1) == "A" and glyph_char(26) == "Z"
-    # Designated blanks start right after the letters (glyph.h: 27..52) and
-    # render lowercased; the unassigned blank (53) has no letter to show.
-    assert glyph_char(27) == "a" and glyph_char(52) == "z"
-    assert glyph_char(53) == "?"
 
 
 def test_placement_head_names_are_pinned():

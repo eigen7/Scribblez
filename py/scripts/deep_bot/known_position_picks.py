@@ -4,7 +4,7 @@
 every pick against the position's answer.
 
     python3 -m scripts.deep_bot.known_position_picks \\
-        --player "--type=deepbot-endgame --leaf-model leaf.onnx --reply hasty"
+        --player "--type=leafbot-endgame --leaf-model leaf.onnx --leave-inference leave.onnx"
 
 A pick is the position's reference move, static equity's move, or another.
 --out keeps the picks as JSON lines, one per position, with how each was

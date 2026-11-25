@@ -123,12 +123,11 @@ def test_create_task_resolves_and_records_the_profile(tmp_path, monkeypatch):
         store.create(spec, "t3", {}, profile="huge")
 
 
-@pytest.mark.parametrize("workload", ["position_eval", "move_set_eval"])
-def test_trainer_profiles_are_one_per_trunk(workload):
-    """The recipes both trainers register: each sets its trunk, the
+def test_trainer_profiles_are_one_per_trunk():
+    """The recipes position_eval registers: each sets its trunk, the
     transformer's turns on gradient clipping (the conv one trains as its runs
     always have), and the default is the transformer."""
-    spec = workloads.get(workload)
+    spec = workloads.get("position_eval")
     assert set(spec.profiles) == {TRUNK_TRANSFORMER, TRUNK_CONV}
     assert spec.default_profile == TRUNK_TRANSFORMER
     tf = spec.profile_defaults(TRUNK_TRANSFORMER)

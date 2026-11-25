@@ -13,8 +13,8 @@ The metadata carries the format version, the leave values the row's scalars
 were priced with (which the engine checks before loading:
 nn::check_leave_values), and the generation's provenance.
 
-The trainer exports every generation into its tag's models/, where a
-policy_set task pins one. As a script: export a tag's rolling checkpoint as
+The trainer exports every generation into its tag's models/, where its
+matches and analyses read it. As a script: export a tag's rolling checkpoint as
 its latest generation. The checkpoint holds the served weights: the trainer
 checkpoints in eval mode, the averaged iterate with recalibrated batch norm.
 

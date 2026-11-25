@@ -45,26 +45,10 @@ def _assigned_model(paths: TagPaths, worker_id: str) -> Path | None:
     return models[-1] if models else None
 
 
-def _step_companion(onnx_path: Path) -> Path:
-    """Where a move-proposal export's step graph sits relative to its cache
-    graph (see TagPaths.proposal_step_path)."""
-    return onnx_path.parent / "step" / onnx_path.name
-
-
-def _model_player_spec(onnx_path: Path, params) -> str:
-    """The --player spec for the assigned export. A position-evaluation export
-    plays as the neural agent. A move-proposal export, recognized by its step
-    graph, plays as UltimateBot with the tag's sim settings."""
-    step = _step_companion(onnx_path)
-    if not step.exists():
-        return f"--type=neural --model={onnx_path} --name=model"
-    spec = (
-        f"--type=ultimatebot --cache-model={onnx_path} --step-model={step} "
-        f"--rollouts={params.rollouts} --max-sims={params.match_max_sims}"
-    )
-    if params.horizon:
-        spec += f" --sim-horizon={params.horizon} --leaf-model={params.leaf_model}"
-    return spec + " --name=model"
+def _model_player_spec(onnx_path: Path) -> str:
+    """The --player spec for an assigned position-evaluation export: the
+    neural agent."""
+    return f"--type=neural --model={onnx_path} --name=model"
 
 
 # How an export plays: (ctx, the assigned export) -> (its --player spec,
@@ -77,9 +61,9 @@ AfterMatch = Callable[[WorkerContext, Path, int], list[tuple[Path, str]]]
 
 
 def model_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
-    """A position-evaluation or move-proposal export (_model_player_spec),
-    under the tag's own information condition."""
-    return _model_player_spec(model, ctx.params), ctx.params.face_up_leaves
+    """A position-evaluation export (_model_player_spec), under the tag's own
+    information condition."""
+    return _model_player_spec(model), ctx.params.face_up_leaves
 
 
 @dataclass(frozen=True)

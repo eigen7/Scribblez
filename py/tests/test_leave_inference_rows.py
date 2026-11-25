@@ -13,7 +13,7 @@ from scribblez.dataset import SlogDataset, row_layout
 from scribblez.workloads.leave_inference import LeaveInferenceParams
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
-# test_move_set_eval_targets.py.
+# test_dataloader.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 _LAYOUT = ffi.format_layout()["constants"]["leave_inference"]
 

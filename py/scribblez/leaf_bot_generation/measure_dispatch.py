@@ -2,30 +2,63 @@
 their matches over the measure slots and recording what the slots deliver
 (the RoleSpec.dispatch tick; measure.py is the worker's half).
 
-It follows deep_bot's measuring (deep_bot/measure_dispatch.py), whose
-exchange it shares: a slot's inbox is the ledger of its assignments, an
-assignment stays until its result is recorded, and ingest is idempotent. What
-differs is the unit of work. A deep_bot release is one slot's; here each of a
-release's matches (deep_bot/matches.py, against HastyBot and release 0) is an
-assignment of its own, so that any number of slots share the releases due,
-and the controller keeps a match off every slot but the one holding it. A
-slot plays one match at a time; the newest release's come first, and older
-ones backfill.
+It follows match eval's exchange (match_eval/dispatch.py): a slot's inbox is
+the ledger of its assignments, an assignment stays until its result is
+recorded, and ingest is idempotent. Each of a release's matches
+(deep_bot/matches.py, against HastyBot and release 0) is an assignment of its
+own, so that any number of slots share the releases due, and the controller
+keeps a match off every slot but the one holding it. A slot plays one match at
+a time; the newest release's come first, and older ones backfill. Every game
+of each match is kept under the tag (matches.kept_dir), with the estimate the
+chart draws in the database.
 
 A match whose delivered result was quarantined (unreadable) has no row, so it
 falls due again: its finished assignment is cleared like a recorded one's,
 and the match goes to the next idle slot.
 """
 
+from pathlib import Path
+
 from scribblez.dashboard import db
 from scribblez.deep_bot import matches, release
-from scribblez.deep_bot.measure_dispatch import ingest
 from scribblez.generational import lifecycle
 from scribblez.leaf_bot_generation import LAYOUT, measure
 from scribblez.paths import DONE_SUFFIX, TagPaths
 
 # A match: (release, opponent).
 Match = tuple[int, str]
+
+
+def _keep(paths: TagPaths, record: dict, delivered: Path):
+    """Move a delivered match's rows, and its games if they have arrived,
+    under the release's kept matches."""
+    number, opponent = record["release"], record["opponent"]
+    kept = matches.kept_dir(paths, number)
+    kept.mkdir(parents=True, exist_ok=True)
+    games = paths.data_dir / matches.games_rel(number, opponent)
+    if games.exists():
+        games.replace(kept / f"{opponent}.slog")
+    delivered.replace(kept / f"{opponent}.json")
+
+
+def ingest(paths: TagPaths, conn) -> list[Match]:
+    """Record every delivered match, oldest first: its estimate into the
+    database, its games under the tag. Returns the matches recorded. A
+    malformed result is quarantined (renamed to .bad), as match eval's is."""
+    done = []
+    for path in sorted(paths.match_results_dir.glob("release_*.json")):
+        try:
+            record = matches.read_result(path)
+            summary = matches.estimate(record["games"])
+        except (ValueError, KeyError, RuntimeError) as e:
+            print(f"measure: quarantining unreadable result {path.name}: {e}")
+            path.replace(path.with_suffix(".bad"))
+            continue
+        summary["elapsed_s"] = record["elapsed_s"]
+        db.write_release_match(conn, record["release"], record["opponent"], summary)
+        _keep(paths, record, path)
+        done.append((record["release"], record["opponent"]))
+    return done
 
 
 def recorded(conn) -> set[Match]:

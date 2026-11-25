@@ -85,8 +85,8 @@ def fit_win_table(paths: TagPaths, params, gen: int, window: list[Path], tag: st
 
 
 def export_generation(paths: TagPaths, gen: int, unit: LeafEvalUnit, tag: str):
-    """Export generation `gen`'s model for the engine, so a policy_set task
-    can pin it."""
+    """Export generation `gen`'s model for the engine, where the tag's matches
+    and analyses read it."""
     unit.export(paths.onnx_path(gen), {"tag": tag, "generation": gen})
 
 

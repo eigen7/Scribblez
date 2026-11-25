@@ -2,8 +2,7 @@
 """Generate the fixture for the leaf eval TensorRT parity test.
 
 The engine serves the DeepBot leaf eval model from its ONNX export through
-TensorRT (nn::LeafEvalSpec), in GPU rollouts (gpu/gpu_rollout_values.h). This
-script records the PyTorch outputs as ground truth for
+TensorRT (nn::LeafEvalSpec). This script records the PyTorch outputs as ground truth for
 engine/tests/test_leaf_eval_parity.cpp. py/tools/gpu_parity.py runs it; to
 run it by hand, from py/:
 
@@ -12,8 +11,6 @@ run it by hand, from py/:
 Files written into --out-dir:
   * model.onnx      -- a randomly initialized conv model with join planes,
                        stamped with LEAVE_VALUES as its leave values.
-  * real.onnx       -- the same export stamped with the engine's own leave
-                       values, so gpu_rollout_demo accepts it as --leaf-model.
   * leave_values.txt -- LEAVE_VALUES.
   * inputs.bin      -- N rows x the row's floats, spatial then scalar, as
                        LeafEvalInputEncoder::encode writes them.
@@ -32,7 +29,6 @@ import numpy as np
 import torch
 from scribblez.deep_bot_leaf_eval.model import LAYOUT, LeafEvalModel, LeafEvalShape
 from scribblez.deep_bot_leaf_eval.onnx_export import OUTPUTS, export_onnx
-from scribblez.ffi import LeaveValueArrays
 
 BOARD_SIZE = 15
 SPATIAL_PLANES = LAYOUT["join_plane0"] + LAYOUT["join_planes"]
@@ -90,12 +86,6 @@ def main() -> int:
     model = build_model(args.seed)
     provenance = {"tag": "parity-fixture", "generation": 0}
     export_onnx(model, out / "model.onnx", leave_values=LEAVE_VALUES, provenance=provenance)
-    export_onnx(
-        model,
-        out / "real.onnx",
-        leave_values=LeaveValueArrays().content_hash,
-        provenance=provenance,
-    )
     (out / "leave_values.txt").write_text(LEAVE_VALUES)
 
     rows = random_rows(np.random.default_rng(args.seed), args.num_rows)
