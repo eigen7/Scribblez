@@ -124,20 +124,28 @@ TEST_F(LeaveSamplerTest, RefusesQueriesWithNoLeaves) {
 
 TEST_F(LeaveSamplerTest, MomentsAreTheRowsMoments) {
   const LeaveSampler sampler(tilted(), 4, mid_game_pool(), *table_);
-  std::array<double, TILE_KINDS> presence{};
+  std::array<double, TILE_KINDS> presence{}, expected{};
   double mean = 0, sq = 0;
   for (size_t r = 0; r < table_->rows(4); ++r) {
     const double p = std::exp(sampler.log_prob(r));
     if (p == 0) continue;
     const Rack leave = sampler.leave(r);
-    for (int t = 0; t < TILE_KINDS; ++t)
+    for (int t = 0; t < TILE_KINDS; ++t) {
       if (leave.count(Tile::of(t)) > 0) presence[t] += p;
+      expected[t] += p * leave.count(Tile::of(t));
+    }
     const double v = table_->values(4)[r];
     mean += p * v;
     sq += p * v * v;
   }
   const belief::LeaveMoments m = sampler.moments();
-  for (int t = 0; t < TILE_KINDS; ++t) EXPECT_NEAR(m.presence[t], presence[t], 1e-9) << t;
+  double total = 0;
+  for (int t = 0; t < TILE_KINDS; ++t) {
+    EXPECT_NEAR(m.presence[t], presence[t], 1e-9) << t;
+    EXPECT_NEAR(m.expected[t], expected[t], 1e-9) << t;
+    total += m.expected[t];
+  }
+  EXPECT_NEAR(total, 4, 1e-9);  // the leave's length
   EXPECT_NEAR(m.value_mean, mean, 1e-9);
   EXPECT_NEAR(m.value_sd, std::sqrt(sq - mean * mean), 1e-9);
   EXPECT_EQ(m.presence[Tile::from_char('Q').index()], 0);

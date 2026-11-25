@@ -122,6 +122,6 @@ def same_belief(run: dict, leaf_params: dict) -> bool:
     deep_bot_leaf_eval tag's analysis draws from (its frozen params
     `leaf_params`): the same leave inference model."""
     return run["leave_inference"] == {
-        "tag": leaf_params.get("match_leave_inference_tag"),
-        "generation": leaf_params.get("match_leave_inference_generation"),
+        "tag": leaf_params.get("leave_inference_tag"),
+        "generation": leaf_params.get("leave_inference_generation"),
     }

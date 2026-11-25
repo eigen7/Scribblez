@@ -26,7 +26,7 @@ from scribblez.workloads.deep_bot_leaf_eval import (
 from scribblez.workloads.known_position_inputs import INPUT_DIR as POSITIONS_INPUT_DIR
 
 LEAVE_TAG = "li"
-PARAMS = DeepBotLeafEvalParams(match_leave_inference_tag=LEAVE_TAG)
+PARAMS = DeepBotLeafEvalParams(leave_inference_tag=LEAVE_TAG)
 
 
 def _leave_exports(mount: Path, gens: list[int]) -> TagPaths:
@@ -44,31 +44,42 @@ def _leaf_tag(mount: Path) -> TagPaths:
 def test_the_leave_model_pins_its_latest_export(tmp_path):
     _leave_exports(tmp_path, [3, 5])
     pinned = deep_bot_leaf_eval.finalize(SPEC, _leaf_tag(tmp_path), PARAMS)
-    assert pinned.match_leave_inference_generation == 5
+    assert pinned.leave_inference_generation == 5
 
 
 @pytest.mark.parametrize(
     "changes",
     [
-        {"match_leave_inference_tag": ""},
-        {"match_leave_inference_generation": 4},  # no export
-        {"match_leave_inference_tag": "missing"},
+        {"leave_inference_tag": ""},
+        {"leave_inference_generation": 4},  # no export
+        {"leave_inference_tag": "missing"},
     ],
 )
-def test_matches_without_a_usable_leave_model_are_refused_at_task_creation(tmp_path, changes):
+def test_a_tag_without_a_usable_leave_model_is_refused_at_task_creation(tmp_path, changes):
     _leave_exports(tmp_path, [3, 5])
     with pytest.raises(params.ParamsError):
         deep_bot_leaf_eval.finalize(SPEC, _leaf_tag(tmp_path), replace(PARAMS, **changes))
 
 
-def test_without_matches_no_leave_model_is_needed(tmp_path):
-    off = DeepBotLeafEvalParams(match_every_generations=0)
-    assert deep_bot_leaf_eval.finalize(SPEC, _leaf_tag(tmp_path), off) == off
+def test_the_leave_model_is_pinned_without_matches_too(tmp_path):
+    """The trainer's .belief sidecars are under it."""
+    _leave_exports(tmp_path, [3, 5])
+    off = replace(PARAMS, match_every_generations=0)
+    assert (
+        deep_bot_leaf_eval.finalize(SPEC, _leaf_tag(tmp_path), off).leave_inference_generation == 5
+    )
+
+
+def test_the_pinned_leave_model_is_the_trainers_input(tmp_path):
+    p = replace(PARAMS, leave_inference_generation=3)
+    expected = TagPaths(LEAVE_TAG, LEAVE_INFERENCE, tmp_path).onnx_path(3)
+    assert deep_bot_leaf_eval.train_inputs(p, tmp_path) == {LEAVE_INPUT: expected}
+    assert SPEC.role("train").inputs.endswith(":train_inputs")
 
 
 def test_the_pinned_leave_model_and_the_known_positions_are_the_match_slots_inputs(tmp_path):
     """A remote slot's mount has none of the exports, only the staged copy."""
-    p = replace(PARAMS, match_leave_inference_generation=3)
+    p = replace(PARAMS, leave_inference_generation=3)
     expected = TagPaths(LEAVE_TAG, LEAVE_INFERENCE, tmp_path).onnx_path(3)
     got = deep_bot_leaf_eval.inputs(p, tmp_path)
     assert got[LEAVE_INPUT] == expected
@@ -82,7 +93,7 @@ def _ctx(mount: Path, sink=None, **overrides) -> WorkerContext:
         spec=SPEC,
         role=SPEC.role("match_eval"),
         tag="leaf",
-        params=replace(PARAMS, match_leave_inference_generation=3, **overrides),
+        params=replace(PARAMS, leave_inference_generation=3, **overrides),
         worker_id="w0",
         threads=2,
         max_cycles=1,

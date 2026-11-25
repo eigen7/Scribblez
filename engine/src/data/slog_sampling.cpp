@@ -93,6 +93,14 @@ std::vector<std::filesystem::path> resolve_slog_inputs(const std::string& slog_d
   return slogs;
 }
 
+std::vector<char> load_slog_input(const std::filesystem::path& path) {
+  std::vector<char> bytes = util::read_file_bytes(path.string());
+  const auto* hdr = reinterpret_cast<const FileHeader*>(bytes.data());
+  if (bytes.size() < sizeof(FileHeader) || hdr->magic != kMagic || hdr->version != kVersion)
+    throw util::CleanException("{}: not a version-{} .slog", path.string(), kVersion);
+  return bytes;
+}
+
 std::vector<PendingSlog> load_pending_slogs(const std::vector<std::filesystem::path>& slogs,
                                             const char* sidecar_ext, bool accept_face_up,
                                             const char* face_up_error) {

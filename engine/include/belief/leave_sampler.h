@@ -32,6 +32,7 @@ namespace scribblez::belief {
 // A belief's summary over its leaves.
 struct LeaveMoments {
   std::array<double, TILE_KINDS> presence;  // P(the leave holds at least one), by Tile code
+  std::array<double, TILE_KINDS> expected;  // the expected count in the leave, by Tile code
   double value_mean;                        // of the leave's value, in points
   double value_sd;
 };
@@ -64,8 +65,8 @@ class LeaveSampler {
   // length). A scan of the rows: for diagnostics, not for the sims.
   size_t row_of(const Rack& leave) const;
 
-  // The belief's presence marginals and value moments, from one pass over its
-  // rows.
+  // The belief's presence marginals, expected counts and value moments, from
+  // one pass over its rows.
   LeaveMoments moments() const;
 
  private:

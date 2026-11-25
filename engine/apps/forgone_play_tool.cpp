@@ -37,17 +37,6 @@ struct Options {
   int threads = util::default_thread_count();
 };
 
-// The .slog at `path`, refusing anything that is not one this build reads.
-std::vector<char> load_slog(const std::filesystem::path& path) {
-  std::vector<char> bytes = util::read_file_bytes(path.string());
-  const auto* hdr = reinterpret_cast<const binlog::FileHeader*>(bytes.data());
-  if (bytes.size() < sizeof(binlog::FileHeader) || hdr->magic != binlog::kMagic ||
-      hdr->version != binlog::kVersion) {
-    throw util::CleanException("{}: not a version-{} .slog", path.string(), binlog::kVersion);
-  }
-  return bytes;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -70,7 +59,7 @@ int main(int argc, char** argv) {
     uint64_t games = 0;
     for (const std::filesystem::path& path :
          binlog::resolve_slog_inputs(opt.slog_dir, opt.slog_files)) {
-      const std::vector<char> slog = load_slog(path);
+      const std::vector<char> slog = binlog::load_slog_input(path);
       write_forgone_sidecar(slog, dict, forgone_path_of(path.string()));
       games += reinterpret_cast<const binlog::FileHeader*>(slog.data())->num_games;
     }

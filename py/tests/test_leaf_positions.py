@@ -145,8 +145,8 @@ class PositionAddedAfterTheAnalysisTest(tornado.testing.AsyncHTTPTestCase):
 
 
 LEAF_PARAMS = {
-    "match_leave_inference_tag": "li",
-    "match_leave_inference_generation": 292,
+    "leave_inference_tag": "li",
+    "leave_inference_generation": 292,
     "match_opp_leaves": 16,
 }
 
@@ -209,7 +209,7 @@ def test_rollouts_of_another_gcg_or_belief_are_flagged(tmp_path, monkeypatch):
     assert p["rollouts"] is None and all(v["rollout"] is None for v in p["values"])
     paths = _with_rollouts(tmp_path, monkeypatch, {"15D .ROTIC": 0.3})
     (paths.root / "task.json").write_text(
-        json.dumps({"params": {**LEAF_PARAMS, "match_leave_inference_generation": 300}})
+        json.dumps({"params": {**LEAF_PARAMS, "leave_inference_generation": 300}})
     )
     assert _rollouts_payload(tmp_path, paths)["rollouts"]["same_belief"] is False
 

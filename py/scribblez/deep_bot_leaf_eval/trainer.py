@@ -8,8 +8,11 @@ games, checkpoints, and delivers the table, the checkpoint, the cursor and
 last the record. onnx_export.py exports a checkpoint for the engine's
 TensorRT loader (nn::LeafEvalSpec).
 
-The held-out games are leave inference's (leave_inference/holdout.py),
-played by the trainer itself at a fixed seed. The rows' format version and
+Before training on a generation it writes the .forgone and .belief sidecars
+of every generation in the window that lacks them, under the tag's pinned
+leave inference model (beliefs.py). The held-out games are leave inference's
+(leave_inference/holdout.py), played by the trainer itself at a fixed seed,
+with .belief sidecars that also store DeepBot's draws. The rows' format version and
 the hash of the leave values they read are recorded in the checkpoint config,
 and a checkpoint written under others is refused rather than resumed.
 
@@ -27,6 +30,7 @@ from pathlib import Path
 import torch
 
 from scribblez import params as params_mod
+from scribblez.deep_bot_leaf_eval import beliefs
 from scribblez.deep_bot_leaf_eval.unit import (
     FORMAT_KEY,
     LEAVE_VALUES_KEY,
@@ -37,11 +41,13 @@ from scribblez.generational import checkpoint, data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls
 from scribblez.generational.records import TrainRecorder, read_controls
+from scribblez.hardware import default_thread_count
 from scribblez.leave_inference import holdout, win_table
 from scribblez.paths import TagPaths
 from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
 from scribblez.train_common import timed_print
-from scribblez.workloads.base import WorkerContext
+from scribblez.workloads.base import WorkerContext, resolve_input
+from scribblez.workloads.deep_bot_leaf_eval import LEAVE_INPUT, leave_model_path
 from scribblez.workloads.selfplay_gen import hasty_spec
 from scribblez.workloads.worker import WorkerStats, WorkerStopped
 
@@ -160,11 +166,24 @@ def _checkpoint_and_eval(unit, recorder, paths, params, state, gen, result, elap
     return time.time() - t0
 
 
+def write_window_sidecars(window: list[Path], leave_model: Path) -> float:
+    """Write the sidecars of each generation in `window` that lacks them.
+    Returns the seconds spent."""
+    t0 = time.time()
+    for gen_dir in window:
+        t = time.time()
+        if beliefs.ensure_generation(gen_dir, leave_model, default_thread_count()):
+            timed_print(f"wrote {gen_dir.name}'s sidecars in {time.time() - t:.1f} s")
+    return time.time() - t0
+
+
 def train_one_generation(unit, recorder, paths, params, state, ctx):
-    """Train one epoch over the window ending at the cursor generation, then
-    evaluate and checkpoint under that generation's index."""
+    """Write the window's missing sidecars, train one epoch over the window
+    ending at the cursor generation, then evaluate and checkpoint under that
+    generation's index."""
     gen = state.generation_index
     window = lifecycle.window_dirs(paths, gen, params.window)
+    sidecar_seconds = write_window_sidecars(window, ctx["leave_model"])
     rows_before = state.rows_trained
     result, elapsed = unit.train(window, gen, state.rows_trained, ctx["cpu"])
     state.rows_trained = result.rows_trained
@@ -176,6 +195,7 @@ def train_one_generation(unit, recorder, paths, params, state, ctx):
     finished = ctx["deliverer"].collect()
     ctx["stats"].cycle_done(
         {
+            "sidecar_s": sidecar_seconds,
             "train_s": elapsed,
             "eval_s": eval_seconds,
             "upload_s": finished[-1][1] if finished else 0.0,
@@ -209,7 +229,9 @@ def run(ctx: WorkerContext) -> int:
     device = torch.device(os.environ.get("SCZ_DEVICE", "cuda"))
     print(f"Tag root: {paths.root}\nDevice: {device}")
 
+    leave_model = resolve_input(ctx, LEAVE_INPUT, leave_model_path(params, ctx.mount_root))
     held = holdout.ensure(paths.holdout_dir, params.holdout_games, holdout.SEED, hasty_spec(params))
+    beliefs.ensure_holdout(held.dir, leave_model, default_thread_count())
     timed_print(f"held-out set {held.content_hash} ({len(held.slogs)} files)")
 
     unit = LeafEvalUnit(params, device)
@@ -230,6 +252,7 @@ def run(ctx: WorkerContext) -> int:
         "sink": ctx.sink,
         "read_controls": functools.partial(read_controls, ctx.sink),
         "holdout": held,
+        "leave_model": leave_model,
         "stats": WorkerStats(ctx),
         "deliverer": OutputDeliverer(),
     }

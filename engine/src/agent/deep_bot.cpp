@@ -1,7 +1,7 @@
 #include "agent/deep_bot.h"
 
 #include "agent/hasty_bot.h"
-#include "game/bag.h"
+#include "belief/leave_draws.h"
 #include "sim/hasty_rollout_task.h"
 #include "sim/sim_runner.h"
 #include "util/exception.h"
@@ -15,21 +15,6 @@
 // deep_bot_factory.cpp.
 
 namespace scribblez {
-
-namespace {
-
-// `count` racks of `length` tiles, each drawn from `pool` at random.
-std::vector<Rack> random_racks(const TileCounts& pool, int length, int count, uint64_t seed) {
-  Bag bag(seed, pool);
-  std::vector<Rack> racks(static_cast<size_t>(count));
-  for (Rack& rack : racks) {
-    for (int i = 0; i < length; ++i) rack.add(bag.draw());
-    for (int i = 0; i < rack.size(); ++i) bag.put_back(rack.tiles()[size_t(i)]);
-  }
-  return racks;
-}
-
-}  // namespace
 
 std::vector<WeightedLeave> weighted_leaves(const std::vector<Rack>& draws) {
   std::vector<WeightedLeave> out;
@@ -117,27 +102,13 @@ std::vector<WeightedLeave> DeepBot::opp_leaves(const belief::LeaveQuery& q) cons
 }
 
 std::vector<Rack> DeepBot::opp_draws(const belief::LeaveQuery& q) const {
-  // Before the opponent's first move, and after a move that kept nothing, the
-  // leave is empty, as the leaf's training rows have it. It is still drawn
-  // opp_leaves times: a noisy leaf plays each draw out apart.
-  if (ply_ == 0 || q.length == 0) return std::vector<Rack>(size_t(params_.opp_leaves));
-  // The opponent passed. The leave table holds no 7-tile leaves, so the racks
-  // are generated here by other means. As a hack, each is drawn at random from
-  // the unseen tiles, as if the opponent had just drawn the whole rack. That
-  // ignores what the pass says about the rack and is certainly wrong, but a
-  // pass is rare enough in Scrabble that we accept it for now.
-  if (q.length > kLeaveArraysMaxLength)
-    return random_racks(q.leave_pool, q.length, params_.opp_leaves, turn_seed());
-  const std::shared_ptr<const belief::LeaveSampler> b = belief(q);
-  // Stratified quantiles, jittered by the turn: each draw stands for an equal
-  // share of the belief's mass, so the mean has far less spread than over
-  // independent draws.
-  const double jitter = double(turn_seed() >> 11) * 0x1.0p-53;
-  std::vector<Rack> draws;
-  draws.reserve(size_t(params_.opp_leaves));
-  for (int i = 0; i < params_.opp_leaves; ++i)
-    draws.push_back(b->leave(b->sample((double(i) + jitter) / double(params_.opp_leaves))));
-  return draws;
+  // Before the opponent's first move the leave is empty, as the leaf's
+  // training rows have it. It is still drawn opp_leaves times: a noisy leaf
+  // plays each draw out apart.
+  if (ply_ == 0) return std::vector<Rack>(size_t(params_.opp_leaves));
+  const std::shared_ptr<const belief::LeaveSampler> b =
+    belief::draws_read_belief(q) ? belief(q) : nullptr;
+  return belief::opp_leave_draws(q, b.get(), params_.opp_leaves, turn_seed());
 }
 
 std::shared_ptr<const belief::LeaveSampler> DeepBot::belief(const belief::LeaveQuery& q) const {
