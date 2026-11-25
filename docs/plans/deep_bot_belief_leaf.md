@@ -1,6 +1,6 @@
 # DeepBot phase 2: the belief-input leaf
 
-**Status: proposed 2026-11-25, plan-reviewed, not built.** This is phase 2 of
+**Status: proposed 2026-11-25, plan-reviewed; PR 1 built.** This is phase 2 of
 [deep_bot.md](deep_bot.md#phases) sliced into pull requests. What each
 measures shapes the next; no pass or kill thresholds are fixed in advance.
 
@@ -46,21 +46,23 @@ So version 3 lands in both encoders, and the kernel test pins them together.
 
 ## 1. The `.belief` sidecar
 
-**What it holds**, per game and per leaf-row turn (`BlockDecoder::row_turns`
-for kLeafEval):
+**What it holds**, per game and per turn of the leave inference rows'
+region (the turns that begin with tiles in the bag):
 - the leave inference model's 29 parameters (`belief::LeaveParams`) for the
   mover's belief about the opponent's kept leave;
-- the leave's length, and a cause of its own:
+- the leave's length, and its `LeaveRowCause`:
   - `valid`: the model's belief;
   - `no_opponent_move`, `empty_leave`: the leave is known: nothing yet, or
     empty;
   - `pass`: the opponent kept all seven tiles, and the leave table has no
     seven-tile leaves. Expected counts are seven times each tile's share of
-    the pool, and the value fields are zero with the cause saying why;
-  - `determined`: past the leave inference rows' region, where the bag is
-    empty and the unseen tiles are the opponent's rack.
+    the pool, and the value fields are zero with the cause saying why.
 
-  This is not `LeaveRowCause`, which lacks the last two.
+  The leaf's rows (`BlockDecoder::row_turns` for kLeafEval) go on past the
+  region, but there the bag is empty and the opponent holds every unseen tile.
+  The belief is certain, so a belief-mode row there reads that rack as known
+  mode does, and the sidecar holds no entry for it. That is why the plan's
+  separate cause with a `determined` value was not needed.
 - the summaries version 3 reads: each tile's expected count, and the leave
   value's mean and standard deviation, from one `LeaveSampler` pass.
   `LeaveMoments` gains the expected counts.
@@ -76,12 +78,26 @@ FFI). Once per turn when a generation arrives is affordable. Once per row per
 epoch in the data loader is not.
 
 **Format**: float16 parameters and value moments, and expected counts as
-8-bit fractions of the leave's length. That is about 95 bytes a turn, or about
-42 MB for a generation of 20,000 games. That sits beside about 12 MB of
-`.slog` and about as much `.forgone`, so a four-generation window is about
-260 MB. That is within `SlogDataset`'s 512 MiB budget, though the budget is
-measured, not assumed. The precision is checked against float32 on a
-generation before the format is fixed.
+8-bit fractions of the leave's length: 91 bytes a turn
+(`engine/include/data/belief_log.h`). On v8's 1000 held-out games it is
+1.8 MB, so about 37 MB for a generation of 20,000 games. That sits beside
+about 12 MB of `.slog` and about as much `.forgone`, so a four-generation
+window is about 250 MB. That is within `SlogDataset`'s 512 MiB budget, though
+the budget is measured, not assumed. The 16 stored draws of the held-out set
+add 112 bytes a turn.
+
+**Precision**, measured on those games under leave_inference v1's epoch 292
+against float32 parameters and double moments, over 15,492 modelled turns:
+- value mean: at most 0.015 points off, 0.0009 on average, against an average
+  magnitude of 5.1;
+- value SD: at most 0.008 points off, against an average of 8.6;
+- expected counts: at most 0.012 tiles off, the 8-bit bound of length / 510.
+
+The stored parameters are float16. A sampler rebuilt from them has the same
+moments to within 0.03 points, but it moves 6% of the quantile draws to a
+neighbouring leave (up to 94% at a long leave, whose thousands of leaves each
+hold little mass). That is why the held-out draws are stored rather than
+redrawn from the parameters.
 
 **Header**: a magic, a format version, the leave model's identity (hash, tag,
 generation, format version), the leave table's content hash, and the `.slog`
@@ -90,19 +106,22 @@ binding `.forgone` uses (`forgone_slog_binding`).
 **Writer**: `belief_sidecar_tool`. It reads a `.slog` and its `.forgone`,
 builds each turn's leave inference row as training does
 (`belief::SlogLeaveBeliefs`), runs the model through TensorRT, and writes the
-sidecar. For the turns outside that row's region it has its own path, since
-`SlogLeaveBeliefs::query` throws there.
+sidecar. It takes about 3.5 s per 1000 games on 16 threads, so about 70 s
+per generation, and about 0.45 GiB of GPU memory with its plan cached.
 
 **Where it runs**: in deep_bot_leaf_eval's trainer, which has a GPU and owns
 the model's identity. When a generation is ready, before training on it, it
 runs `forgone_play_tool` and then `belief_sidecar_tool` over the generation's
-`.slog` files. It does the same for the held-out games it plays
-(`leave_inference/holdout.ensure`, with a belief-model argument). The
-generators stay CPU-only and need no leave model.
+`.slog` files. It does the same for the held-out games it plays, after
+`leave_inference/holdout.ensure` (`deep_bot_leaf_eval/beliefs.py`). A
+generation whose `.slog` files all have their `.belief` is skipped, so a
+restart or a data home seeded from the controller's copy writes only what is
+missing. The generators stay CPU-only and need no leave model.
 
 **Changes to the workload:**
 - a leave model parameter independent of the matches, pinned at task creation
-  (`match_leave_inference_tag` is pinned only while matches are on);
+  (`match_leave_inference_tag` was pinned only while matches were on; it is
+  now `leave_inference_tag`, required);
 - an `inputs` hook on the train role for that export;
 - `.belief` left out of the held-out set's content hash, since TensorRT's
   bytes vary across GPUs.
@@ -194,8 +213,3 @@ One deep_bot_leaf_eval tag on version 3, under the pinned leave inference
 model. It reports PR 3's held-out read and the existing held-out metrics, and
 becomes DeepBot's generation 0 leaf. Phase 0's throughput measurement runs on
 it. David launches it.
-
-## Open questions
-
-- **The sidecar's precision**: whether float16 and 8-bit fractions lose
-  anything against float32 (checked in PR 1).
