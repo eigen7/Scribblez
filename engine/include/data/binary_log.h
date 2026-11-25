@@ -153,18 +153,9 @@ int pick_any_turn(const GameLog& log, std::mt19937_64& rng);
 // Accumulates games from any number of producer threads and writes them out as
 // .slog files of `games_per_file` games each. Serialization and I/O happen
 // outside the lock, so producers are not blocked on disk.
-//
-// With `pools_per_game` > 0, each .slog comes with the searches its games'
-// agents recorded (GameLogStorage::pools) as its same-stem sidecars, written
-// before it: the .pool (data/pool_log.h) and the .survivors
-// (data/survivor_log.h), position for position, at most `pools_per_game`
-// turns of each game, drawn uniformly by the game's seed. A file's records
-// must share their sources, since a sidecar's header names one set; a file
-// whose games recorded nothing gets no sidecars.
 class BinaryLogWriter {
  public:
-  BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags = 0,
-                  int pools_per_game = 0);
+  BinaryLogWriter(const std::string& dir, int games_per_file, uint16_t flags = 0);
   ~BinaryLogWriter();  // flushes any pending games
 
   BinaryLogWriter(const BinaryLogWriter&) = delete;
@@ -182,7 +173,6 @@ class BinaryLogWriter {
   std::string dir_;
   int games_per_file_;
   uint16_t flags_;
-  int pools_per_game_;
   std::mutex mutex_;
   std::vector<GameLogStorage> pending_;
 };

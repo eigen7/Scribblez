@@ -60,41 +60,5 @@ Selection stratified_candidates(const std::vector<Move>& ranked, const Move& pla
   return {std::move(out), 0u};
 }
 
-std::vector<size_t> off_policy_draws(const std::vector<Move>& ranked, int count,
-                                     std::mt19937_64& rng, std::vector<char>* taken) {
-  std::vector<size_t> pool;
-  for (size_t i = 0; i < ranked.size(); ++i) {
-    if (!(*taken)[i]) pool.push_back(i);
-  }
-  std::shuffle(pool.begin(), pool.end(), rng);
-  std::vector<size_t> picks;
-  for (size_t j = 0; j < pool.size() && int(picks.size()) < count; ++j) {
-    picks.push_back(pool[j]);
-    (*taken)[pool[j]] = 1;
-  }
-  return picks;
-}
-
-Selection full_sweep_candidates(const std::vector<Move>& ranked, const Move& played, int cap) {
-  std::vector<Move> out;
-  bool played_kept = false;
-  for (int i = 0; i < int(ranked.size()); ++i) {
-    const Move& m = ranked[size_t(i)];
-    const bool keep = i < cap || m.type() != MoveType::PLAY || m == played;
-    if (!keep) continue;
-    played_kept = played_kept || m == played;
-    out.push_back(m);
-  }
-  // A played move that move generation never enumerates (a PASS chosen while
-  // other moves were legal) has no equity rank, so it goes last. It still
-  // counts toward the legal total: it was legal, and the sweep reached it.
-  uint32_t legal = ranked.size();
-  if (!played_kept) {
-    out.push_back(played);
-    ++legal;
-  }
-  return {std::move(out), legal};
-}
-
 }  // namespace move_set_eval
 }  // namespace scribblez

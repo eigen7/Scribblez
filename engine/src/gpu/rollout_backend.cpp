@@ -18,14 +18,11 @@ namespace scribblez {
 
 namespace {
 
-constexpr const char* kLeafFormatKey = "leaf_eval_format_version";
-
 // What game threads share of one backend. GpuRolloutValues is not
-// thread-safe, so its calls are serialized. One DeepBot turn already fills a
-// rollout launch with ~10K rollouts, so concurrent games' run() calls queue
-// rather than batch together. A leaf harness's turn values a few hundred
-// leaves, too few to fill the GPU, so concurrent games' predictions are
-// gathered into one call (util::CallerLedBatcher), one gathering per kind.
+// thread-safe, so its calls are serialized; concurrent games' run() calls
+// queue. A leaf harness's turn values a few hundred leaves, too few to fill
+// the GPU, so concurrent games' predictions are gathered into one call
+// (util::CallerLedBatcher), one gathering per kind.
 class SharedRolloutValues : public RolloutValues {
  public:
   explicit SharedRolloutValues(std::unique_ptr<RolloutValues> inner);
@@ -118,23 +115,6 @@ void SharedRolloutValues::serve(std::span<Request<Out>* const> pack, Predict&& p
 
 }  // namespace
 
-PoolModel pool_model(const nn::ModelIdentity& id) {
-  return {id.hash, id.tag, id.generation, id.format_version};
-}
-
-void RolloutBackend::add_options(boost::program_options::options_description& desc) {
-  namespace po = boost::program_options;
-  desc.add_options()("leaf-model", po::value<std::string>(&leaf_model),
-                     "the leaf network (a deep_bot_leaf_eval ONNX export); 'synthetic' with "
-                     "--backend cpu")(
-    "backend", po::value<std::string>(&backend)->default_value(backend),
-    "gpu, or cpu (the CPU reference with the synthetic leaf, for tests)")(
-    "leaf-precision", po::value<std::string>(&leaf_precision)->default_value(leaf_precision),
-    "TensorRT precision for the leaf network: fp32, fp16 or bf16")(
-    "leaf-rows", po::value<int>(&leaf_rows)->default_value(leaf_rows),
-    "rows per leaf network call");
-}
-
 void RolloutBackend::validate() const {
   if (backend != "gpu" && backend != "cpu")
     throw util::CleanException("--backend must be gpu or cpu");
@@ -143,11 +123,6 @@ void RolloutBackend::validate() const {
     throw util::CleanException("--leaf-model {} needs --backend cpu", kSyntheticLeaf);
   if (!gpu() && leaf_model != kSyntheticLeaf)
     throw util::CleanException("--backend cpu needs --leaf-model {}", kSyntheticLeaf);
-}
-
-PoolModel RolloutBackend::leaf_identity() const {
-  if (!gpu()) return {"", kSyntheticLeaf, -1, 0};
-  return pool_model(nn::read_model_identity(leaf_model, kLeafFormatKey));
 }
 
 std::unique_ptr<RolloutValues> RolloutBackend::make(const Dictionary& dict) const {

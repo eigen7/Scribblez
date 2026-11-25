@@ -2,11 +2,10 @@
 // games, each replayed to as the agent would have lived it
 // (arena/recorded_turn.h). It is the tool for asking "what does this agent
 // play here?" of positions whose answer something else already knows: the
-// blind spots (docs/blind_spots.md), through
-// py/scripts/deep_bot/blind_spot_picks.py.
+// known positions (py/scribblez/deep_bot/known_positions.py).
 //
 //   position_pick_tool --positions list.txt --out picks.jsonl
-//     --player "--type=deepbot-endgame --leaf-model leaf.onnx --reply hasty"
+//     --player "--type=leafbot-endgame --leaf-model leaf.onnx --leave-inference leave.onnx"
 //
 // --positions names a file of lines "<.slog path> <game> <turn>", both
 // 0-based; the agent takes the seat that moved at the turn. --out gets a JSON

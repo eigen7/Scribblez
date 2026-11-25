@@ -40,11 +40,6 @@ void Game::set_face_up_leaves(bool on) {
   face_up_leaves_ = on;
 }
 
-void Game::set_record_pools(bool on) {
-  RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
-  record_pools_ = on;
-}
-
 void Game::set_max_plies(int plies) {
   RELEASE_ASSERT(log_.turns.empty(), "must be set before play() begins");
   RELEASE_ASSERT(plies >= 1);
@@ -133,11 +128,10 @@ void Game::play_loop(int start_player) {
       m = projected[projected_next++];
     } else {
       MoveRequest ctx{
-        board_,           dict_,       racks_[cur],  visible_opp_rack(cur), scores_[cur],
-        scores_[1 - cur], bag_.size(), record_pools_};
+        board_,           dict_,      racks_[cur], visible_opp_rack(cur), scores_[cur],
+        scores_[1 - cur], bag_.size()};
       MoveDecision decision = choose_move(cur, ctx);
       m = decision.move;
-      if (decision.pool) log_.pools.push_back({int(log_.turns.size()), std::move(decision.pool)});
       if (respect_projections_ && !decision.projected_remaining_moves.empty()) {
         projected = std::move(decision.projected_remaining_moves);
         projected_next = 0;

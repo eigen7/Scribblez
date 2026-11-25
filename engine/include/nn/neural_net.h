@@ -89,9 +89,6 @@ struct RuntimeSpec {
   const char* axis_tag;
   int opt_rows;
   std::span<const TensorSpec> tensors;
-  // The tensor whose per-row width is the trunk channel count C, which
-  // channels() reports. Null when the spec exposes no such tensor.
-  const char* channels_tensor;
 };
 
 // The spec-independent runtime: engine build, the plan cache, metadata gates,
@@ -113,14 +110,9 @@ class NeuralNetBase {
 
   int max_rows() const;
 
-  // Valid after load(): the board-row widths the model consumes. Zero for a
-  // graph with no board inputs, such as the move-proposal step graph.
+  // Valid after load(): the board-row widths the model consumes.
   int spatial_planes() const;
   int scalar_floats() const;
-
-  // Valid after load(): the trunk channel width C, or zero for a spec with no
-  // channels_tensor.
-  int channels() const;
 
   // Valid after load(): the model's input-encoding arm, from its ONNX
   // metadata. derive_input_spec() (agent/candidate_evaluator.h) checks it
@@ -198,9 +190,9 @@ class NeuralNet : public NeuralNetBase {
   }
 
  private:
-  static constexpr RuntimeSpec kRuntimeSpec = {
-    Spec::kGraph,   Spec::kAcceptUntaggedGraph, Spec::kVersions,      Spec::kAxisTag,
-    Spec::kOptRows, detail::kTensorSpecs<Spec>, Spec::kChannelsTensor};
+  static constexpr RuntimeSpec kRuntimeSpec = {Spec::kGraph,    Spec::kAcceptUntaggedGraph,
+                                               Spec::kVersions, Spec::kAxisTag,
+                                               Spec::kOptRows,  detail::kTensorSpecs<Spec>};
 };
 
 // Split one encoder row, [spatial | scalar], across row `dst_row` of the net's
@@ -208,13 +200,6 @@ class NeuralNet : public NeuralNetBase {
 // ScalarInput, after load().
 template <typename Spec>
 void stage_board_row(NeuralNet<Spec>& net, const float* row, int dst_row);
-
-// Copy rows [start, start + rows) of each per-move tensor Ts (descriptors
-// naming a kBatchSource) from that MoveFeatureArrays field into the net's host
-// buffer: how every move-set family stages its candidates.
-template <typename Spec, typename... Ts>
-void stage_move_tensors(NeuralNet<Spec>& net, const move_set::MoveFeatureArrays& moves, int start,
-                        int rows, TensorList<Ts...>);
 
 }  // namespace nn
 }  // namespace scribblez

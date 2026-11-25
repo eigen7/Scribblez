@@ -7,7 +7,6 @@
 #include "game/bag.h"
 #include "game/tile.h"
 #include "game/tile_counts.h"
-#include "training/lane_analysis.h"
 
 #include <gtest/gtest.h>
 
@@ -204,17 +203,12 @@ std::string two_move_game(const std::string& header_pragma, const std::string& p
          ">Bob: BBBBBBB 9D BBB +8 8\n";
 }
 
-// The mover's rack as read_gcg_position and the lane-analysis reader take it,
-// or "<none>" when a reader refuses the file. The two must always agree.
+// The mover's rack as read_gcg_position takes it, or "<none>" when it refuses
+// the file.
 std::string mover_rack(const std::string& gcg) {
   ParsedGcgPosition p;
   std::string error;
-  const bool position_ok = read_gcg_position(gcg, /*open_leaves=*/false, &p, &error);
-  GcgAnalysisPosition a;
-  const bool analysis_ok = parse_gcg_analysis_position(gcg, &a, &error);
-  EXPECT_EQ(position_ok, analysis_ok);
-  if (!position_ok || !analysis_ok) return "<none>";
-  EXPECT_EQ(p.rack.to_string(), a.rack.to_string());
+  if (!read_gcg_position(gcg, /*open_leaves=*/false, &p, &error)) return "<none>";
   return p.rack.to_string();
 }
 

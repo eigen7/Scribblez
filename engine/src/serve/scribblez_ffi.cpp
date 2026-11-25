@@ -3,40 +3,26 @@
 #include "agent/agent.h"
 #include "belief/leave_params.h"
 #include "belief/leave_sampler.h"
-#include "belief/opp_rack_summary.h"
 #include "data/binary_log.h"
 #include "data/block_decoder.h"
 #include "data/data_loader.h"
 #include "data/forgone_play_log.h"
 #include "data/format_layout.h"
 #include "data/gcg_reader.h"
-#include "data/pool_log.h"
-#include "data/probe_log.h"
-#include "data/probe_replay.h"
-#include "data/sim_observation_log.h"
 #include "encoding/game_state_encoder.h"
 #include "encoding/input_encoder.h"
 #include "encoding/position_encoder.h"
 #include "lexicon/hasty_equity.h"
 #include "lexicon/leave_value_arrays.h"
 #include "lexicon/lexicon.h"
-#include "sim/reply_blocking.h"
 #include "sim/sim_runner.h"
 #include "sim/win_pct_table.h"
 #include "sim/win_table_feature.h"
 #include "training/footprint_collapse.h"
-#include "training/lane_analysis.h"
-#include "training/lane_targets.h"
 #include "training/leaf_eval_task.h"
 #include "training/leave_inference_task.h"
-#include "training/max_move_per_lane_input_encoder.h"
-#include "training/max_move_per_lane_task.h"
-#include "training/move_set_encoder.h"
-#include "training/played_continuation.h"
-#include "training/policy_set_inputs.h"
 #include "training/position_eval_analysis.h"
 #include "training/training_targets.h"
-#include "training/trajectory_position.h"
 #include "util/exception.h"
 #include "util/work_pool.h"
 
@@ -77,27 +63,6 @@ struct ScribblezSession {
   int decode_rows(int task, const char* path, const int64_t* game_idx, const int64_t* turn_idx,
                   int64_t n, bool post_move, bool hide_private, float* out) const;
   int64_t win_table_samples(const char* path, void* out, int64_t cap) const;
-  int encode_candidate_rows(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
-                            const int64_t* move_counts, int64_t n_positions, const void* moves,
-                            float* out) const;
-  int move_set_positions(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
-                         const int64_t* move_counts, int64_t n_positions, const void* moves,
-                         float* out_rows, int32_t* out_cells, uint8_t* out_letters,
-                         const uint8_t* transposes, void* out_moves) const;
-  int policy_set_positions(const char* path, const int64_t* game_idx, const int64_t* turn_idx,
-                           const int64_t* move_counts, int64_t n_positions, const void* moves,
-                           const void* opp_racks, const uint8_t* transposes,
-                           const ScribblezPolicySetOutputs& out) const;
-  int64_t policy_candidates(const char* path, int64_t game_idx, int64_t turn_idx,
-                            int blank_prune_points, void* out_moves, int32_t* out_equity_ranks,
-                            int64_t cap) const;
-  int gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves, int64_t n,
-                       int32_t* out_cells, uint8_t* out_letters, char* out_err, int err_cap) const;
-  int gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
-                       bool open_leaves, bool solve_endgames, char* out_records,
-                       int* played_rank) const;
-  int max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json, int out_cap,
-                                    float* out_input) const;
   int position_eval_analyze_gcg(const char* gcg_text, bool opp_leave_input, float* out_input,
                                 int input_cap, char* out_err, int err_cap) const;
   int position_eval_analyze_gcg_leaves(const char* gcg_text, const char* leave_str,
@@ -110,11 +75,6 @@ struct ScribblezSession {
                                      float* out, int out_cap, char* out_err, int err_cap) const;
   int position_eval_legal_placement(const char* gcg_text, float* out, int out_cap, char* out_err,
                                     int err_cap) const;
-  int gcg_position_inputs(const char* gcg_text, bool opp_leave_input, float* out_input,
-                          int input_cap, int32_t* out_score_diff, void* out_moves, int moves_cap,
-                          char* out_err, int err_cap) const;
-  int gcg_position_board_json(const char* gcg_text, bool open_leaves, char* out_json,
-                              int out_cap) const;
   DataLoaderHandle* dl_new(int64_t memory_budget, int num_worker_threads, int num_prefetch_threads,
                            int task) const;
 
@@ -180,33 +140,6 @@ struct TargetShapeTable<scribblez::TargetList<Ts...>> {
 
 constexpr auto kTargetShapesArr = TargetShapeTable<scribblez::AllTargets>::kValue;
 
-// The max-move-per-lane task's shapes, written by hand since that task is not
-// part of AllTargets. The labels are encode_lane_targets()'s per-lane
-// occupancy, score, and mask blocks.
-constexpr int kMaxMovePerLaneInputSpatialDims[3] = {
-  scribblez::MaxMovePerLaneInputEncoder::kSpatialPlanes, scribblez::kBoardSide,
-  scribblez::kBoardSide};
-constexpr int kMaxMovePerLaneInputScalarDims[1] = {
-  scribblez::MaxMovePerLaneInputEncoder::kScalarFloats};
-
-const ScribblezShape kMaxMovePerLaneInputShapes[] = {
-  {"input_spatial", kMaxMovePerLaneInputSpatialDims, 3, -1},
-  {"input_scalar", kMaxMovePerLaneInputScalarDims, 1, -1},
-  {nullptr, nullptr, 0, 0},
-};
-
-constexpr int kMaxMovePerLaneOccupancyDims[3] = {scribblez::kNumLanes, scribblez::kLaneLen,
-                                                 scribblez::kLaneTileKinds};
-constexpr int kMaxMovePerLaneScoreDims[1] = {scribblez::kNumLanes};
-constexpr int kMaxMovePerLaneMaskDims[1] = {scribblez::kNumLanes};
-
-const ScribblezShape kMaxMovePerLaneTargetShapes[] = {
-  {"lane_occupancy", kMaxMovePerLaneOccupancyDims, 3, 0},
-  {"lane_score", kMaxMovePerLaneScoreDims, 1, 1},
-  {"lane_mask", kMaxMovePerLaneMaskDims, 1, 2},
-  {nullptr, nullptr, 0, 0},
-};
-
 // The leave inference task's shapes (training/leave_inference_task.h).
 constexpr int kLeaveInferenceSpatialDims[3] = {
   scribblez::LeaveInferenceInputEncoder::kSpatialPlanes, scribblez::kBoardSide,
@@ -264,12 +197,10 @@ std::optional<scribblez::binlog::DecodeTask> decode_task(int code) {
     case 0:
       return DecodeTask::kPositionEval;
     case 1:
-      return DecodeTask::kMaxMovePerLane;
-    case 2:
       return DecodeTask::kLeaveInference;
-    case 3:
+    case 2:
       return DecodeTask::kPublicLeaveInference;
-    case 4:
+    case 3:
       return DecodeTask::kLeafEval;
   }
   return std::nullopt;
@@ -298,8 +229,6 @@ TaskShapes task_shapes(const ScribblezSession* s, int code) {
   switch (*t) {
     case DecodeTask::kPositionEval:
       return {s->input_shapes(), kTargetShapesArr.data()};
-    case DecodeTask::kMaxMovePerLane:
-      return {kMaxMovePerLaneInputShapes, kMaxMovePerLaneTargetShapes};
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return {kLeaveInferenceInputShapes, kLeaveInferenceTargetShapes};
@@ -382,70 +311,6 @@ bool emit_exact(const void* data, size_t count, size_t size, int64_t expected, v
 }
 
 }  // namespace
-
-int ScribblezSession::gcg_sim_evidence(const char* gcg_text, int top_k, int rollouts, uint64_t seed,
-                                       bool open_leaves, bool solve_endgames, char* out_records,
-                                       int* played_rank) const {
-  if (!gcg_text || !out_records || top_k < 1) return -1;
-  scribblez::ParsedGcgGame game;
-  std::string error;
-  if (!scribblez::read_gcg_text(gcg_text, &game, &error)) return -1;
-  if (game.turns.empty() || game.snapshots.size() != game.turns.size() + 1) return -1;
-
-  // The decision point: the state before the final recorded move, with the
-  // mover's rack as it was then.
-  const size_t last = game.turns.size() - 1;
-  const scribblez::TurnRecord& final_turn = game.turns[last].record;
-  scribblez::SimPosition pos;
-  pos.board = game.snapshots[last].board;
-  pos.scores = game.snapshots[last].scores;
-  pos.mover = final_turn.player;
-  pos.rack = final_turn.rack_before;
-
-  // The opponent's leave is known from their last recorded move; the tiles
-  // they drew afterward stay hidden and are sampled. An empty leave (the
-  // opponent bingoed, or has not moved yet) is valid.
-  if (open_leaves) pos.opp_leave = scribblez::retained_leave(game, 1 - pos.mover);
-
-  if (pos.board.unseen_count(pos.rack.size()) <= scribblez::RACK_SIZE)
-    return -1;  // endgame: SimRunner's non-empty-bag rule
-
-  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  // Bag size from the mover's POV: the unseen pool minus the opponent's full
-  // rack. Equity reads the opponent's rack only for endgame adjustments, and
-  // then only its known part, which open leaves supplies.
-  const scribblez::Rack hidden_opp;
-  scribblez::MoveRequest req{pos.board,
-                             *spec.dict,
-                             pos.rack,
-                             open_leaves ? pos.opp_leave : hidden_opp,
-                             pos.scores[pos.mover],
-                             pos.scores[1 - pos.mover],
-                             pos.board.pov_bag_size(pos.rack.size())};
-  const std::vector<scribblez::Move> candidates = scribblez::equity_top_k(req, top_k);
-
-  scribblez::SimRunner::Params params;
-  params.rollouts = rollouts;
-  params.solve_endgames = solve_endgames;
-  const scribblez::SimRunner runner(*spec.dict, params);
-  const std::vector<scribblez::RolloutStats> obs = runner.run(pos, candidates, seed);
-
-  *played_rank = -1;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    if (candidates[i] == final_turn.move) *played_rank = int(i);
-    char* rec = out_records + i * sizeof(scribblez::SimObsRecord);
-    std::memcpy(rec, &candidates[i], sizeof(scribblez::Move));
-    std::memcpy(rec + sizeof(scribblez::Move), &obs[i], sizeof(scribblez::RolloutStats));
-  }
-  return candidates.size();
-}
-
-int scribblez_gcg_sim_evidence(ScribblezSession* s, const char* gcg_text, int top_k, int rollouts,
-                               uint64_t seed, int open_leaves, int solve_endgames,
-                               char* out_records, int* played_rank) {
-  return s->gcg_sim_evidence(gcg_text, top_k, rollouts, seed, open_leaves != 0, solve_endgames != 0,
-                             out_records, played_rank);
-}
 
 int ScribblezSession::decode_rows(int task, const char* path, const int64_t* game_idx,
                                   const int64_t* turn_idx, int64_t n, bool post_move,
@@ -585,24 +450,6 @@ int scribblez_leave_sampler_query(const LeaveValueArraysHandle* a, const float* 
   }
 }
 
-int scribblez_opp_rack_summary(const LeaveValueArraysHandle* a, const float* params, int k,
-                               const int32_t* leave_pool, const int32_t* unseen, void* out_opp_rack,
-                               char* out_err, int err_cap) {
-  try {
-    std::unique_ptr<const scribblez::belief::LeaveSampler> leave;
-    if (params)
-      leave =
-        std::make_unique<scribblez::belief::LeaveSampler>(make_sampler(a, params, k, leave_pool));
-    const scribblez::PoolOppRack r = scribblez::pool_opp_rack(
-      scribblez::belief::summarize_opp_rack(tile_counts(unseen), leave.get()));
-    std::memcpy(out_opp_rack, &r, sizeof(r));
-    return 0;
-  } catch (const std::exception& e) {
-    emit_string(e.what(), out_err, err_cap);
-    return -1;
-  }
-}
-
 int scribblez_win_table_write(const char* path, const float* grid, const char* header,
                               char* out_err, int err_cap) {
   try {
@@ -631,351 +478,6 @@ int scribblez_win_table_eval(const char* path, int macondo_format, const void* f
     emit_string(e.what(), out_err, err_cap);
     return -1;
   }
-}
-
-void scribblez_move_set_encode_moves(const void* moves, int64_t n,
-                                     const int32_t* pre_move_score_diffs, int32_t* out_letters,
-                                     uint8_t* out_blanks, int32_t* out_squares,
-                                     uint8_t* out_tile_mask, float* out_scalars) {
-  namespace mset = scribblez::move_set;
-  const char* bytes = static_cast<const char*>(moves);
-  // The caller's buffer is not guaranteed to be aligned for Move, so copy each
-  // one out before encoding.
-  for (int64_t i = 0; i < n; ++i) {
-    scribblez::Move m;
-    std::memcpy(&m, bytes + i * sizeof(scribblez::Move), sizeof(scribblez::Move));
-    mset::encode_move(m, pre_move_score_diffs[i], out_letters + i * mset::kMoveMaxPlaced,
-                      out_blanks + i * mset::kMoveMaxPlaced, out_squares + i * mset::kMoveMaxPlaced,
-                      out_tile_mask + i * mset::kMoveMaxPlaced,
-                      out_scalars + i * mset::kMoveScalars);
-  }
-}
-
-int ScribblezSession::move_set_positions(const char* path, const int64_t* game_idx,
-                                         const int64_t* turn_idx, const int64_t* move_counts,
-                                         int64_t n_positions, const void* moves, float* out_rows,
-                                         int32_t* out_cells, uint8_t* out_letters,
-                                         const uint8_t* transposes, void* out_moves) const {
-  namespace mset = scribblez::move_set;
-  if (!game_idx || !turn_idx || !move_counts || !out_rows || n_positions < 0) return -1;
-  if (bool(transposes) != bool(out_moves)) return -1;
-  std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  scribblez::binlog::BlockDecoder decoder(spec);
-  int64_t done = 0;
-  for (int64_t j = 0; j < n_positions; ++j) {
-    const bool transpose = transposes && transposes[j];
-    decoder.decode_one(buf.data(), path, uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                       {.transpose = transpose}, /*post_move=*/false, /*output_row=*/j, out_rows);
-    const std::vector<scribblez::Move> candidates =
-      copy_moves_in_frame(moves, done, move_counts[j], transpose);
-    if (out_moves) {
-      std::memcpy(static_cast<char*>(out_moves) + done * sizeof(scribblez::Move), candidates.data(),
-                  candidates.size() * sizeof(scribblez::Move));
-    }
-    mset::encode_moves_cross_checks(decoder.board(), *spec.dict, candidates.data(), move_counts[j],
-                                    out_cells + done * mset::kMoveCrossSlots,
-                                    out_letters + done * mset::kMoveCrossLetters);
-    done += move_counts[j];
-  }
-  return 0;
-}
-
-int scribblez_move_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
-                                 const int64_t* turn_idx, const int64_t* move_counts,
-                                 int64_t n_positions, const void* moves, float* out_rows,
-                                 int32_t* out_cells, uint8_t* out_letters,
-                                 const uint8_t* transposes, void* out_moves) {
-  return s->move_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves, out_rows,
-                               out_cells, out_letters, transposes, out_moves);
-}
-
-namespace {
-
-// Copies `n` rows of `width` elements of `elem_size` bytes from `src` to row
-// `first` of `dst`. Not a template: this file's helpers sit in the C ABI's
-// linkage.
-void copy_rows(const void* src, size_t elem_size, int64_t first, int64_t n, int width, void* dst) {
-  const size_t row_bytes = elem_size * size_t(width);
-  std::memcpy(static_cast<char*>(dst) + size_t(first) * row_bytes, src, size_t(n) * row_bytes);
-}
-
-// One position's candidate inputs into the outputs' rows from `first`.
-void write_candidate_inputs(const scribblez::policy_set::CandidateInputs& in, int64_t first,
-                            const ScribblezPolicySetOutputs& out) {
-  namespace mset = scribblez::move_set;
-  const mset::MoveFeatureArrays& f = in.features;
-  const int64_t n = in.count();
-  copy_rows(f.letters.data(), sizeof(f.letters[0]), first, n, mset::kMoveMaxPlaced, out.letters);
-  copy_rows(f.blanks.data(), sizeof(f.blanks[0]), first, n, mset::kMoveMaxPlaced, out.blanks);
-  copy_rows(f.squares.data(), sizeof(f.squares[0]), first, n, mset::kMoveMaxPlaced, out.squares);
-  copy_rows(f.tile_mask.data(), sizeof(f.tile_mask[0]), first, n, mset::kMoveMaxPlaced,
-            out.tile_mask);
-  copy_rows(f.scalars.data(), sizeof(f.scalars[0]), first, n, mset::kMoveScalars, out.scalars);
-  copy_rows(f.cross_cells.data(), sizeof(f.cross_cells[0]), first, n, mset::kMoveCrossSlots,
-            out.cross_cells);
-  copy_rows(f.cross_letters.data(), sizeof(f.cross_letters[0]), first, n, mset::kMoveCrossLetters,
-            out.cross_letters);
-  copy_rows(in.equity.data(), sizeof(in.equity[0]), first, n, 1, out.equity);
-}
-
-// Position j's opponent-rack input, from its pool record.
-void write_opp_rack(const void* opp_racks, int64_t j, float* out) {
-  namespace ps = scribblez::policy_set;
-  scribblez::PoolOppRack record;
-  std::memcpy(&record, static_cast<const char*>(opp_racks) + j * sizeof(record), sizeof(record));
-  const std::array<float, ps::kOppRackFloats> in =
-    ps::encode_opp_rack(scribblez::opp_rack_summary(record));
-  std::copy(in.begin(), in.end(), out + j * ps::kOppRackFloats);
-}
-
-// Position j's continuation targets after the move its game played at `turn`,
-// among `moves`, its candidates in its frame, from `board`, the pre-move
-// board in that frame.
-void write_played_continuation(const scribblez::GameLog& g, uint32_t turn, bool transpose,
-                               const std::vector<scribblez::Move>& moves,
-                               const scribblez::Board& board, int64_t j,
-                               const ScribblezPolicySetOutputs& out) {
-  namespace ps = scribblez::policy_set;
-  const ps::PlayedContinuation c = ps::played_continuation(g, int(turn), board);
-  out.played[j] = ps::played_index(g, int(turn), transpose, moves);
-  for (int sq = 0; sq < scribblez::kBoardCells; ++sq) {
-    out.ownership[j * scribblez::kBoardCells + sq] = int8_t(c.fates.fate[sq]);
-    out.square_points[j * scribblez::kBoardCells + sq] = c.fates.points[sq];
-  }
-  out.going_out[j] = int8_t(c.going_out);
-  out.end_points[j] = int16_t(c.end_points);
-}
-
-}  // namespace
-
-int ScribblezSession::policy_set_positions(const char* path, const int64_t* game_idx,
-                                           const int64_t* turn_idx, const int64_t* move_counts,
-                                           int64_t n_positions, const void* moves,
-                                           const void* opp_racks, const uint8_t* transposes,
-                                           const ScribblezPolicySetOutputs& out) const {
-  if (!game_idx || !turn_idx || !move_counts || !moves || !opp_racks || !out.rows || !out.played ||
-      n_positions < 0 || spec.opp_leave_input)
-    return -1;
-  std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  scribblez::binlog::BlockDecoder decoder(spec);
-  scribblez::policy_set::CandidateInputs inputs;
-  int64_t done = 0;
-  for (int64_t j = 0; j < n_positions; ++j) {
-    const bool transpose = transposes && transposes[j];
-    const std::vector<scribblez::Move> candidates =
-      copy_moves_in_frame(moves, done, move_counts[j], transpose);
-    scribblez::policy_set::replay_candidate_inputs(decoder, *spec.dict, buf.data(), path,
-                                                   uint32_t(game_idx[j]), uint32_t(turn_idx[j]),
-                                                   transpose, candidates, out.rows, j, &inputs);
-    write_candidate_inputs(inputs, done, out);
-    write_opp_rack(opp_racks, j, out.opp_rack);
-    write_played_continuation(decoder.game(buf.data(), uint32_t(game_idx[j])),
-                              uint32_t(turn_idx[j]), transpose, candidates, decoder.board(), j,
-                              out);
-    done += move_counts[j];
-  }
-  return 0;
-}
-
-int scribblez_policy_set_positions(ScribblezSession* s, const char* path, const int64_t* game_idx,
-                                   const int64_t* turn_idx, const int64_t* move_counts,
-                                   int64_t n_positions, const void* moves, const void* opp_racks,
-                                   const uint8_t* transposes,
-                                   const ScribblezPolicySetOutputs* out) {
-  if (!out) return -1;
-  return s->policy_set_positions(path, game_idx, turn_idx, move_counts, n_positions, moves,
-                                 opp_racks, transposes, *out);
-}
-
-int64_t ScribblezSession::policy_candidates(const char* path, int64_t game_idx, int64_t turn_idx,
-                                            int blank_prune_points, void* out_moves,
-                                            int32_t* out_equity_ranks, int64_t cap) const {
-  if ((cap > 0 && (!out_moves || !out_equity_ranks)) || game_idx < 0 || spec.opp_leave_input)
-    return -1;
-  std::vector<char> buf;
-  if (load_slog(path, game_idx, buf) != 0) return -1;
-  scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-  std::vector<scribblez::TurnRecord> scratch;
-  const scribblez::GameLog g =
-    scribblez::binlog::make_game_view(buf.data(), uint32_t(game_idx), scratch, nullptr);
-  if (turn_idx < 0 || turn_idx >= g.num_records) return -1;
-  scribblez::binlog::PositionEncoder encoder(spec);
-  const int mover = encoder.replay_to_sampled(g, int(turn_idx), /*post_move=*/false);
-  const scribblez::GameStateEncoder& pos = encoder.enc();
-  const scribblez::Rack hidden;
-  const scribblez::MoveRequest req{
-    pos.board(),      *spec.dict,           encoder.rack(mover), hidden,
-    pos.score(mover), pos.score(1 - mover), encoder.bag_size()};
-  const scribblez::policy_set::PoolCandidates pool = scribblez::policy_set::pool_candidates(
-    scribblez::equity_top_k(req, std::numeric_limits<int>::max()), blank_prune_points);
-  const int64_t n = pool.moves.size();
-  const int64_t kept = std::min(n, cap);
-  std::memcpy(out_moves, pool.moves.data(), size_t(kept) * sizeof(scribblez::Move));
-  std::memcpy(out_equity_ranks, pool.equity_ranks.data(), size_t(kept) * sizeof(int32_t));
-  return n;
-}
-
-int64_t scribblez_policy_candidates(ScribblezSession* s, const char* path, int64_t game_idx,
-                                    int64_t turn_idx, int blank_prune_points, void* out_moves,
-                                    int32_t* out_equity_ranks, int64_t cap) {
-  return s->policy_candidates(path, game_idx, turn_idx, blank_prune_points, out_moves,
-                              out_equity_ranks, cap);
-}
-
-int ScribblezSession::encode_candidate_rows(const char* path, const int64_t* game_idx,
-                                            const int64_t* turn_idx, const int64_t* move_counts,
-                                            int64_t n_positions, const void* moves,
-                                            float* out) const {
-  if (!game_idx || !turn_idx || !move_counts || !out || n_positions < 0) return -1;
-  std::vector<char> buf;
-  if (load_slog(path, /*game_idx=*/0, buf) != 0) return -1;
-  scribblez::binlog::PositionEncoder encoder(spec);
-  std::vector<scribblez::TurnRecord> scratch;
-  int64_t done = 0;
-  for (int64_t j = 0; j < n_positions; ++j) {
-    const scribblez::GameLog g =
-      scribblez::binlog::make_game_view(buf.data(), uint32_t(game_idx[j]), scratch, nullptr);
-    const int turn = int(turn_idx[j]);
-    const int mover = encoder.replay_to_sampled(g, turn, /*post_move=*/false);
-    scribblez::binlog::encode_candidate_rows(encoder, g, turn, mover,
-                                             copy_moves(moves, done, move_counts[j]),
-                                             out + done * input_floats());
-    done += move_counts[j];
-  }
-  return 0;
-}
-
-int scribblez_encode_candidate_rows(ScribblezSession* s, const char* path, const int64_t* game_idx,
-                                    const int64_t* turn_idx, const int64_t* move_counts,
-                                    int64_t n_positions, const void* moves, float* out) {
-  return s->encode_candidate_rows(path, game_idx, turn_idx, move_counts, n_positions, moves, out);
-}
-
-int scribblez_probe_replay(const char* slog_path, const char* sprobe_path, int64_t n_positions,
-                           int64_t n_candidates, int64_t n_records, int64_t n_turns,
-                           void* out_roots, void* out_candidates, void* out_starts, void* out_turns,
-                           char* out_err, int err_cap) {
-  try {
-    std::vector<char> buf;
-    if (load_slog(slog_path, /*game_idx=*/0, buf) != 0) {
-      emit_string(std::format("cannot load {}", slog_path ? slog_path : "(null)"), out_err,
-                  err_cap);
-      return -1;
-    }
-    const scribblez::ProbeReplay r =
-      scribblez::replay_probe_file(buf.data(), scribblez::ProbeReader(sprobe_path));
-    if (!emit_exact(r.roots.data(), r.roots.size(), sizeof(r.roots[0]), n_positions, out_roots) ||
-        !emit_exact(r.candidates.data(), r.candidates.size(), sizeof(r.candidates[0]), n_candidates,
-                    out_candidates) ||
-        !emit_exact(r.starts.data(), r.starts.size(), sizeof(r.starts[0]), n_records, out_starts) ||
-        !emit_exact(r.turns.data(), r.turns.size(), sizeof(r.turns[0]), n_turns, out_turns)) {
-      emit_string(std::format("{} does not match the caller's counts", sprobe_path), out_err,
-                  err_cap);
-      return -1;
-    }
-    return 0;
-  } catch (const std::exception& e) {
-    emit_string(e.what(), out_err, err_cap);
-    return -1;
-  }
-}
-
-namespace {
-
-// Where each position's records start among a .sprobe file's, with the total
-// last.
-std::vector<int64_t> record_offsets(const scribblez::ProbeReader& probes) {
-  std::vector<int64_t> first(size_t(probes.num_positions()) + 1, 0);
-  for (int p = 0; p < probes.num_positions(); ++p)
-    first[size_t(p) + 1] =
-      first[size_t(p)] + int64_t(probes.position(p).header->num_candidates) * probes.probes();
-  return first;
-}
-
-// One lane of scribblez_reply_blocking: the positions it claims.
-void reply_blocking_lane(const scribblez::InputEncodingSpec& spec, const char* slog,
-                         const scribblez::ProbeReader& probes, const std::vector<int64_t>& first,
-                         int stride, uint8_t* out, scribblez::util::LaneCursor& cursor) {
-  scribblez::binlog::BlockDecoder decoder(spec);
-  for (size_t p; cursor.next(p);) {
-    const scribblez::ProbeReader::Position pos = probes.position(int(p));
-    const scribblez::Board& root =
-      decoder.replay_board(slog, pos.header->game_index, pos.header->turn_index);
-    scribblez::reply_blocking(*spec.dict, root, pos, probes.probes(), stride,
-                              out + first[size_t(p)] * stride);
-  }
-}
-
-}  // namespace
-
-int scribblez_reply_blocking(ScribblezSession* s, const char* slog_path, const char* sprobe_path,
-                             int64_t n_records, int stride, uint8_t* out, char* out_err,
-                             int err_cap) {
-  try {
-    std::vector<char> buf;
-    if (load_slog(slog_path, /*game_idx=*/0, buf) != 0) {
-      emit_string(std::format("cannot load {}", slog_path ? slog_path : "(null)"), out_err,
-                  err_cap);
-      return -1;
-    }
-    const scribblez::ProbeReader probes(sprobe_path);
-    const std::vector<int64_t> first = record_offsets(probes);
-    if (first.back() != n_records) {
-      emit_string(std::format("{} has {} records, not {}", sprobe_path, first.back(), n_records),
-                  out_err, err_cap);
-      return -1;
-    }
-    scribblez::util::parallel_lanes(
-      size_t(probes.num_positions()), [&](scribblez::util::LaneCursor& cursor) {
-        reply_blocking_lane(s->spec, buf.data(), probes, first, stride, out, cursor);
-      });
-    return 0;
-  } catch (const std::exception& e) {
-    emit_string(e.what(), out_err, err_cap);
-    return -1;
-  }
-}
-
-int32_t scribblez_move_set_cross_slots(void) { return scribblez::move_set::kMoveCrossSlots; }
-
-void scribblez_move_set_move_dims(int32_t* max_placed, int32_t* num_scalars, int32_t* letter_vocab,
-                                  int32_t* cells) {
-  *max_placed = scribblez::move_set::kMoveMaxPlaced;
-  *num_scalars = scribblez::move_set::kMoveScalars;
-  *letter_vocab = scribblez::move_set::kMoveLetterVocab;
-  *cells = scribblez::move_set::kMoveCells;
-}
-
-int32_t scribblez_move_set_encoding_version(void) {
-  return scribblez::move_set::kMoveEncodingVersion;
-}
-
-void scribblez_score_diff_input_layout(ScribblezSession* s, int32_t* scalar_index, float* scale) {
-  *scalar_index = scribblez::scalar_block_offset(s->spec, scribblez::ScalarBlockId::kScoreDiff);
-  *scale = scribblez::kScoreDiffInputScale;
-}
-
-int ScribblezSession::max_move_per_lane_analyze_gcg(const char* gcg_text, char* out_json,
-                                                    int out_cap, float* out_input) const {
-  if (!gcg_text) return -1;
-  try {
-    scribblez::GcgAnalysisPosition pos;
-    std::string error;
-    if (!scribblez::parse_gcg_analysis_position(gcg_text, &pos, &error)) return -1;
-    if (out_input) scribblez::MaxMovePerLaneInputEncoder::encode(pos.board, pos.rack, out_input);
-    return emit_string(scribblez::lane_analysis_json(pos.board, pos.rack, pos.on_move, *spec.dict),
-                       out_json, out_cap);
-  } catch (const std::exception&) {
-    return -1;
-  }
-}
-
-int scribblez_max_move_per_lane_analyze_gcg(ScribblezSession* s, const char* gcg_text,
-                                            char* out_json, int out_cap, float* out_input) {
-  return s->max_move_per_lane_analyze_gcg(gcg_text, out_json, out_cap, out_input);
 }
 
 // The encoding spec for an analysis entry point's explicit arm. Returns
@@ -1157,95 +659,6 @@ int scribblez_position_eval_analyze_gcg_leaves(ScribblezSession* s, const char* 
   return s->position_eval_analyze_gcg_leaves(gcg_text, leave_str, opp_leave_str,
                                              opp_leave_input != 0, out_input, input_cap, out_err,
                                              err_cap);
-}
-
-int ScribblezSession::gcg_position_inputs(const char* gcg_text, bool opp_leave_input,
-                                          float* out_input, int input_cap, int32_t* out_score_diff,
-                                          void* out_moves, int moves_cap, char* out_err,
-                                          int err_cap) const {
-  if (out_err && err_cap > 0) out_err[0] = '\0';
-  if (!gcg_text || !out_input || !out_score_diff || (!out_moves && moves_cap > 0)) return -1;
-  try {
-    const auto arm = analysis_arm(opp_leave_input, input_cap, out_err, err_cap);
-    if (!arm) return -1;
-    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-    scribblez::TrajectoryDecision d;
-    std::string error;
-    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, opp_leave_input, &d, &error)) {
-      emit_string(error, out_err, err_cap);
-      return -1;
-    }
-    int score_diff = 0;
-    scribblez::encode_trajectory_decision(d, *arm, out_input, &score_diff);
-    *out_score_diff = score_diff;
-    const int n = d.legal_moves.size();
-    if (n > 0 && moves_cap > 0) {
-      std::memcpy(out_moves, d.legal_moves.data(),
-                  size_t(std::min(n, moves_cap)) * sizeof(scribblez::Move));
-    }
-    return n;
-  } catch (const std::exception& e) {
-    emit_string(e.what(), out_err, err_cap);
-    return -1;
-  }
-}
-
-int scribblez_gcg_position_inputs(ScribblezSession* s, const char* gcg_text, int opp_leave_input,
-                                  float* out_input, int input_cap, int32_t* out_score_diff,
-                                  void* out_moves, int moves_cap, char* out_err, int err_cap) {
-  return s->gcg_position_inputs(gcg_text, opp_leave_input != 0, out_input, input_cap,
-                                out_score_diff, out_moves, moves_cap, out_err, err_cap);
-}
-
-int ScribblezSession::gcg_cross_checks(const char* gcg_text, bool open_leaves, const void* moves,
-                                       int64_t n, int32_t* out_cells, uint8_t* out_letters,
-                                       char* out_err, int err_cap) const {
-  if (out_err && err_cap > 0) out_err[0] = '\0';
-  if (!gcg_text || n < 0 || (n > 0 && (!moves || !out_cells || !out_letters))) return -1;
-  try {
-    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-    scribblez::TrajectoryDecision d;
-    std::string error;
-    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, open_leaves, &d, &error)) {
-      emit_string(error, out_err, err_cap);
-      return -1;
-    }
-    const std::vector<scribblez::Move> candidates = copy_moves(moves, 0, n);
-    scribblez::move_set::encode_moves_cross_checks(d.position.board, *spec.dict, candidates.data(),
-                                                   n, out_cells, out_letters);
-    return 0;
-  } catch (const std::exception& e) {
-    emit_string(e.what(), out_err, err_cap);
-    return -1;
-  }
-}
-
-int scribblez_gcg_cross_checks(ScribblezSession* s, const char* gcg_text, int open_leaves,
-                               const void* moves, int64_t n, int32_t* out_cells,
-                               uint8_t* out_letters, char* out_err, int err_cap) {
-  return s->gcg_cross_checks(gcg_text, open_leaves != 0, moves, n, out_cells, out_letters, out_err,
-                             err_cap);
-}
-
-int ScribblezSession::gcg_position_board_json(const char* gcg_text, bool open_leaves,
-                                              char* out_json, int out_cap) const {
-  if (!gcg_text) return -1;
-  try {
-    scribblez::HastyEquity::ensure_initialized(scribblez::Lexicon::instance().name());
-    scribblez::TrajectoryDecision d;
-    std::string error;
-    if (!scribblez::read_trajectory_decision(gcg_text, *spec.dict, open_leaves, &d, &error)) {
-      return -1;
-    }
-    return emit_string(scribblez::trajectory_decision_board_json(d), out_json, out_cap);
-  } catch (const std::exception&) {
-    return -1;
-  }
-}
-
-int scribblez_gcg_position_board_json(ScribblezSession* s, const char* gcg_text, int open_leaves,
-                                      char* out_json, int out_cap) {
-  return s->gcg_position_board_json(gcg_text, open_leaves != 0, out_json, out_cap);
 }
 
 const char* scribblez_format_layout_json(void) { return scribblez::format_layout_json().c_str(); }

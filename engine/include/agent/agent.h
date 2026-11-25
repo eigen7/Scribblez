@@ -14,7 +14,6 @@ namespace scribblez {
 
 class Game;
 class Dictionary;
-struct TurnPool;  // data/turn_pool.h
 
 // Outcome of Agent::end_game(). NONE means the agent has no opinion (the
 // default for bots); PLAY_AGAIN / QUIT come from the human agent.
@@ -37,9 +36,6 @@ struct MoveRequest {
   int my_score;
   int opp_score;
   int bag_size;
-  // Whether the game keeps a record of the turn's search
-  // (MoveDecision::pool), which an agent that has one to give then fills.
-  bool record_pool = false;
 };
 
 // What an agent is told at the start of a game, before any make_move(). A
@@ -76,9 +72,6 @@ struct CandidateValue {
 struct MoveDecision {
   Move move;
   std::vector<Move> projected_remaining_moves;
-  // The turn's search, where the request asked for it and the agent searched;
-  // null otherwise.
-  std::shared_ptr<TurnPool> pool;
   // The moves the agent valued and their values, for an agent that values
   // its candidates on one scale; empty otherwise.
   std::vector<CandidateValue> values;

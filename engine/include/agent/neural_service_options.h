@@ -1,9 +1,8 @@
 #pragma once
 
 // The --player options that name a served evaluation model and set its device,
-// precision and batch size, shared by --type=neural, neural-sim and mset-sim so
-// their model options cannot drift. (UltimateBot serves a pair of graphs and
-// has its own.)
+// precision and batch size, shared by --type=neural and neural-sim so their
+// model options cannot drift.
 
 #include "nn/neural_net.h"
 

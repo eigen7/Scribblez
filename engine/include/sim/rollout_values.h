@@ -68,9 +68,8 @@ class RolloutValues : public LeafValues {
  public:
   virtual BatchValues run(const RolloutBatch& batch) = 0;
   // The leaf's prediction at each of `leaves`, as the sims' leaf would be
-  // valued there: the prior a sim's maps are read against when `leaves` are
-  // the sims' starts (agent/bob_subtree.h), or a candidate's value with no
-  // rollout at all (agent/leaf_bot.h).
+  // valued there: a candidate's value with no rollout at all
+  // (agent/leaf_bot.h).
   std::vector<LeafPrediction> predict(const std::vector<CpuLeaf>& leaves);
   // predict() over leaves held elsewhere, out[i] for *leaves[i]: what a
   // caller that gathers several callers' leaves into one call passes.

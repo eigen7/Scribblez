@@ -17,7 +17,7 @@ void append_bytes(std::vector<char>* buffer, const void* data, size_t size);
 void write_atomically(const std::string& path, const std::vector<char>& bytes);
 
 // The next `bytes` of `buf` at `*off`, advancing it. Throws util::Exception
-// naming `context` (e.g. "ProbeReader: x.sprobe") if `buf` ends first.
+// naming `context` (e.g. "ForgoneSidecar: x.forgone") if `buf` ends first.
 const char* take_bytes(const std::vector<char>& buf, size_t* off, size_t bytes,
                        const std::string& context);
 

@@ -11,9 +11,8 @@
 // "absent" value, so older models stay loadable where that value is accepted.
 //
 // The writers, all under py/scribblez/ and all through onnx_export_util.py:
-// position_eval/onnx_export.py, move_set_eval/onnx_export.py,
-// move_set_eval/proposal_export.py, leave_inference/onnx_export.py,
-// deep_bot_leaf_eval/onnx_export.py and policy_set/onnx_export.py.
+// position_eval/onnx_export.py, leave_inference/onnx_export.py and
+// deep_bot_leaf_eval/onnx_export.py.
 
 namespace scribblez {
 namespace nn {
@@ -21,18 +20,9 @@ namespace nn {
 // The `graph` entry's values: which model family, and so which spec, a file
 // belongs to.
 inline constexpr const char* kGraphPositionEval = "position_eval";
-inline constexpr const char* kGraphMoveSetEval = "move_set_eval";
-// The move proposal model's two graphs: the per-turn cache graph and the
-// per-evidence-iteration step graph. Must match proposal_export.py's
-// GRAPH_CACHE and GRAPH_STEP.
-inline constexpr const char* kGraphMoveProposalCache = "move_proposal_cache";
-inline constexpr const char* kGraphMoveProposalStep = "move_proposal_step";
 // The leave inference model. Must match leave_inference/onnx_export.py's GRAPH.
 inline constexpr const char* kGraphLeaveInference = "leave_inference";
 inline constexpr const char* kGraphDeepBotLeafEval = "deep_bot_leaf_eval";
-// The policy-set model's policy form. Must match policy_set/onnx_export.py's
-// GRAPH.
-inline constexpr const char* kGraphPolicySet = "policy_set";
 
 struct OnnxMetadata {
   // The input-encoding arm: which optional block the board row carries.

@@ -5,9 +5,7 @@
 // shortlist, the model's top K are simmed, and the best sim result plays.
 // Bag-empty turns go to the endgame solver.
 //
-// This is the reference for the move set evaluation model, whose job is to
-// reproduce this ranking in one pass instead of one evaluation per candidate
-// (MsetSimAgent). drop_best_prob exists for the sensitivity sweep of
+// drop_best_prob exists for the sensitivity sweep of
 // docs/evaluation_plan.md, which prices a recall miss in match play.
 
 #include "agent/agent.h"

@@ -74,7 +74,7 @@ class Move {
   int8_t start_ = 0;                       // 1 B; lane index (PLAY only)
   uint8_t num_played_ = 0;                 // 1 B
   std::array<Glyph, RACK_SIZE> glyphs_{};  // 7 B
-  bool transposed_ = false;                // 1 B; frame bit; 0 in .slog/.mset/.sobs files
+  bool transposed_ = false;                // 1 B; frame bit; 0 in .slog files
   uint16_t square_mask_ = 0;               // 2 B; PLAY only; see class comment
   uint16_t score_ = 0;                     // 2 B
 };

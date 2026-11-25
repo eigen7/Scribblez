@@ -6,9 +6,8 @@
 // agent that ranks moves with the position evaluation model feeds it exactly
 // the training encoding.
 //
-// derive_input_spec() is a free function because every served model needs it,
-// including those of other model families (MsetSimAgent, UltimateBotAgent) and
-// the rollout leaf evaluator (SimRunner).
+// derive_input_spec() is a free function because every served position model
+// needs it, the rollout leaf evaluator's (SimRunner) included.
 
 #include "encoding/game_state_encoder.h"
 #include "nn/eval_service.h"

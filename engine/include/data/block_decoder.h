@@ -26,9 +26,6 @@ namespace binlog {
 //   kPositionEval   -- PositionEvalTask rows; one per eligible turn (see
 //                      binlog::GameMetadata), pre- or post-move per the
 //                      caller's post_move flag.
-//   kMaxMovePerLane -- MaxMovePerLaneTask rows; one per turn, always pre-move.
-//                      Its labels come from enumerating legal moves at the
-//                      position, not from the game's outcome.
 //   kLeaveInference -- LeaveInferenceTask rows; one per eligible turn, always
 //                      pre-move. Its labels are the opponent's leave.
 //   kPublicLeaveInference -- PublicLeaveInferenceTask rows: kLeaveInference's
@@ -36,13 +33,7 @@ namespace binlog {
 //   kLeafEval       -- LeafEvalTask rows; one per turn from the eligible
 //                      region's start that the game did not end at, always
 //                      post-move. Its labels are the game's outcome.
-enum class DecodeTask {
-  kPositionEval,
-  kMaxMovePerLane,
-  kLeaveInference,
-  kPublicLeaveInference,
-  kLeafEval
-};
+enum class DecodeTask { kPositionEval, kLeaveInference, kPublicLeaveInference, kLeafEval };
 
 class BlockDecoder {
  public:
@@ -63,11 +54,10 @@ class BlockDecoder {
   void decode(const char* buf, const std::string& path, int64_t local_start, int64_t n_rows,
               const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
 
-  // The turns of a game that become `task` rows, [begin, end): every turn for
-  // kMaxMovePerLane; for kLeafEval, every turn from the eligible region's
-  // start but the last, since a DeepBot rollout stops at a leaf whatever its
-  // bag holds, and only the game's end is exact; the eligible region
-  // (GameMetadata) otherwise.
+  // The turns of a game that become `task` rows, [begin, end): for kLeafEval,
+  // every turn from the eligible region's start but the last, since a DeepBot
+  // rollout stops at a leaf whatever its bag holds, and only the game's end is
+  // exact; the eligible region (GameMetadata) otherwise.
   static EligibleSpan row_turns(DecodeTask task, const GameMetadata& meta);
 
   // Whether `task` rows read the .slog's .forgone sidecar.

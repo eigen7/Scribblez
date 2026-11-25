@@ -13,12 +13,8 @@ add_library(scribblez_core STATIC
   src/endgame/path_move_lists.cpp
   src/endgame/endgame_oracle.cpp
   src/endgame/pre_endgame_solver.cpp
-  src/training/lane_targets.cpp
-  src/training/lane_analysis.cpp
   src/encoding/input_encoder.cpp
   src/encoding/board_planes.cpp
-  src/training/max_move_per_lane_input_encoder.cpp
-  src/training/max_move_per_lane_task.cpp
   src/game/game.cpp
   src/game/game_log.cpp
   src/game/game_end.cpp
@@ -41,7 +37,6 @@ add_library(scribblez_core STATIC
   src/training/leaf_eval_task.cpp
   src/training/square_fate_targets.cpp
   src/training/game_end_targets.cpp
-  src/training/played_continuation.cpp
   src/training/leave_inference_task.cpp
   src/data/block_decoder.cpp
   src/serve/position_json.cpp
@@ -63,36 +58,19 @@ add_library(scribblez_core STATIC
   src/sim/monte_carlo_leaf_values.cpp
   src/sim/monte_carlo_sim.cpp
   src/sim/sim_runner.cpp
-  src/sim/reply_blocking.cpp
   src/sim/slog_position_simmer.cpp
   src/sim/setup_plays.cpp
   src/sim/rollout_report.cpp
-  src/sim/transfer_candidates.cpp
   src/sim/win_pct_table.cpp
   src/sim/win_table_feature.cpp
-  src/sim/pool_labels.cpp
   src/sim/macondo_autostopper.cpp
   src/sim/macondo_simmer.cpp
   src/sim/candidate_race.cpp
   src/sim/hasty_rollout_task.cpp
-  src/sim/pool_labeler.cpp
-  src/sim/pool_jobs.cpp
   src/sim/rollout_values.cpp
   src/sim/sim_maps.cpp
-  src/sim/map_residuals.cpp
-  src/sim/grouped_pools.cpp
   src/agent/best_bot.cpp
-  src/agent/deep_bot.cpp
   src/agent/leaf_bot.cpp
-  src/agent/policy_bot.cpp
-  src/agent/policy_scorer.cpp
-  src/agent/belief_truth.cpp
-  src/agent/endgame_reply.cpp
-  src/agent/policy_agreement.cpp
-  src/agent/alice_subtree.cpp
-  src/agent/bob_subtree.cpp
-  src/agent/subtree_search.cpp
-  src/agent/subtree_dump.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
@@ -100,38 +78,25 @@ add_library(scribblez_core STATIC
   # The deterministic CPU stand-in for a served model that tests run the
   # generators against (--model=synthetic:<variant>); GPU-free like the above.
   src/nn/synthetic_eval_service.cpp
-  src/agent/evidence_staging.cpp
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/belief/leave_sampler.cpp
   src/belief/leave_query.cpp
   src/belief/reply_query.cpp
   src/belief/leave_history_recorder.cpp
-  src/belief/opp_rack_summary.cpp
   src/belief/slog_leave_beliefs.cpp
   src/lexicon/leave_value_arrays.cpp
   src/belief/move_likelihood.cpp
   src/belief/rack_inference.cpp
   src/data/forgone_play_log.cpp
-  src/data/sim_observation_log.cpp
   src/data/sidecar_io.cpp
-  src/data/probe_log.cpp
-  src/data/pool_log.cpp
-  src/data/survivor_log.cpp
-  src/data/group_log.cpp
-  src/data/probe_replay.cpp
   src/data/slog_sampling.cpp
   src/data/format_layout.cpp
-  src/training/move_set_eval_target_log.cpp
   src/training/move_set_eval_candidates.cpp
-  src/training/move_set_encoder.cpp
-  src/training/policy_set_inputs.cpp
-  src/training/cross_check_delta.cpp
   src/agent/sim_agent.cpp
   src/agent/weird_bot.cpp
   src/agent/player_factory.cpp
   src/training/position_eval_analysis.cpp
-  src/training/trajectory_position.cpp
   src/util/seed_producer.cpp
   src/serve/web_server.cpp
   src/util/string.cpp
@@ -209,10 +174,6 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
-  # The move proposal model's two-graph (cache + step) runtime; see
-  # docs/roadmap.md item 3. It drives two NeuralNets, so it lives here.
-  src/agent/move_proposal_nets.cpp
-  src/agent/move_proposal_session.cpp
   # The leave inference model's runtime (docs/plans/deep_bot_v0.md, "Serving").
   src/belief/leave_inference_net.cpp
   src/belief/served_leave_model.cpp)
@@ -223,8 +184,7 @@ target_include_directories(scribblez_nn
 target_link_libraries(scribblez_nn PUBLIC
   ${CUDA_CUDART} ${TENSORRT_NVINFER} ${TENSORRT_NVONNXPARSER})
 target_link_libraries(scribblez_nn PUBLIC Eigen3::Eigen Boost::program_options)
-# For the game types, utilities, and the evidence staging the move-proposal
-# runtime marshals.
+# For the game types and utilities.
 target_link_libraries(scribblez_nn PUBLIC scribblez_core)
 # onnx_metadata.cpp reads the exported model's metadata_props by parsing the
 # ONNX protobuf directly. The system onnx package ships the ML variant of the
@@ -234,9 +194,8 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent, MsetSimAgent,
-# UltimateBotAgent), DeepBot's and PolicyBot's factories, and SimAgent's
-# factory, which can load a leaf model: every agent source that reaches
+# The model-driven agents (NeuralAgent, NeuralSimAgent), LeafBot's factory,
+# and SimAgent's factory, which can load a leaf model: every agent source that reaches
 # TensorRT, kept out of scribblez_core for the same reason as scribblez_nn.
 # Every consumer that parses --player specs links it.
 # The factories are the only TUs that construct a TensorRT service; the agent
@@ -244,24 +203,17 @@ target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobu
 # never link TensorRT.
 add_library(scribblez_neural_agents STATIC
   src/agent/sim_agent_factory.cpp
-  src/agent/mset_sim_agent.cpp
-  src/agent/mset_sim_agent_factory.cpp
   src/agent/neural_agent.cpp
   src/agent/neural_agent_factory.cpp
   src/agent/neural_service_options.cpp
   src/agent/neural_sim_agent.cpp
   src/agent/neural_sim_agent_factory.cpp
-  src/agent/ultimate_bot_agent.cpp
-  src/agent/ultimate_bot_agent_factory.cpp
-  src/agent/deep_bot_factory.cpp
-  src/agent/leaf_bot_factory.cpp
-  src/agent/policy_bot_factory.cpp)
+  src/agent/leaf_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
   scribblez_nn
   scribblez_gpu_rollouts
-  scribblez_evidence_select
   Boost::program_options)
 
 add_executable(play_game
@@ -325,8 +277,8 @@ target_link_libraries(endgame_tool PRIVATE
 # Endgame solver cost and whole-game throughput benchmark
 # (docs/endgame_bench_results.md). CPU-only.
 # --- GPU rollouts (CUDA) -----------------------------------------------------
-# The CUDA kernels: the hasty rollouts (docs/plans/gpu_hasty_rollouts.md) and
-# the candidates' cross-check deltas. nvcc 12.9 refuses gcc 16 as its host compiler, so
+# The CUDA kernels: the hasty rollouts (docs/plans/gpu_hasty_rollouts.md), with
+# the leaf network's rows encoded on the device. nvcc 12.9 refuses gcc 16 as its host compiler, so
 # it compiles through the image's gcc 13; the engine's C++26-only flags are
 # scoped to CXX in the root CMakeLists.txt for the same reason. Built for every
 # GPU a generator may rent (Ampere A100/A10G, Ada L4/RTX, Hopper), with Hopper's
@@ -342,9 +294,7 @@ set(CMAKE_CUDA_FLAGS_TEST "${CMAKE_CUDA_FLAGS_RELEASE}")
 # link them alone.
 add_library(scribblez_gpu_kernels STATIC
   src/gpu/rollout_kernel.cu
-  src/gpu/hasty_rollouts_gpu.cpp
-  src/gpu/cross_check_delta_kernel.cu
-  src/gpu/cross_check_deltas_gpu.cpp)
+  src/gpu/hasty_rollouts_gpu.cpp)
 set_target_properties(scribblez_gpu_kernels PROPERTIES
   INTERPROCEDURAL_OPTIMIZATION OFF
   CUDA_RUNTIME_LIBRARY Shared)
@@ -355,41 +305,9 @@ add_library(scribblez_gpu_rollouts STATIC
   src/gpu/rollout_backend.cpp)
 set_target_properties(scribblez_gpu_rollouts PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 target_link_libraries(scribblez_gpu_rollouts PUBLIC scribblez_gpu_kernels scribblez_nn)
-# The kernel's checks against its CPU reference, for gpu_kernel_tests and
-# gpu_rollout_demo.
+# The kernel's checks against its CPU reference, for gpu_kernel_tests.
 add_library(scribblez_gpu_rollout_check STATIC src/gpu/rollout_check.cpp)
 target_link_libraries(scribblez_gpu_rollout_check PUBLIC scribblez_gpu_kernels)
-
-# The policy-set model's labeled pools on the GPU (docs/plans/deep_bot_v0.md).
-add_executable(policy_set_pool_tool apps/policy_set_pool_tool.cpp)
-target_link_libraries(policy_set_pool_tool PRIVATE
-  scribblez_gpu_rollouts
-  scribblez_nn
-  scribblez_core
-  Boost::program_options
-  Threads::Threads)
-
-# Hidden-leaves blind spots confirmed from labeled pools (docs/blind_spots.md).
-add_executable(blind_spot_confirm_tool apps/blind_spot_confirm_tool.cpp)
-target_link_libraries(blind_spot_confirm_tool PRIVATE
-  scribblez_gpu_rollouts
-  scribblez_nn
-  scribblez_core
-  Boost::program_options
-  Boost::json
-  Threads::Threads)
-
-add_executable(gpu_rollout_demo apps/gpu_rollout_demo.cpp)
-target_link_libraries(gpu_rollout_demo PRIVATE
-  scribblez_gpu_rollout_check
-  scribblez_gpu_rollouts
-  scribblez_nn
-  scribblez_core
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
-  Threads::Threads)
 
 add_executable(endgame_bench apps/endgame_bench.cpp)
 target_link_libraries(endgame_bench PRIVATE
@@ -410,21 +328,11 @@ target_link_libraries(monte_carlo_sim_tool PRIVATE
   Boost::system
   Threads::Threads)
 
-# SupremeBot M1a's transfer-test data (docs/plans/supreme_bot_m1a.md).
+# Recorded GCG games as one .slog, which the known positions replay from.
 add_executable(gcg_to_slog apps/gcg_to_slog.cpp)
 target_link_libraries(gcg_to_slog PRIVATE
   scribblez_core
   Boost::program_options
-  Threads::Threads)
-
-add_executable(transfer_test_generator apps/transfer_test_generator.cpp)
-target_link_libraries(transfer_test_generator PRIVATE
-  scribblez_core
-  scribblez_nn
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
   Threads::Threads)
 
 # Forgone-play (.forgone) sidecars for .slog data, the leave inference model's
@@ -439,18 +347,6 @@ target_link_libraries(forgone_play_tool PRIVATE
 add_executable(slog_migrate_v11 apps/slog_migrate_v11.cpp)
 target_link_libraries(slog_migrate_v11 PRIVATE
   scribblez_core
-  Threads::Threads)
-
-# Sim-observation (.sobs) sidecars for .slog data
-# (docs/plans/sim_residual_feedback.md).
-add_executable(sim_obs_tool apps/sim_obs_tool.cpp)
-target_link_libraries(sim_obs_tool PRIVATE
-  scribblez_core
-  scribblez_nn
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
   Threads::Threads)
 
 # The sim-labeled-candidates survey (docs/plans/sim_labeled_candidates.md).
@@ -525,21 +421,16 @@ if(SCRIBBLEZ_BUILD_TESTS)
     tests/test_footprint.cpp
     tests/test_game_end.cpp
     tests/test_gcg_reader.cpp
-    tests/test_played_continuation.cpp
     tests/test_hasty_rollout_task.cpp
     tests/test_leave_sampler.cpp
     tests/test_leave_value_arrays.cpp
-    tests/test_probe_log.cpp
     tests/test_rack_inference.cpp
-    tests/test_reply_blocking.cpp
     tests/test_square_fates.cpp
-    tests/test_transfer_candidates.cpp
     tests/test_web_server.cpp
     tests/test_work_pool.cpp
     tests/small_worker_budget.cpp)
   target_link_libraries(core_tests PRIVATE
-    scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
-    GTest::gtest_main)
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   add_test_data_definitions(core_tests)
   add_sharded_gtest(core_tests 2)
 
@@ -547,9 +438,6 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # built directly on them.
   add_executable(search_tests
     tests/test_best_bot.cpp
-    tests/test_deep_bot.cpp
-    tests/test_map_residuals.cpp
-    tests/test_grouped_pools.cpp
     tests/test_endgame.cpp
     tests/test_leaf_bot.cpp
     tests/test_endgame_agent.cpp
@@ -568,22 +456,15 @@ if(SCRIBBLEZ_BUILD_TESTS)
   # without its factory. The factory is what builds the TensorRT service
   # (nn::PositionEvalService::create() and friends, defined in scribblez_nn), so
   # leaving it out lets this binary skip scribblez_nn and CUDA/TensorRT
-  # entirely: the tests inject scripted stub services. Covers the evidence loop
-  # too, through UltimateBotAgent.
+  # entirely: the tests inject scripted stub services.
   add_executable(agent_tests
-    tests/test_mset_sim_agent.cpp
     tests/test_neural_agent.cpp
     tests/test_neural_sim_agent.cpp
-    tests/test_policy_bot.cpp
-    tests/test_ultimate_bot_agent.cpp
-    src/agent/mset_sim_agent.cpp
     src/agent/neural_agent.cpp
     src/agent/neural_sim_agent.cpp
-    src/agent/ultimate_bot_agent.cpp
     tests/small_worker_budget.cpp)
   target_link_libraries(agent_tests PRIVATE
-    scribblez_core scribblez_evidence_select Boost::json Boost::program_options Threads::Threads
-    GTest::gtest_main)
+    scribblez_core Boost::json Boost::program_options Threads::Threads GTest::gtest_main)
   add_sharded_gtest(agent_tests 2)
 
   # Builds real agents through PlayerFactory, whose dispatch references every
@@ -630,18 +511,10 @@ if(SCRIBBLEZ_BUILD_TESTS)
   endfunction()
   # The position evaluation model.
   add_parity_binary(test_nn_inference_parity)
-  # The move set evaluation model, including the plan-cache refit and the
-  # service's chunking.
-  add_parity_binary(test_mset_inference_parity)
-  # The move proposal model's two-graph runtime: cache, evidence staging, then
-  # step, over several evidence cases.
-  add_parity_binary(test_proposal_inference_parity)
   # The leave inference model, and its leave values and format version gates.
   add_parity_binary(test_leave_inference_parity)
   # The DeepBot leaf eval model, and its leave values gate.
   add_parity_binary(test_leaf_eval_parity)
-  # The policy-set model's policy form, which PolicyBot plays from.
-  add_parity_binary(test_policy_set_inference_parity)
 
   # The suite's one TensorRT test: that this machine can build and run a
   # TensorRT plan at all, on the smallest model.
@@ -664,46 +537,3 @@ target_link_libraries(dataloader_smoke PRIVATE scribblez_core Threads::Threads)
 add_executable(nn_infer_smoke apps/nn_infer_smoke.cpp)
 target_link_libraries(nn_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
 
-add_executable(mset_infer_smoke apps/mset_infer_smoke.cpp apps/synthetic_candidates.cpp)
-target_link_libraries(mset_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
-
-add_executable(proposal_infer_smoke apps/proposal_infer_smoke.cpp apps/synthetic_candidates.cpp)
-target_link_libraries(proposal_infer_smoke PRIVATE scribblez_nn scribblez_core Threads::Threads)
-
-# Distillation targets for the move set evaluation model: the position
-# evaluation model (the teacher) scores sampled candidates at .slog positions.
-add_executable(move_set_eval_target_generator apps/move_set_eval_target_generator.cpp)
-target_link_libraries(move_set_eval_target_generator PRIVATE
-  scribblez_nn
-  scribblez_core
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
-  Threads::Threads)
-
-# Evidence selection: which candidates get simmed, and in what order. Holds
-# both the trajectory generator's one-shot recipe and the sequential evidence
-# loop UltimateBot plays. It has no TensorRT dependency, so both are
-# unit-tested with scripted stubs.
-add_library(scribblez_evidence_select STATIC
-  src/training/evidence_trajectory_select.cpp
-  src/agent/evidence_loop.cpp)
-set_target_properties(scribblez_evidence_select PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(scribblez_evidence_select PUBLIC scribblez_core)
-
-# Evidence trajectories (docs/roadmap.md item 4). The library runs the
-# per-position recipe against the move set evaluation model; the generator
-# feeds it positions and writes trajectory .sobs sidecars.
-add_library(scribblez_evidence STATIC src/training/evidence_trajectory.cpp)
-set_target_properties(scribblez_evidence PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(scribblez_evidence PUBLIC scribblez_evidence_select scribblez_core scribblez_nn)
-
-add_executable(evidence_trajectory_generator apps/evidence_trajectory_generator.cpp)
-target_link_libraries(evidence_trajectory_generator PRIVATE
-  scribblez_evidence
-  Boost::program_options
-  Boost::json
-  Boost::filesystem
-  Boost::system
-  Threads::Threads)

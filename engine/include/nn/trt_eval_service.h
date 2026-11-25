@@ -81,8 +81,6 @@ std::shared_ptr<PositionEvalService> load_leaf_position_service(const std::strin
                                                                 int cuda_device_id = 0);
 
 extern template class TrtEvalService<PositionEvaluationSpec>;
-extern template class TrtEvalService<MoveSetEvaluationSpec>;
-extern template class TrtEvalService<PolicySetSpec>;
 
 }  // namespace nn
 }  // namespace scribblez

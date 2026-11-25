@@ -209,7 +209,6 @@ struct NeuralNetBase::Impl {
   // Read off the engine's tensor shapes and the model's ONNX metadata at load.
   int spatial_planes = 0;
   int scalar_floats = 0;
-  int channels = 0;
   bool opp_leave_input = false;
 
   int last_rows = -1;
@@ -330,8 +329,7 @@ void NeuralNetBase::Impl::refit_engine(const std::vector<char>& onnx_bytes) {
   // Neither signal proves a refit complete: a deserialized plan already holds a
   // value for every weight, so none is ever reported missing. The real check is
   // the parity tests, which compare a refitted engine's outputs against each
-  // checkpoint's own reference outputs (py/scripts/move_set_eval/
-  // trt_refit_probe.py reached the same conclusion).
+  // checkpoint's own reference outputs.
   if (!clean && refitter->getMissingWeights(0, nullptr) != 0) {
     if (parser_refitter->getNbErrors() > 0) {
       throw util::Exception("Failed to read refit weights from ONNX model: {}",
@@ -379,8 +377,6 @@ void NeuralNetBase::Impl::allocate_buffers() {
     spatial_planes = engine->getTensorShape(SpatialInput::kName).d[1];
     scalar_floats = engine->getTensorShape(ScalarInput::kName).d[1];
   }
-  // The channels tensor is (rows, C), so its per-row width is C.
-  if (spec.channels_tensor) channels = binding(spec.channels_tensor).elems_per_row;
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +450,6 @@ void NeuralNetBase::load() {
 int NeuralNetBase::max_rows() const { return impl_->params.max_rows; }
 int NeuralNetBase::spatial_planes() const { return impl_->spatial_planes; }
 int NeuralNetBase::scalar_floats() const { return impl_->scalar_floats; }
-int NeuralNetBase::channels() const { return impl_->channels; }
 bool NeuralNetBase::opp_leave_input() const { return impl_->opp_leave_input; }
 
 void* NeuralNetBase::host_ptr(const char* name) const { return impl_->binding(name).host; }

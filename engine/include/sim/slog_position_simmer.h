@@ -3,10 +3,9 @@
 // Monte-Carlo sims over positions of a loaded .slog file: replay each position
 // to its pre-move decision point, rank the legal moves by HastyBot static
 // equity, select candidates, and sim them with SimRunner. Every tool that sims
-// .slog positions without a model goes through here (sim_obs_tool's .sobs
-// sidecars, the sim-labeled-candidates survey of
-// docs/plans/sim_labeled_candidates.md), so they cannot drift on the replay,
-// the information condition, or the seeding.
+// .slog positions without a model goes through here (the sim-labeled-candidates
+// survey of docs/plans/sim_labeled_candidates.md), so they cannot drift on the
+// replay, the information condition, or the seeding.
 
 #include "data/slog_sampling.h"
 #include "game/move.h"
@@ -76,11 +75,6 @@ SimCandidateSelector setup_selector(const Dictionary& dict, int cut, int max_set
 // of a blank rack's thousands of legal moves, nearly all of them designation
 // variants of each other. High-value setups are highlighted. Never declines.
 SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max_plays);
-
-// The policy-set model's label pool (docs/plans/deep_bot.md, "Labels"):
-// policy_set::pool_candidates, the candidates PolicyBot chooses among too.
-// Never declines.
-SimCandidateSelector pool_selector(int blank_prune_points);
 
 // Selects exactly the moves `chosen` names for a position, which must be legal
 // there, and declines positions it does not name. For the confirm stage of a

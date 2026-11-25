@@ -14,8 +14,6 @@
 
 namespace scribblez {
 
-struct TurnPool;  // data/turn_pool.h
-
 struct TurnRecord {
   int player;  // 0 or 1
   Rack rack_before;
@@ -52,13 +50,6 @@ struct GameLog {
   int num_random_opening_plies = 0;
 };
 
-// A turn's search as its agent recorded it (MoveDecision::pool), and the
-// turn: the index of the record its move became.
-struct SearchedTurn {
-  int turn = 0;
-  std::shared_ptr<TurnPool> pool;
-};
-
 // Owning backing store for a game's log. A view() stays valid while the
 // storage lives and `turns` is not reallocated.
 struct GameLogStorage {
@@ -72,10 +63,6 @@ struct GameLogStorage {
   std::array<Rack, 2> final_racks;
   std::string end_reason;
   int num_random_opening_plies = 0;
-  // The searches the agents recorded (Game::set_record_pools), in turn
-  // order. Not part of the view: the .slog writer files them beside the game
-  // (binlog::BinaryLogWriter).
-  std::vector<SearchedTurn> pools;
 
   GameLog view() const;
 };

@@ -77,8 +77,6 @@ class EvalService : public ServedModelInputs {
 };
 
 using PositionEvalService = EvalService<PositionEvaluationSpec>;
-using MoveSetEvalService = EvalService<MoveSetEvaluationSpec>;
-using PolicySetEvalService = EvalService<PolicySetSpec>;
 
 // Defined in trt_eval_service.cpp, where the position one also wraps the shared
 // engine in BatchingPositionEvalService. Declared here so callers see the explicit
@@ -86,12 +84,6 @@ using PolicySetEvalService = EvalService<PolicySetSpec>;
 template <>
 std::shared_ptr<PositionEvalService> PositionEvalService::create(
   const NeuralNetParams<PositionEvaluationSpec>& params);
-template <>
-std::shared_ptr<MoveSetEvalService> MoveSetEvalService::create(
-  const NeuralNetParams<MoveSetEvaluationSpec>& params);
-template <>
-std::shared_ptr<PolicySetEvalService> PolicySetEvalService::create(
-  const NeuralNetParams<PolicySetSpec>& params);
 
 }  // namespace nn
 }  // namespace scribblez

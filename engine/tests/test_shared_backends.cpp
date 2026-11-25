@@ -24,13 +24,6 @@ RolloutBackend cpu_backend(int leaf_rows = RolloutBackend{}.leaf_rows) {
   return b;
 }
 
-nn::NeuralNetParams<nn::MoveSetEvaluationSpec> synthetic_move_set(int cuda_device_id = 0) {
-  nn::NeuralNetParams<nn::MoveSetEvaluationSpec> p;
-  p.onnx_path = "synthetic:hidden";
-  p.cuda_device_id = cuda_device_id;
-  return p;
-}
-
 class SharedRolloutBackend : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -55,11 +48,4 @@ TEST_F(SharedRolloutBackend, IsRebuiltOnceEveryHolderDropsIt) {
   first.reset();
   EXPECT_TRUE(weak.expired());
   EXPECT_NE(cpu_backend().shared(*dict_), nullptr);
-}
-
-TEST(SharedBackends, MoveSetServiceIsSharedForEqualParams) {
-  const std::shared_ptr<nn::MoveSetEvalService> a =
-    nn::MoveSetEvalService::create(synthetic_move_set());
-  EXPECT_EQ(a, nn::MoveSetEvalService::create(synthetic_move_set()));
-  EXPECT_NE(a, nn::MoveSetEvalService::create(synthetic_move_set(/*cuda_device_id=*/1)));
 }

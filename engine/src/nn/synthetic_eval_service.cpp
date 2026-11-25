@@ -64,20 +64,6 @@ Projections normalized(const Accumulator& acc) {
   return z;
 }
 
-// Adds candidate m's per-move inputs, the arrays (and widths) TrtEvalService
-// stages, which follow the board row's `board_floats` in the weight table.
-template <TensorDescriptor... Ts>
-void accumulate_move(const move_set::MoveFeatureArrays& moves, int m,
-                     const std::vector<float>& weights, size_t board_floats, Accumulator* acc,
-                     TensorList<Ts...>) {
-  size_t offset = board_floats;
-  ((accumulate(std::span((moves.*Ts::kBatchSource).data() + size_t(m) * Ts::kRowElems,
-                         size_t(Ts::kRowElems)),
-               weights, offset, acc),
-    offset += Ts::kRowElems),
-   ...);
-}
-
 float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 // Row `row`'s decoded head values from its projections: wld as probabilities
@@ -110,19 +96,6 @@ void evaluate_rows(const PositionEvaluationSpec::Batch& batch, const std::vector
   }
 }
 
-void evaluate_rows(const MoveSetEvaluationSpec::Batch& batch, const std::vector<float>& weights,
-                   bool non_finite, std::span<float* const> head_out) {
-  using MoveInputs = MoveSetEvaluationSpec::MoveInputs;
-  const size_t board_floats = weights.size() / kProjections - MoveInputs::total_row_elems;
-  Accumulator board;
-  accumulate(std::span(batch.board_row, board_floats), weights, 0, &board);
-  for (int m = 0; m < batch.moves->count; ++m) {
-    Accumulator acc = board;
-    accumulate_move(*batch.moves, m, weights, board_floats, &acc, MoveInputs{});
-    write_heads(normalized(acc), non_finite, m, head_out);
-  }
-}
-
 }  // namespace
 
 std::optional<SyntheticModel> parse_synthetic_model(const std::string& model) {
@@ -146,8 +119,7 @@ template <typename Spec>
 SyntheticEvalService<Spec>::SyntheticEvalService(const SyntheticModel& model) : model_(model) {
   static_assert(std::is_same_v<typename Spec::Outputs, TensorList<WldOutput, ScoreDiffOutput>>,
                 "write_heads() fills exactly the wld and score_diff heads");
-  const size_t n = size_t(input_floats(InputEncodingSpec{nullptr, model.opp_leave_input}) +
-                          Spec::MoveInputs::total_row_elems);
+  const size_t n = size_t(input_floats(InputEncodingSpec{nullptr, model.opp_leave_input}));
   weights_.resize(kProjections * n);
   for (int k = 0; k < kProjections; ++k) {
     for (size_t i = 0; i < n; ++i) weights_[k * n + i] = hashed_weight(k, i);
@@ -171,7 +143,6 @@ void SyntheticEvalService<Spec>::do_evaluate(const SpecBatch& batch,
 }
 
 template class SyntheticEvalService<PositionEvaluationSpec>;
-template class SyntheticEvalService<MoveSetEvaluationSpec>;
 
 }  // namespace nn
 }  // namespace scribblez

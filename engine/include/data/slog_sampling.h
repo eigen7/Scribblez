@@ -1,8 +1,8 @@
 #pragma once
 
-// Position sampling and input handling shared by the tools that generate
-// sidecar files for a .slog (sim_obs_tool, move_set_eval_target_generator,
-// evidence_trajectory_generator, and others).
+// Position sampling and input handling shared by the tools that read
+// positions from a .slog (sim_candidate_survey_tool, harvest_positions_tool,
+// and others).
 //
 // Sampling depends only on the run seed and the game, never on thread count or
 // visit order, and every tool uses the same per-game shuffle. So for equal

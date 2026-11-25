@@ -35,7 +35,7 @@ void collapse_footprint_planes(const Board& board, const Dictionary& dict,
 
 // Each head's masked footprint distribution, per class rather than collapsed
 // onto cells: illegal footprints at zero. With null `available_counts` this is
-// the .mset distillation target the student trains against. `out` is
+// the placement heads' masked distribution over footprints. `out` is
 // kPlacementHeads x kFootprintClasses.
 void masked_placement_distributions(const Board& board, const Dictionary& dict,
                                     const uint8_t* available_counts, const float* raw, float* out);
