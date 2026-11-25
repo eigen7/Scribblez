@@ -88,17 +88,13 @@ sample from the belief, and DeepBot makes that pass every turn already. Its
 counts come from the same pass with a small extension. The belief is the same
 for every candidate at a turn, so the pass runs once per turn.
 
-**The join planes are ablated** in Phase 2: format version 3 is trained with
-them and without them, and they go if they don't earn their place. The
-encoder header makes the case for them as a conv trunk's weakness, joining a
-square's cross-check letters with who holds them. A transformer can make that
-join from the cross-checks and the counts. Release1's transformer leaf trained
-with them, and they have never been ablated on a transformer.
-
-If the ablation keeps them, only mine and the unseen tiles' stay. In belief
-mode the opponent's join planes would have to become the probability that the
-leave holds a fitting tile, which means inclusion–exclusion over the belief at
-every hook square.
+**The join planes go** in format version 3 (decided 2026-11-25, without an
+ablation). The encoder header makes the case for them as a conv trunk's
+weakness, joining a square's cross-check letters with who holds them. A
+transformer can make that join from the cross-checks and the counts. In belief
+mode the opponent's join planes would also have had to become the probability
+that the leave holds a fitting tile, which means inclusion–exclusion over the
+belief at every hook square.
 
 **Training rows.**
 - **Belief-mode rows** take a target averaged over the belief. A searched
@@ -108,9 +104,13 @@ every hook square.
   opponent holds rack *i*, and its value at the cutoff is a target for that
   world. That target is noisy, but it costs nothing extra.
 
-The trainer draws the two modes half and half. It computes the belief by
-replaying the game under its current leave inference model. That is the
-model the leaf is served with, and the trainer trains both models anyway.
+The trainer draws the two modes half and half. The belief comes from a
+`.belief` sidecar beside each `.slog` (decided 2026-11-25), since its summaries
+cost a pass over every leave, too much to repeat per row per epoch. For
+HastyBot's games the trainer writes it under the tag's pinned leave model. For
+DeepBot's own games DeepBot records the belief it acted on, so a row carries
+its own release's belief rather than the newest. The details are in
+[deep_bot_belief_leaf.md](deep_bot_belief_leaf.md#1-the-belief-sidecar).
 
 **Before any search exists,** the encoder change can be trained on
 today's game-result targets, which suit both modes. That checks that the
@@ -321,18 +321,18 @@ represent any distribution of positions.
 
 ## Phases
 
-0. **Measurements**, on release1's models. Leaves are drawn where the belief
-   input does not exist yet. Measure:
+0. **Measurements**, on the version 3 leaf of phase 2's runs (release1 was
+   deleted). Measure:
    - the spread of the cutoff value from one draw to the next, at `k` = 2 and
      4;
    - the distribution of legal-move counts;
    - leaf throughput at the batch sizes the greedy turns make.
 1. **Small changes now:** remove THAN (scz#546); merge scz#544 (done).
-2. **The belief-input leaf:**
+2. **The belief-input leaf**, sliced in
+   [deep_bot_belief_leaf.md](deep_bot_belief_leaf.md):
    - the format version 3 encoder, with the belief's summaries from
      `LeaveSampler`'s pass;
    - the trainer's two modes on game-result targets;
-   - the join plane ablation, with and without;
    - belief-mode loss against DeepBot's 16-draw average on held-out
      positions.
 3. **The greedy player:** DeepBot in belief mode, one evaluation per

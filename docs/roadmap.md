@@ -53,7 +53,7 @@ The phases are [plans/deep_bot.md](plans/deep_bot.md#phases)'s.
 |------|--------|
 | 0. Measurements: the cutoff value's spread, legal-move counts, leaf throughput at small batches | Not started; the spread waits for phase 4's search |
 | 1. Small changes: THAN out of the known positions; the opponent's rack panel; the retired workloads removed | Done (2026-11-25) |
-| 2. The belief-input leaf: input format version 3, the belief sidecar, the trainer's two modes, the join-plane ablation | Next |
+| 2. The belief-input leaf: input format version 3 (join planes removed), the belief sidecar, the trainer's two modes ([deep_bot_belief_leaf.md](plans/deep_bot_belief_leaf.md)) | Next |
 | 3. The greedy player: DeepBot in belief mode, one evaluation per candidate | Not started |
 | 4. The labeled-turn search in the engine | Not started |
 | 5. The continuous workload, `deep_bot` | Not started |
