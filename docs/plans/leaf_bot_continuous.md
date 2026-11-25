@@ -66,15 +66,39 @@ length, which a player knows, so they stay.
 
 **The input at format version 3:**
 
-| Input | When it is set |
-|---|---|
-| The **unseen tiles from my side**: every tile not on the board or my leave. Their counts and join planes replace the pool's. | Both modes |
-| The **belief**: the leave inference head's 29 parameters, and the opponent's leave length. | Both modes |
-| The opponent's concrete counts, static leave value and join planes. | Known mode only; zeros otherwise |
-| A **mode flag**. | Both modes |
+| Input | Known mode | Belief mode |
+|---|---|---|
+| The opponent's per-tile counts (27) | the leave's counts | their expected counts under the belief |
+| The opponent's static leave value: mean and SD (2) | the leave's value; SD 0 | the exact mean and SD under the belief |
+| The belief's 29 parameters: the 27 per-tile tilts, `a` and `b` (`engine/include/belief/leave_params.h`) | zeros | the leave inference model's output |
+| The **unseen tiles from my side**: every tile not on the board or my leave. Their counts replace the pool's. | set | set |
+| The opponent's leave length, and a **mode flag** | set | set |
 
-The new unseen-tile inputs read the same whether the opponent's leave is
-known or not. The concrete inputs carry what knowing the leave adds.
+**The count slots are shared, so their meaning must be too.** A concrete
+leave is its own expectation, so expected counts mean the same thing in both
+modes. The tilts would not work in those slots. They are relative to the
+pool's prior, so a 0 there would mean "as likely as a uniform draw" in belief
+mode but "absent" in known mode. So the tilts get slots of their own, zeroed
+in known mode.
+
+**The belief's summaries cost nothing extra.** `LeaveSampler`
+(`engine/include/belief/leave_sampler.h`) makes a pass over every leave to
+sample from the belief, and LeafBot makes that pass every turn already. Its
+`LeaveMoments` already returns the leave value's exact mean and SD. Expected
+counts come from the same pass with a small extension. The belief is the same
+for every candidate at a turn, so the pass runs once per turn.
+
+**The join planes are ablated** in Phase 2: format version 3 is trained with
+them and without them, and they go if they don't earn their place. The
+encoder header makes the case for them as a conv trunk's weakness, joining a
+square's cross-check letters with who holds them. A transformer can make that
+join from the cross-checks and the counts. Release1's transformer leaf trained
+with them, and they have never been ablated on a transformer.
+
+If the ablation keeps them, only mine and the unseen tiles' stay. In belief
+mode the opponent's join planes would have to become the probability that the
+leave holds a fitting tile, which means inclusion–exclusion over the belief at
+every hook square.
 
 **Training rows.**
 - **Belief-mode rows** take a target averaged over the belief. A searched
@@ -104,19 +128,62 @@ of turns, which alone make training rows, and cheap play everywhere else.
 deep_bot already does a version of this for its policy data
 (`pool_positions_per_game`).
 
-**A greedy turn** values a prefilter of `K` candidates under the belief-input
-leaf and plays the best. Valuing every legal move is the cleanest choice,
-but it costs about as many evaluations as there are legal moves:
+**A greedy turn** values every legal move under the belief-input leaf and
+plays the best. That costs about as many evaluations as there are legal
+moves:
 - the known positions' median is about 550;
 - a rack with a blank has thousands.
 
-That is around three times today's 160 a turn. So the greedy turns keep a
-prefilter:
-- static equity's top `K`, with `K` of 30 to 50;
-- or the move proposal model (docs/plans/sim_residual_feedback.md).
+That is around three times today's 160 a turn, and it is affordable (see the
+cost below).
 
-Phase 0 measures how often each misses the all-moves best on ordinary
-self-play positions.
+**Where a prefilter applies:**
+- **The game's greedy turns:** no prefilter.
+- **A labeled turn's root:** no prefilter. Every legal move gets the leaf's
+  single evaluation.
+
+  These two places are where the prefilter research gets its data.
+- **Inside the search's plies:** static equity's top `K`, with `K` of 50 to
+  100, as a stopgap until the research replaces it. Without it, a row would
+  cost about ten times as much (see the cost below). The search's
+  continuation then differs from the game's policy only where static equity's
+  top `K` misses the leaf's best, and the counts below measure how often that
+  happens.
+
+### The prefilter as research
+
+**The goal** is a set of fast, independent decision stumps S1, S2, …, Sn
+over different inputs, so that their misses are largely unrelated. Each stump
+picks a subset of the legal moves, and the union of those subsets should
+almost always hold the leaf's best. Static equity's top `K` is S1.
+
+**What makes it measurable:** the union's recall is S1's recall plus
+P(S1 misses) × P(S2 finds the best | S1 misses), and so on for each further
+stump. A stump's cost, the size of the subset it picks, can be measured on any
+positions.
+
+**What the workload records** for that research, which runs separately over
+the data:
+- **Counts, at every greedy turn and every labeled turn's root**, since both
+  value every legal move anyway:
+  - A, the static equity rank of the leaf's best;
+  - B, the number of tiles in the bag;
+  - the count of turns at each (A, B);
+  - at each of a few `K` (5, 10, 20, 50, 100), how far the leaf's best
+    within static equity's top `K` falls short of the overall best.
+
+  The shortfall is the cost of a miss: missing the best by 0.001 of win
+  probability doesn't matter, so rank alone overstates the misses. Choosing
+  `K` trades the shortfall against evaluations.
+- **The misses:** every turn whose best is outside static equity's top
+  `K_keep`, a parameter defaulting to 10.
+  - A miss at any larger `K` is a subset of these.
+  - Each is kept as its game's record, the turn index and the release that
+    played it, since inputs are rebuilt by replay. A later leaf or stump can
+    then be scored on them.
+  - They go in a directory under the tag that the window's eviction never
+    touches.
+  - They are the conditional set the recall identity needs.
 
 **A labeled turn's search** works as follows:
 1. **Draw racks.** For each candidate, draw `R` opponent racks from the
@@ -142,22 +209,34 @@ self-play positions.
 The sibling rows teach the ranking that LeafBot uses the leaf for.
 
 **Cost.** A row costs about `R × (k × K + 1)` leaf evaluations, where `R` is
-the average number of draws per candidate after racing. A game's greedy turns
-cost about `22 × K`.
+the average number of draws per candidate after racing and `K` is the plies'
+prefilter. A game's greedy turns value every legal move, about 22 × 500.
 
 | Setting | Per row | Per game of greedy turns |
 |---|---|---|
-| `K` = 50, `R` ≈ 6, `k` = 2 | ~600 | ~1.1K |
-| `K` = 50, `R` ≈ 6, `k` = 4 | ~1,200 | ~1.1K |
+| `K` = 50, `R` ≈ 6, `k` = 2 | ~600 | ~11K |
+| `K` = 50, `R` ≈ 6, `k` = 4 | ~1,200 | ~11K |
+| no prefilter in the plies, `R` ≈ 6, `k` = 2 | ~6K | ~11K |
 
-A search over 50 candidates costs about 30K evaluations at `k` = 2, so at one
-labeled turn per game the greedy turns are about 4% of the cost. **Labeling
-fewer turns per game is therefore nearly free, and it buys diversity**: a
-search's 50 sibling rows are already correlated, and more games is what adds
-new positions. `p` near 1/22 gives about one labeled turn per game. Lower is
-reasonable.
+**How many candidates enter the search** is a knob. Every root move already
+has the leaf's single evaluation, so the race can start from the leaf's
+ranking and take its best few. That is not a static-equity prefilter, so it
+does not bias the counts above.
+- Searching 50 candidates costs about 30K evaluations at `k` = 2. At one
+  labeled turn per game, the greedy turns are then about a quarter of the
+  cost.
+- Racing all ~500 root moves would cost about ten times as much per search,
+  cutting a generation to a few hundred labeled positions.
 
-**Per row, this is three to seven times today's cost.** What it buys:
+**Fewer labeled turns per game buys diversity.** A search's sibling rows are
+already correlated, and more games is what adds new positions. With the greedy
+turns at about a quarter of the cost, going below one labeled turn per game
+starts to cost real budget. `p` near 1/22, about one labeled turn per game, is
+the starting point.
+
+**Counting the games, a row costs about four to eight times today's.** At
+today's budget of about 70M evaluations, `k` = 2 with 50 candidates a search
+gives roughly 1,700 games and 85K rows a generation. What it buys:
 - **Lower variance.** The targets are averaged values instead of single 0/1
   game results. How much lower depends on the spread of the cutoff value from
   one draw to the next, which Phase 0 measures. If that spread were 0.15, six
@@ -165,9 +244,8 @@ reasonable.
   result.
 - **Siblings.** Each search yields rows for the moves that were not played.
 
-At today's budget of about 70M evaluations, `k` = 2 gives roughly 2,300 games
-and 115K rows a generation. `p`, `R`, `K` and the number of candidates per
-search trade rows against positions within any budget.
+`p`, `R`, `K` and the number of candidates per search trade rows against
+positions within any budget.
 
 **Bias.** A target that stops at the leaf's own value inherits the leaf's
 errors where it stopped. AlphaZero avoids this by training value on game
@@ -219,9 +297,9 @@ This replaces the generalized, non-singleton rollouts workload we discussed
 before: in a continuous run the column changes with every release, so it
 belongs with the per-release analysis.
 
-**Cost of the column.** Without THAN, the known positions hold about 8.8K
+**Cost of the column.** Without THAN, the known positions hold about 14.2K
 legal moves. With 16 first-round draws, `K` = 50 and `k` = 2, that is about
-14M evaluations, around 4 minutes of one GPU per analyzed generation; `k` = 4
+23M evaluations, around 6 minutes of one GPU per analyzed generation; `k` = 4
 is about twice that. Racing adds a little for the contenders.
 
 **Unchanged:**
@@ -230,8 +308,8 @@ is about twice that. Racing adds a little for the contenders.
 - Moving its `hasty_rollouts.json` from the repo into the tag is optional
   cleanup.
 
-**THAN** leaves the known positions. Its ~20,000 legal moves would be two
-thirds of every rollout bill, and the set exists to support the tab, not to
+**THAN** leaves the known positions. Its ~20,000 legal moves would be more
+than half of every rollout bill, and the set exists to support the tab, not to
 represent any distribution of positions.
 
 ## Phases
@@ -240,14 +318,14 @@ represent any distribution of positions.
    input does not exist yet. Measure:
    - the spread of the cutoff value from one draw to the next, at `k` = 2 and
      4;
-   - how often static equity's top `K` (and the move proposal model)
-     misses the all-moves best on self-play positions;
    - the distribution of legal-move counts;
-   - leaf throughput at the small batches a greedy turn makes.
-1. **Small changes now:** remove THAN; merge scz#544.
+   - leaf throughput at the batch sizes the greedy turns make.
+1. **Small changes now:** remove THAN (scz#546); merge scz#544 (done).
 2. **The belief-input leaf:**
-   - the format version 3 encoder;
+   - the format version 3 encoder, with the belief's summaries from
+     `LeaveSampler`'s pass;
    - the trainer's two modes on game-result targets;
+   - the join plane ablation, with and without;
    - belief-mode loss against LeafBot's 16-draw average on held-out
      positions.
 3. **The greedy player:** LeafBot in belief mode, one evaluation per
@@ -257,7 +335,8 @@ represent any distribution of positions.
    rows.
 5. **The new workload:**
    - generators follow releases and label turns with probability `p`;
-   - the trainer consumes the searched rows, with the game result mixed in.
+   - the trainer consumes the searched rows, with the game result mixed in;
+   - the prefilter counts and the kept misses.
 6. **The Positions tab:**
    - the opponent's rack per release;
    - the search columns from the measure role.
@@ -267,8 +346,9 @@ represent any distribution of positions.
 - **`k`, `R`, `K`, `p`,** and the number of candidates a search values
   against the budget. Phase 0's spread and prefilter measurements set the
   first values.
-- **The greedy turns' prefilter:** static equity's top `K`, the move
-  proposal model, or every legal move if a faster leaf makes that affordable.
+- **The prefilter stumps** beyond S1, and the `K` for S1 inside the search's
+  plies, chosen from the counts and the kept misses. The move proposal model
+  (docs/plans/sim_residual_feedback.md) is one candidate stump.
 - **The weight of the game result** in the played candidate's target.
 - **The leaf's architecture:** whether the speed of a conv leaf outweighs
   the transformer's quality once evaluations are the whole cost.
