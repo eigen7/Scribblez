@@ -108,9 +108,13 @@ every hook square.
   opponent holds rack *i*, and its value at the cutoff is a target for that
   world. That target is noisy, but it costs nothing extra.
 
-The trainer draws the two modes half and half. It computes the belief by
-replaying the game under its current leave inference model. That is the
-model the leaf is served with, and the trainer trains both models anyway.
+The trainer draws the two modes half and half. The belief comes from a
+`.belief` sidecar beside each `.slog` (decided 2026-11-25), since its summaries
+cost a pass over every leave, too much to repeat per row per epoch. For
+HastyBot's games the trainer writes it under the tag's pinned leave model. For
+DeepBot's own games DeepBot records the belief it acted on, so a row carries
+its own release's belief rather than the newest. The details are in
+[deep_bot_belief_leaf.md](deep_bot_belief_leaf.md#1-the-belief-sidecar).
 
 **Before any search exists,** the encoder change can be trained on
 today's game-result targets, which suit both modes. That checks that the
@@ -321,14 +325,15 @@ represent any distribution of positions.
 
 ## Phases
 
-0. **Measurements**, on release1's models. Leaves are drawn where the belief
-   input does not exist yet. Measure:
+0. **Measurements**, on the version 3 leaf of phase 2's runs (release1 was
+   deleted). Measure:
    - the spread of the cutoff value from one draw to the next, at `k` = 2 and
      4;
    - the distribution of legal-move counts;
    - leaf throughput at the batch sizes the greedy turns make.
 1. **Small changes now:** remove THAN (scz#546); merge scz#544 (done).
-2. **The belief-input leaf:**
+2. **The belief-input leaf**, sliced in
+   [deep_bot_belief_leaf.md](deep_bot_belief_leaf.md):
    - the format version 3 encoder, with the belief's summaries from
      `LeaveSampler`'s pass;
    - the trainer's two modes on game-result targets;

@@ -125,6 +125,11 @@ moved on. New plans go here, not in `docs/` proper.
 
 ## Cloud compute
 
+- **[deep_bot_belief_leaf.md](deep_bot_belief_leaf.md)**: *proposed,
+  plan-reviewed, not built.* DeepBot's phase 2 in four PRs: a `.belief`
+  sidecar written by the trainer under the pinned leave model, input format
+  version 3 in both encoders (the GPU path that serves the leaf stays), belief
+  mode with a held-out read against DeepBot's 16-draw average, and the runs.
 - **[cloud_training.md](cloud_training.md)**: *landed, partly superseded.*
   Running trainers on rented GPUs, several tags in parallel: the trainer's
   record/controls contract, the torch runtime and the bucket legs (all still
