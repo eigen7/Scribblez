@@ -35,7 +35,7 @@ same on every board. A context-aware network fixes this only if it can see
 that `ZEIN` is reachable here.
 
 The network cannot be trusted to work this out itself. The lexical-NN probe
-track ([lexical_nn.md](../lexical_nn.md),
+track (`docs/lexical_nn.md`, since deleted,
 [word_validity_experiments.md](../word_validity_experiments.md),
 [rack_best_experiments.md](../rack_best_experiments.md)) found that a plain
 network recovers a play's score and anchor geometry but fails to fill in the

@@ -237,16 +237,16 @@ it, chance nodes), which flows reach it.
 | scheme | root steering | steering below root | chance steering | action valuation | chance valuation | revision |
 |---|---|---|---|---|---|---|
 | Macondo BestBot | local (pruning) | fixed | fixed | local | local | no |
-| Scribblez `sim`, `neural-sim`, `mset-sim` | fixed (top K, simulated equally) | fixed | fixed | local | local | no |
+| Scribblez `sim`, `neural-sim` | fixed (top K, simulated equally) | fixed | fixed | local | local | no |
 | MCTS with UCT; AlphaZero | local | local | fixed | local | local | no |
 | MCTS with RAVE | sideways | sideways | fixed | sideways | local | no |
-| UltimateBot ([sim_residual_feedback.md](plans/sim_residual_feedback.md)) | sideways | fixed | fixed | sideways, for steering only | local | no |
+| [sim_residual_feedback.md](plans/sim_residual_feedback.md) | sideways | fixed | fixed | sideways, for steering only | local | no |
 | [rack_conditional_evidence.md](plans/rack_conditional_evidence.md) (proposed) | sideways | sideways, at ply one | sideways | sideways | sideways | yes |
 | the idealized agent above | sideways | sideways | sideways | sideways | sideways | yes |
 
-UltimateBot's sideways valuation prices unsimulated candidates from the
-simulated ones' evidence, and the price picks the next candidate. Its final
-pick is still each simulated candidate's own win rate.
+The sim_residual_feedback.md scheme's sideways valuation prices unsimulated
+candidates from the simulated ones' evidence, and the price picks the next
+candidate. Its final pick is still each simulated candidate's own win rate.
 
 ## BestBot: the simplest scheme
 

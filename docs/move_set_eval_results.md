@@ -162,8 +162,7 @@ position_eval tag, set `face_up_leaves`, add a worker of each role, and start
 them. The trainer waits for `warmup_pairs`, keeps pace with the generator
 while it runs, then spends its `train_epochs` budget on passes over the
 finished corpus, so the tag completes unattended
-([workloads/move_set_eval.py](../py/scribblez/workloads/move_set_eval.py),
-[move_set_eval/trainer.py](../py/scribblez/move_set_eval/trainer.py)). To
+(`workloads/move_set_eval.py`, `move_set_eval/trainer.py`). To
 reproduce this run's flat rate on today's trainer, set `optimizer=wsd`,
 `lr_warmup_rows=0`, and an `lr_cycle_rows` longer than the run.
 

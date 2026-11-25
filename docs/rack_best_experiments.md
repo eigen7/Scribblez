@@ -2,7 +2,7 @@
 
 The second experiment in the lexical-NN track, between word-validity
 ([word_validity_experiments.md](word_validity_experiments.md)) and
-max-move-per-lane ([lexical_nn.md](lexical_nn.md)). It was studied in two
+max-move-per-lane. It was studied in two
 versions of increasing difficulty:
 
 1. **Score only:** predict the *length* of the longest word formable from the

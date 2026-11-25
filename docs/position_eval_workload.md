@@ -6,10 +6,8 @@ is farmed out to any number of interchangeable workers, the GPU trainer runs
 as a singleton worker consuming their shared output, and the whole run is
 driven from the web UI.
 
-position_eval is described throughout. max_move_per_lane has the same shape
-with its own parameters and tabs, a local-only trainer, and no match_eval
-role. For why training is organized into generations at all, see
-[generational_training.md](generational_training.md).
+position_eval is described throughout. For why training is organized into
+generations at all, see [generational_training.md](generational_training.md).
 
 ## The workload-spec contract
 
@@ -139,8 +137,7 @@ closes simply join the next open generation.
 
 ## The trainer role
 
-`scribblez/position_eval/trainer.py` (and its max_move_per_lane sibling) owns
-the loop:
+`scribblez/position_eval/trainer.py` owns the loop:
 
 1. resume from the rolling checkpoint;
 2. wait for the cursor's generation to complete, sleep-polling its manifest

@@ -7,8 +7,7 @@ machinery and past measurements below still apply.
 
 [roadmap.md](roadmap.md) is an implementation plan and contains no
 experiments. This document holds the other half: the machinery that produces
-measurements, the measurements that already shaped the design, and the
-evaluation to run **once the roadmap's agent is built**.
+measurements and the measurements that already shaped the design.
 
 Evaluation runs after implementation, not between its steps. Nothing in the
 roadmap is gated on a result here.
@@ -156,34 +155,7 @@ what the per-pair storage gap above costs.
 
 The sweep existed to set a recall bar for the distilled filter. Its honest
 output is an upper bound (a recall miss is cheap) rather than a number, so
-nothing is gated on it, and the direct measurement below replaces it.
-
-## The evaluation to run when the build is done
-
-In rough order of what each answers.
-
-1. **The finished agent against BestBot**, face-up leaves, paired. The
-   headline number, and the one comparable to published results by the
-   BestBot argument above.
-2. **The finished agent against `--type=mset-sim`**, the same stack with the
-   evidence loop removed. This isolates what evidence conditioning and
-   adaptive scheduling buy, the central claim of
-   [plans/sim_residual_feedback.md](plans/sim_residual_feedback.md).
-3. **Budget curves.** Decision quality at a fixed rollout budget, and the
-   budget needed for a fixed decision quality, against a fixed-top-K schedule.
-   Sims dominate think time, so a 2× budget saving is a 2× stronger agent per
-   second. This is where the sequential loop's early stopping shows up.
-4. **The placement-plane ablation** (retired). The student no longer
-   predicts placement planes, so evidence tokens carry only the observed ones
-   and the `.mset` record is back to its value targets.
-5. **Rollout-ladder rungs**, each behind its `.sobs` flag: value truncation
-   against terminal rollouts, then self-model plies, then the endgame solver
-   on a slice with at most N tiles in the bag.
-6. **Whether the student can replace exact evaluation.** The distilled filter
-   against per-candidate exact evaluation at equal rollout budget. This is a
-   **non-inferiority** test: the student is ~13× cheaper per turn (measured:
-   497 moves/s against 38 at `--shortlist=0 --sim-top-k=1`), so a statistical
-   tie is a win, and the margin should be declared before the run.
+nothing is gated on it.
 
 ### Sizing
 

@@ -21,8 +21,7 @@ its data home (the tag's data plane, beside it) assembles its own
 generations, the controller relaying in the chunks of generators elsewhere,
 and its exports, records and checkpoint come out over ssh, collected like any
 slot's records and installed under the cursor rule
-([plans/cloud_training.md](plans/cloud_training.md)). A
-move_set_eval trainer runs only locally.
+([plans/cloud_training.md](plans/cloud_training.md)).
 
 ## Architecture
 
@@ -158,8 +157,8 @@ mistaken for the role's terminal condition.
 ### Out-of-tag inputs
 
 `RoleSpec.inputs`. A role that reads a file outside its own tag (the
-move_set_eval generator's teacher, a position_eval export) names it under a
-tag-relative key. A local worker reads the source in place. For a remote
+pinned leave inference export deep_bot_leaf_eval's match role reads) names it
+under a tag-relative key. A local worker reads the source in place. For a remote
 slot, the controller pushes a copy into the container over the control link
 right after creating it, and the runner waits for it there
 (`workloads.base.resolve_input`).
@@ -172,8 +171,7 @@ collects from it over the control link (`py/cloud/ssh_transfer.py`): its data
 merging with locally generated data for the same tag, its records (stats,
 params) and a trainer's outputs (records, exports, its checkpoint and cursor
 as a state pair). A generator cannot count a store it never sees whole, so a
-target on the store's size (blind_spots' positions, move_set_eval's pairs)
-is enforced by the workload's scheduler tick on the controller. For a tag
+target on the store's size (blind_spots' positions) is enforced by the workload's scheduler tick on the controller. For a tag
 whose data home is an ssh machine, each pull from its trainer is followed by
 two more legs: the chunks collected from its other generators are relayed on
 into the home's staging, and the home's complete generations are copied

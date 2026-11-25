@@ -761,7 +761,7 @@ Inputs are rebuilt by replay, as `move_set_eval`'s trainer does. The pool's
 `ffi.policy_set_positions`, which returns the board rows, the
 [opponent-rack input](#the-opponent-rack-input) and every per-move input,
 encoded by the engine code PolicyBot plays with
-([policy_set_inputs.h](../../engine/include/training/policy_set_inputs.h)).
+(`policy_set_inputs.h`).
 The process runs in the hidden-leaves arm (`ffi.set_opp_leave_input`, adopted
 from a header flag in the pool sidecar). No legal-move enumeration is needed,
 because the pool lists the candidates. The opponent-rack belief comes from
@@ -781,7 +781,7 @@ that builds the board rows (`ffi.policy_set_positions`).
 
 **Form 1, `greedy`:** a set-conditioning stage plus a gain head.
 - The stage is the evidence-fusion stage's set half with chosen-move tokens
-  ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)): the tokens
+  (`evidence_fusion.py`): the tokens
   self-attend, the board tokens cross-attend into them, and zero-initialized
   projections write back, so an empty set leaves the plain model. The
   fusion's observation channels have no counterpart, since chosen moves are

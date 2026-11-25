@@ -22,14 +22,15 @@ decision. In particular:
 - Development runs in the face-up-leaves variant, which parks the belief
   system (§3) and everything downstream of it. Nothing else here depends on
   the information condition.
-- The Q-head (§4) is realized as a separate network, the move set evaluation
+- The Q-head (§4) is planned as a separate network, the move set evaluation
   model, distilled from the V-head, which is realized as the position
   evaluation model ([model_architectures.md](model_architectures.md)).
-- The root search (§5) is a sequential evidence loop: a learned proves-best
-  head picks each next candidate to simulate, conditioned on the sims so far,
-  instead of simulating a fixed top `K`. Rollouts are played by HastyBot and
-  cut off at a horizon where the position evaluation model takes over; the
-  Q-head playing inside rollouts is the later D2 rung.
+- The root search (§5) was built as a sequential evidence loop, now on
+  hiatus: a learned proves-best head picked each next candidate to simulate,
+  conditioned on the sims so far, instead of simulating a fixed top `K`.
+  Rollouts are played by HastyBot and cut off at a horizon where the position
+  evaluation model takes over; the Q-head playing inside rollouts is the later
+  D2 rung.
 
 ## 1. Introduction and motivation
 

@@ -96,7 +96,7 @@ One turn:
    opponent-history tokens. The board tokens, candidate encodings and prior
    predictions are what the item-3 cache graph already computes once per turn
    (`MoveProposalService`,
-   [move_proposal_service.h](../../engine/include/agent/move_proposal_service.h)),
+   `move_proposal_service.h`),
    so the root prefix reuses that runtime. Its evidence-fusion step graph is
    not used.
 2. **Probe.** Walk from the root to a leaf. At each node, ask the network for
@@ -169,7 +169,7 @@ tokens in the context. So the list is used in two ways:
 
 Full generation and scoring every legal move at a node is not new: UltimateBot
 does it at the root today (`equity_top_k` with no limit, then
-`encode_candidates`, [ultimate_bot_agent.cpp](../../engine/src/agent/ultimate_bot_agent.cpp)).
+`encode_candidates`, `ultimate_bot_agent.cpp`).
 
 The played move always enters the context as its action step, so the record
 covers everything any probe actually played. The subset only has to cover the
@@ -197,7 +197,7 @@ differs. An option token carries only what the board determines: placement,
 tiles, tile count and score. Leave and equity depend on the rack, so they are
 not in the token; the reader derives them from the move's tiles and the rack
 it is asking about, as the student already does for leaves
-([move_set_encoder.h](../../engine/include/training/move_set_encoder.h)). So at
+(`move_set_encoder.h`). So at
 a shared board each distinct move is recorded once, the first time any rack's
 selection includes it.
 

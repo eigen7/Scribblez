@@ -24,9 +24,8 @@ decision, in [plans/](plans/README.md)).
   where information flows sideways and backward. The motivation behind the
   sim-evidence and sim-labeled-candidates plans.
 - **[evaluation_plan.md](evaluation_plan.md)**: the measurement half. What past
-  measurements established, the match and evaluation machinery and its known
-  gaps, and the evaluation planned for the evidence-loop agent, now on
-  hiatus. SupremeBot's measurements live in its own build order.
+  measurements established, and the match and evaluation machinery and its
+  known gaps. SupremeBot's measurements live in its own build order.
 
 ## The system as built
 
@@ -36,9 +35,8 @@ Data and models:
   training row. The component chain, the `.slog` format, the
   replay-reconstruction invariant, random openings, seeding.
 - **[model_architectures.md](model_architectures.md)**: wiring diagrams and
-  loss tables for the two trained networks and the spatial trunk they share,
-  including the evidence fusion stage, the proves-best head, and the
-  evidence-path ONNX split.
+  loss tables for the position evaluation network and the spatial trunk the
+  trained networks share.
 
 Training:
 
@@ -63,16 +61,15 @@ Dashboard and compute:
   workload-specific analysis tabs.
 - **[react_dashboard.md](react_dashboard.md)**: the dashboard's
   implementation. A React shell over a Python data API, embedded Bokeh metric
-  figures, and the interactive Positions, Trajectories and Lane analysis tabs.
+  figures, and the interactive Positions tab.
 - **[cloud_compute.md](cloud_compute.md)**: how work runs on machines
   Scribblez does not own. The dependency-only worker image, per-arch code
   bundles copied into each container, and the ssh collection that brings
   results back to the local mount so analysis runs unchanged.
 - **[blind_spots.md](blind_spots.md)**: collecting positions where a play from
   outside HastyBot's top moves out-sims all of them. Running the `blind_spots`
-  workload across a fleet, what workers deliver, turning a tag into a
-  committed examples directory, and confirming hidden-leaves blind spots from
-  labeled pools on the GPU (`blind_spot_confirm_tool`).
+  workload across a fleet, what workers deliver, and turning a tag into a
+  committed examples directory.
 
 ## Results
 
@@ -84,18 +81,20 @@ Dashboard and compute:
 - **[move_set_eval_results.md](move_set_eval_results.md)**: the v1 (A3) curves.
   How well the distilled candidate filter reproduces the teacher's ranking on
   a full-sweep held-out slice, against the static-equity shortlist, and what
-  the numbers do and do not establish.
+  the numbers do and do not establish. The move set evaluation code has since
+  been removed.
 - **[move_set_eval_v2_results.md](move_set_eval_v2_results.md)**: the run that
   closed roadmap item 1. The first corpus with per-candidate placement planes
   and the student trained on them, against the v1 curves and the static-equity
-  shortlist.
+  shortlist. Its code has since been removed.
 - **[deep_bot_leaf_eval_results.md](deep_bot_leaf_eval_results.md)**: the
   DeepBot rollout-leaf model's first runs. Transformer against conv trunk,
   with and without the join planes, against the win table. The TensorRT
   throughput sweep behind the model's size, and why the conv trunk is the one
   to serve.
 - **[sim_obs_experiment_results.md](sim_obs_experiment_results.md)**: the
-  sim-evidence kill-test. Its numbers, controls and verdict (pass).
+  sim-evidence kill-test. Its numbers, controls and verdict (pass). The
+  sim-observation code it ran on has since been removed.
 - **[film_conditioning_results.md](film_conditioning_results.md)**: the
   `use_film` post-mortem. FiLM makes the leave-to-cross-check binding
   expressible, and the gate engages, but it does not close the gap on the
@@ -118,7 +117,8 @@ Dashboard and compute:
   down HastyBot's ranking out-sims its top ten. What each winning move is
   doing (hook setups for a held tile, fishing when far behind, who empties
   the bag, late exchanges), and which verdicts lean on the rollout opponent
-  never passing or blocking.
+  never passing or blocking. The GPU workload that collected the set has since
+  been removed.
 
 ## Plans and design proposals
 
@@ -181,8 +181,6 @@ are what justify giving the value models engineered lexical features instead
 - **[rack_best_experiments.md](rack_best_experiments.md)**: experiment 2, the
   best word in an unordered rack. The anagram tool wins where the ordered walk
   fails, and generation is genuinely harder than discrimination.
-- **[lexical_nn.md](lexical_nn.md)**: experiment 3, the max-move-per-lane board
-  task (per-lane best-move and score heads on a CNN plus a lane transformer).
 
 ## Images
 
