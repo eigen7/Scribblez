@@ -39,6 +39,7 @@ from scribblez.paths import TagPaths  # noqa: E402
 from scribblez.position_eval.train_loop import run_epoch  # noqa: E402
 from scribblez.trunk_arms import TRUNKS  # noqa: E402
 from scribblez.workloads import deep_bot_leaf_eval  # noqa: E402
+from scribblez.workloads.base import TRT_WORKSPACE_GB  # noqa: E402
 
 TASK = unit.TASK
 
@@ -306,10 +307,11 @@ def test_the_layout_and_gpu_table_make_the_default_arms_queueable():
     ]
     off = dataclasses.replace(params, match_every_generations=0)
     assert [p.role for p in deep_bot_leaf_eval.layout(off, 28, None)] == ["train", "generate"]
-    headroom = deep_bot_leaf_eval.TRAINER_GPU_HEADROOM_GB
+    # The trainer's peak, then the belief tool's beside it, cold.
+    extra = 0.5 + TRT_WORKSPACE_GB + deep_bot_leaf_eval.TRAINER_GPU_HEADROOM_GB
     for trunk, peak in (("transformer", 1.76), ("conv", 1.01)):
         arm = dataclasses.replace(params, trunk=trunk, join_planes=False)
-        assert deep_bot_leaf_eval.gpu_need(arm, "train") == peak + headroom
+        assert deep_bot_leaf_eval.gpu_need(arm, "train") == pytest.approx(peak + extra)
     assert deep_bot_leaf_eval.gpu_need(params, "generate") == 0.0
     # Unmeasured: a wider model.
     assert deep_bot_leaf_eval.gpu_need(dataclasses.replace(params, width=128), "train") is None

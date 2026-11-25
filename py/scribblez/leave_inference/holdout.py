@@ -13,7 +13,9 @@ two never share games.
 
 Each .slog gets its .forgone sidecar, as the generators' chunks do. The tool
 is deterministic and its output leaves out sampled_turn, so the content hash
-covers the sidecars as written.
+covers the sidecars as written. It leaves out every other sidecar a trainer
+adds, deep_bot_leaf_eval's .belief, whose model runs through TensorRT and so
+differs in its last bits from one GPU to another.
 """
 
 import hashlib

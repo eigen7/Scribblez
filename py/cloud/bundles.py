@@ -51,6 +51,8 @@ from scribblez.paths import EVAL_POSITIONS_DIRS, REPO_ROOT
 BUNDLE_BINARY_NAMES = [
     "play_game",
     "forgone_play_tool",
+    # deep_bot_leaf_eval's trainer writes its .belief sidecars with it.
+    "belief_sidecar_tool",
     # One-shot: migrates a worker's v10 .slog corpora (apps/slog_migrate_v11.cpp).
     "slog_migrate_v11",
     # The blind_spots generator's survey.

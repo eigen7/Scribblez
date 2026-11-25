@@ -10,11 +10,16 @@ trains one epoch per generation over a sliding window, hosting the tag's data
 home. Self-play has no random openings, so every eligible turn's outcome
 follows the policy alone.
 
+The tag's beliefs about the opponent's leave are one leave inference model's,
+pinned at task creation (`leave_inference_tag`, `leave_inference_generation`).
+The trainer writes each generation's and the held-out games' .belief sidecars
+under it before training on them (deep_bot_leaf_eval/beliefs.py), and the
+matches draw DeepBot's opponent leaves from it.
+
 The match_eval role (scribblez/match_eval) plays every
 `match_every_generations`th export as DeepBot (engine agent/deep_bot.h, the
 leaf network valuing HastyBot's best moves with no search) against a fixed
-opponent, its opponent leaves drawn from a leave inference model pinned at
-task creation (`leave_inference_tag`, `leave_inference_generation`).
+opponent.
 After each match the slot analyzes the known positions under the same export
 (deep_bot_leaf_eval/positions.py), which the Positions tab shows, over more
 opponent leaves (`analysis_opp_leaves`) than the matches can afford. The
@@ -37,6 +42,7 @@ from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.trunk_arms import NORMALIZE_SCALAR_HELP, TRUNK_CONV, TRUNK_TRANSFORMER, TRUNKS
 from scribblez.workloads import known_position_inputs, positions_backfill
 from scribblez.workloads.base import (
+    TRT_WORKSPACE_GB,
     RoleSpec,
     SlotPlan,
     StatsSpec,
@@ -49,8 +55,15 @@ from scribblez.workloads.position_eval import TRAINER_STATS
 from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, generate, hasty_spec
 
 LEAVE_INFERENCE = "leave_inference"
-# Where a remote match slot finds the pinned leave inference model.
+# Where a remote trainer or match slot finds the pinned leave inference model.
 LEAVE_INPUT = "inputs/leave_inference.onnx"
+
+# position_eval's, plus the writing of each generation's sidecars.
+LEAF_TRAINER_STATS = StatsSpec(
+    unit=TRAINER_STATS.unit,
+    phases={**TRAINER_STATS.phases, "sidecar_s": "sidecars"},
+    background=TRAINER_STATS.background,
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +144,17 @@ class DeepBotLeafEvalParams:
     depth: int = param(4, "transformer layers, or conv residual blocks")
     num_heads: int = param(2, "transformer attention heads (head dim = width / heads)")
     normalize_scalar: bool = param(True, f"conv trunk: {NORMALIZE_SCALAR_HELP}")
+    # The beliefs' leave inference model.
+    leave_inference_tag: str = param(
+        "",
+        "the leave_inference tag whose model the tag's beliefs are under: the trainer's .belief "
+        "sidecars and DeepBot's opponent leaves in the matches; required",
+    )
+    leave_inference_generation: int = param(
+        -1,
+        "which generation of leave_inference_tag (-1: its latest export, pinned at task "
+        "creation), the same for the whole tag",
+    )
     # Match eval (the match_eval role): DeepBot against a fixed opponent.
     match_every_generations: int = param(
         10, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
@@ -145,16 +169,6 @@ class DeepBotLeafEvalParams:
         1,
         "base game seed for matches, fixed per tag so every generation faces identical deals; "
         "must be nonzero",
-    )
-    leave_inference_tag: str = param(
-        "",
-        "the leave_inference tag whose model draws DeepBot's opponent leaves; required while "
-        "matches are on",
-    )
-    leave_inference_generation: int = param(
-        -1,
-        "which generation of leave_inference_tag (-1: its latest export, pinned at task "
-        "creation), the same for every match of the tag",
     )
     match_candidates: int = param(10, "DeepBot's candidates: HastyBot's best by static equity")
     match_opp_leaves: int = param(
@@ -184,6 +198,13 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 _MEASURED_GB = {TRUNK_TRANSFORMER: 1.76, TRUNK_CONV: 1.01}
 # The params the measurements held fixed, at their defaults.
 TRAINER_GPU_KEY = ("batch_size", "width", "depth", "num_heads")
+# belief_sidecar_tool, which the trainer runs beside its own allocations before
+# each generation (deep_bot_leaf_eval/beliefs.py): 0.45 GiB over the GPU's
+# baseline at 5 Hz nvidia-smi sampling, its plan cached, over 1000 held-out
+# games with 16 draws (2026-11-25, RTX 5000 Ada), rounded up for the samples'
+# gaps. Without the plan it first builds it, its scratch capped at
+# TRT_WORKSPACE_GB.
+_BELIEF_TOOL_MEASURED_GB = 0.5
 # Match eval: DeepBot (a 64x4 leaf, a leave_inference export) against
 # HastyBot-endgame, its two TensorRT plans already cached, on the RTX 5000 Ada
 # (2026-11-17): the conv leaf at 28 threads over 1000 pairs peaked at 1.77 GiB,
@@ -210,7 +231,12 @@ def gpu_need(params, role: str) -> float | None:
     defaults = DeepBotLeafEvalParams()
     if any(getattr(params, k) != getattr(defaults, k) for k in TRAINER_GPU_KEY):
         return None
-    return _MEASURED_GB[params.trunk] + TRAINER_GPU_HEADROOM_GB
+    return (
+        _MEASURED_GB[params.trunk]
+        + _BELIEF_TOOL_MEASURED_GB
+        + TRT_WORKSPACE_GB
+        + TRAINER_GPU_HEADROOM_GB
+    )
 
 
 def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
@@ -227,14 +253,10 @@ def _leave_paths(params, mount_root: Path) -> TagPaths:
 
 
 def finalize(spec, paths: TagPaths, params):
-    """Pin the matches' leave inference model to a concrete generation at task
+    """Pin the tag's leave inference model to a concrete generation at task
     creation, failing here, where the operator sees it, if it has no export."""
-    if params.match_every_generations <= 0:
-        return params
     if not params.leave_inference_tag:
-        raise params_mod.ParamsError(
-            "matches need leave_inference_tag (or match_every_generations=0)"
-        )
+        raise params_mod.ParamsError("leave_inference_tag is required")
     leave = pinned_generation(
         _leave_paths(params, paths.mount_root),
         params.leave_inference_generation,
@@ -244,17 +266,23 @@ def finalize(spec, paths: TagPaths, params):
 
 
 def leave_model_path(params, mount_root: Path) -> Path:
-    """The matches' leave inference model on the controller's mount."""
+    """The tag's pinned leave inference model on the controller's mount."""
     paths = _leave_paths(params, mount_root)
     return paths.onnx_path(
         export_generation(paths, params.leave_inference_generation, "leave_inference")
     )
 
 
+def train_inputs(params, mount_root: Path) -> dict[str, Path]:
+    """The train role's out-of-tag input: the pinned leave inference model,
+    which its .belief sidecars are under."""
+    return {LEAVE_INPUT: leave_model_path(params, mount_root)}
+
+
 def inputs(params, mount_root: Path) -> dict[str, Path]:
     """The match_eval role's out-of-tag inputs: the pinned leave inference
     model and the known positions."""
-    return {LEAVE_INPUT: leave_model_path(params, mount_root), **known_position_inputs.inputs()}
+    return {**train_inputs(params, mount_root), **known_position_inputs.inputs()}
 
 
 def deepbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
@@ -304,8 +332,8 @@ def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
 
 def belief_model(paths: TagPaths, params) -> tuple[Path, str]:
     """The leave inference model the Positions tab charts the opponent's rack
-    under, and its label: the matches' pinned one."""
-    label = f"{params.leave_inference_tag} gen {params.leave_inference_generation}, the matches'"
+    under, and its label: the tag's pinned one."""
+    label = f"{params.leave_inference_tag} gen {params.leave_inference_generation}, the tag's"
     return leave_model_path(params, paths.mount_root), label
 
 
@@ -335,10 +363,11 @@ SPEC = WorkloadSpec(
             runner="scribblez.deep_bot_leaf_eval.trainer:run",
             runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
+            inputs="scribblez.workloads.deep_bot_leaf_eval:train_inputs",
             singleton=True,
             kinds=("local", "ssh"),
             gpu=True,
-            stats=TRAINER_STATS,
+            stats=LEAF_TRAINER_STATS,
         ),
         RoleSpec(
             name="match_eval",
