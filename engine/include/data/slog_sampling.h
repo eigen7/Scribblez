@@ -82,6 +82,10 @@ struct PendingSlog {
 std::vector<std::filesystem::path> resolve_slog_inputs(const std::string& slog_dir,
                                                        const std::vector<std::string>& slog_files);
 
+// The bytes of the .slog at `path`. Throws util::CleanException for anything
+// that is not a .slog of this format version.
+std::vector<char> load_slog_input(const std::filesystem::path& path);
+
 // Loads every input that has no `sidecar_ext` sidecar yet, skipping (with a
 // note on stderr) files with a bad header. A face-up-leaves .slog when
 // !accept_face_up throws util::CleanException, with `face_up_error` formatted

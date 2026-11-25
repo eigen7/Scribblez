@@ -81,6 +81,7 @@ add_library(scribblez_core STATIC
   src/belief/forgone_plays.cpp
   src/belief/leave_prior.cpp
   src/belief/leave_sampler.cpp
+  src/belief/leave_draws.cpp
   src/belief/leave_query.cpp
   src/belief/reply_query.cpp
   src/belief/leave_history_recorder.cpp
