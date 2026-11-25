@@ -202,11 +202,7 @@
     "source": "the hidden_blind_spots tag v1 (/workspace/mount/tags/hidden_blind_spots/v1)",
     "origin": "hidden_blind_spots v1 1792935012079129504-local-0-g37-turn19",
     "reference": [
-      "J11 DINER",
-      "J12 IRED",
-      "14F CIN.ER.D",
-      "14G RI.",
-      "J13 REI"
+      "J11 DINER"
     ],
     "reference_equity_rank": 37,
     "evidence": "David's reading and a 5,000-rollout sim against HastyBot: it beats the best of HastyBot's top 10 by 13.3 +- 0.5 points of win %; the other four references, which also block the S hook at I15 (LAKEBEDS) into the triple word square at H15, sim the same",
