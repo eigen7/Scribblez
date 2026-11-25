@@ -16,7 +16,7 @@ in four parts:
 - **A search plays each candidate a few plies on with the greedy policy**,
   over sampled opponent racks, and stops at the leaf's value. There are no
   HastyBot plies anywhere.
-- **Generators play the newest release**, as the deleted deep_bot's did. The
+- **Generators play the newest release**, as SubtreeBot's generations workload's did. The
   training window spans many releases.
 
 The Positions tab follows. It drops the hasty rollouts for the same search
@@ -125,7 +125,7 @@ about once.
 **Proposed:** each turn is a labeled turn with probability `p`. This is
 KataGo's playout cap randomization, applied here: search on a random fraction
 of turns, which alone make training rows, and cheap play everywhere else.
-The deleted deep_bot workload did a version of this for its policy data
+SubtreeBot's generations workload did a version of this for its policy data
 (`pool_positions_per_game`).
 
 **A greedy turn** values every legal move under the belief-input leaf and
@@ -273,13 +273,15 @@ The mixing weight is a knob to measure, not a fixed choice.
 
 ## Continuous training
 
-Generators take the tag's newest release, as the deleted deep_bot workload's
-generators did (workloads/deep_bot.py, in git history), rather than release 0
+Generators take the tag's newest release, as SubtreeBot's generations
+workload did (subtree_bot_generations.md; its code is in git history as
+workloads/deep_bot.py), rather than release 0
 for the tag's life. The
 trainer's window spans the recent generations whatever release produced
 them, and each row records its release.
 
-This is a new workload: deep_bot_generation's definition is a fixed policy.
+This is a new workload, `deep_bot`: deep_bot_generation's definition is a
+fixed policy.
 
 ## The Positions tab
 

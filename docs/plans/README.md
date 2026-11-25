@@ -114,7 +114,7 @@ moved on. New plans go here, not in `docs/` proper.
   inside the network. The contingent-draw potential map was built and
   deleted; the post-move cross-check delta has an encoder and a diagnostic
   but is not yet a model input.
-- **[leaf_bot_continuous.md](leaf_bot_continuous.md)**: *proposed, not
+- **[deep_bot.md](deep_bot.md)**: *proposed, not
   built.* DeepBot trained AlphaZero-style. The leaf takes the opponent's leave
   as a belief or a concrete leave, with half its rows hiding the leave.
   Self-play plays the leaf's greedy move at most turns and searches a random
