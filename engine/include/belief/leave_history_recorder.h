@@ -10,7 +10,7 @@
 // own last two exchanges. It never reads which tiles an opponent's exchange
 // returned, which only the game knows.
 //
-// LeafBot keeps one: its own_query is the mover's belief about the opponent's
+// DeepBot keeps one: its own_query is the mover's belief about the opponent's
 // leave. own_moves fed belief::ReplyView, the opponent's view of a candidate,
 // for SubtreeBot (docs/plans/subtree_bot.md).
 

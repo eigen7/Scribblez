@@ -70,7 +70,7 @@ add_library(scribblez_core STATIC
   src/sim/rollout_values.cpp
   src/sim/sim_maps.cpp
   src/agent/best_bot.cpp
-  src/agent/leaf_bot.cpp
+  src/agent/deep_bot.cpp
   src/agent/candidate_evaluator.cpp
   # A GPU-free decorator over the EvalService interface, so it lives here and is
   # unit-tested against a scripted stub.
@@ -194,7 +194,7 @@ find_library(ONNX_PROTO_LIB onnx_proto REQUIRED)
 target_compile_definitions(scribblez_nn PRIVATE ONNX_ML=1)
 target_link_libraries(scribblez_nn PUBLIC ${ONNX_PROTO_LIB} protobuf::libprotobuf)
 
-# The model-driven agents (NeuralAgent, NeuralSimAgent), LeafBot's factory,
+# The model-driven agents (NeuralAgent, NeuralSimAgent), DeepBot's factory,
 # and SimAgent's factory, which can load a leaf model: every agent source that reaches
 # TensorRT, kept out of scribblez_core for the same reason as scribblez_nn.
 # Every consumer that parses --player specs links it.
@@ -208,7 +208,7 @@ add_library(scribblez_neural_agents STATIC
   src/agent/neural_service_options.cpp
   src/agent/neural_sim_agent.cpp
   src/agent/neural_sim_agent_factory.cpp
-  src/agent/leaf_bot_factory.cpp)
+  src/agent/deep_bot_factory.cpp)
 set_target_properties(scribblez_neural_agents PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(scribblez_neural_agents PUBLIC
   scribblez_core
@@ -431,7 +431,7 @@ if(SCRIBBLEZ_BUILD_TESTS)
   add_executable(search_tests
     tests/test_best_bot.cpp
     tests/test_endgame.cpp
-    tests/test_leaf_bot.cpp
+    tests/test_deep_bot.cpp
     tests/test_endgame_agent.cpp
     tests/test_leave_belief_sims.cpp
     tests/test_monte_carlo_sim.cpp

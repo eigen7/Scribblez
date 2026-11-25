@@ -1,5 +1,5 @@
 """The hasty rollouts of a known position: each legal move's win value when
-the game is played out from it by hastybot-endgame. LeafBot computes them
+the game is played out from it by hastybot-endgame. DeepBot computes them
 over its monte-carlo leaf (engine sim/monte_carlo_leaf_values.h), playing
 each move out to the game's end once against each of many opponent leaves
 drawn from the leave inference model's belief.
@@ -7,7 +7,7 @@ drawn from the leave inference model's belief.
 They are what a deep_bot_leaf_eval leaf would value the moves at if it
 learned its targets, HastyBot's self-play, perfectly. They are not the moves'
 true values: another continuation would value them otherwise, and a leaf
-trained on other games (leaf_bot_generation's, LeafBot's own) targets that
+trained on other games (leaf_bot_generation's, DeepBot's own) targets that
 continuation instead. They value a move over the whole belief, where the
 network's analysis (positions.py) values it over a few draws; their leaves
 are drawn as the analysis draws them (the same model and ANALYSIS_SEED),
@@ -35,7 +35,7 @@ from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 ROLLOUTS_DIR = "hasty_rollouts"
 # The repo's copy, which the Positions tab reads.
 ROLLOUTS_FILE = known_positions.DIRECTORY / "hasty_rollouts.json"
-# LeafBot's leaf that plays out instead of predicting (LeafBot::kMonteCarloLeaf).
+# DeepBot's leaf that plays out instead of predicting (DeepBot::kMonteCarloLeaf).
 MONTE_CARLO_LEAF = "monte-carlo"
 
 

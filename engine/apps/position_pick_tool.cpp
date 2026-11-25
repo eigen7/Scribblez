@@ -5,7 +5,7 @@
 // known positions (py/scribblez/deep_bot/known_positions.py).
 //
 //   position_pick_tool --positions list.txt --out picks.jsonl
-//     --player "--type=leafbot-endgame --leaf-model leaf.onnx --leave-inference leave.onnx"
+//     --player "--type=deepbot-endgame --leaf-model leaf.onnx --leave-inference leave.onnx"
 //
 // --positions names a file of lines "<.slog path> <game> <turn>", both
 // 0-based; the agent takes the seat that moved at the turn. --out gets a JSON

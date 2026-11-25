@@ -6,7 +6,7 @@
 // rules of the self-play the leaf network trains on
 // (py/scribblez/workloads/deep_bot_leaf_eval.py). Its mean over many leaves
 // is, up to the playouts' noise, the mean of what a perfect leaf network would
-// predict at them, so LeafBot over it, with each opponent leave drawn its own
+// predict at them, so DeepBot over it, with each opponent leave drawn its own
 // playout (noisy()), values each candidate as a perfect network would over the
 // whole belief (the leaf_eval_hasty_rollouts workload).
 //
@@ -15,7 +15,7 @@
 // then plays to the game's end, the opponent first. An exchange's tiles are in
 // the pool from the start, as the network sees them. The playout of a call's
 // leaf i is seeded by i + 1, so the values are deterministic and repeats of a
-// leaf within a call (LeafBot asks each candidate's draws in one) are played
+// leaf within a call (DeepBot asks each candidate's draws in one) are played
 // out apart.
 
 #include "sim/rollout_values.h"

@@ -1,6 +1,6 @@
 """The leaf_bot_generation workload's trainer and measure sides
-(workloads/leaf_bot_generation.py): one generation step of LeafBot, its leave
-inference model and leaf network trained on LeafBot's own self-play."""
+(workloads/leaf_bot_generation.py): one generation step of DeepBot, its leave
+inference model and leaf network trained on DeepBot's own self-play."""
 
 from scribblez.deep_bot import LEAF, LEAVE
 from scribblez.deep_bot.release import Layout

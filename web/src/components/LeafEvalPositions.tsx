@@ -12,10 +12,10 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 
 // deep_bot_leaf_eval's Positions tab: one known position at a time under one
 // generation's leaf network, as the match slot analyzed it after that
-// generation's match (py/scribblez/deep_bot_leaf_eval/positions.py). LeafBot's
+// generation's match (py/scribblez/deep_bot_leaf_eval/positions.py). DeepBot's
 // value of every legal move (the leaf's win value after the
 // move, its mean over opponent leaves from the leave inference model), and
-// the move the matches' LeafBot plays: the best of HastyBot's top candidates.
+// the move the matches' DeepBot plays: the best of HastyBot's top candidates.
 // Where the repo holds the position's hasty rollouts (py/scribblez/
 // deep_bot_leaf_eval/hasty_rollouts.py: each move played out to the game's end
 // by HastyBot, what a leaf trained on HastyBot's self-play should value it
@@ -137,7 +137,7 @@ function ValueTable({
       <div className="dbp-panel-title">Leaf · generation {p.generation}</div>
       <div className="dbp-note">
         {p.num_values} moves, best first by the leaf&apos;s win value after the move (its mean over
-        the opponent&apos;s leaves from the leave inference model). The matches&apos; LeafBot chooses among
+        the opponent&apos;s leaves from the leave inference model). The matches&apos; DeepBot chooses among
         HastyBot&apos;s top {p.candidates} by static equity.
       </div>
       {p.rollouts && <RolloutsNote t={p.rollouts} />}

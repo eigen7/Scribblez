@@ -1,6 +1,6 @@
-"""The leaf_bot_generation workload: one generation step of LeafBot, taken by
+"""The leaf_bot_generation workload: one generation step of DeepBot, taken by
 hand. A tag starts from a leave inference model and a leaf network (its
-seeds), plays LeafBot on them against itself, and trains both models on
+seeds), plays DeepBot on them against itself, and trains both models on
 those games, warm-started from the seeds. The next step is a new tag seeded
 from this one's checkpoint, once the operator judges this one done.
 
@@ -17,7 +17,7 @@ trains both models on it, and publishes them together as the next release
 (deep_bot/release.py).
 
 The measure role's slots, any number of them, play each due release as
-LeafBot against HastyBot and against release 0, and analyze the known
+DeepBot against HastyBot and against release 0, and analyze the known
 positions under it for the Positions tab, one match to a slot at a time
 (scribblez/leaf_bot_generation/measure_dispatch.py). The backfill role adds
 the positions the manifest gains later to the analyses already made
@@ -66,17 +66,17 @@ class LeafBotGenerationParams:
     seed_leaf_tag: str = param(
         "", "deep_bot_leaf_eval tag the leaf network starts from, when seed_tag is empty"
     )
-    # Self-play: LeafBot on release 0, the seeds' exports, in both seats.
+    # Self-play: DeepBot on release 0, the seeds' exports, in both seats.
     games_per_generation: int = param(20000, "self-play games per generation")
     open_ahead: int = param(
         4, "generations kept open ahead of the trainer's cursor before generators are parked"
     )
     selfplay_candidates: int = param(
-        10, "the self-play LeafBot's candidates: HastyBot's best by static equity"
+        10, "the self-play DeepBot's candidates: HastyBot's best by static equity"
     )
     selfplay_opp_leaves: int = param(
         16,
-        "the opponent's leaves the self-play LeafBot values each candidate over, drawn from the "
+        "the opponent's leaves the self-play DeepBot values each candidate over, drawn from the "
         "belief",
     )
     # Training windows, in generations ending at the cursor. 4 x 5 trains each
@@ -107,10 +107,10 @@ class LeafBotGenerationParams:
     )
     match_seed: int = param(1, "the matches' first game seed (not 0)")
     match_candidates: int = param(
-        10, "the matches' LeafBot's candidates: HastyBot's best by static equity"
+        10, "the matches' DeepBot's candidates: HastyBot's best by static equity"
     )
     match_opp_leaves: int = param(
-        16, "the opponent's leaves the matches' LeafBot values each candidate over"
+        16, "the opponent's leaves the matches' DeepBot values each candidate over"
     )
     analysis_opp_leaves: int = param(
         128, "the opponent's leaves the Positions tab's analysis values each move over"
@@ -138,20 +138,20 @@ class LeafBotGenerationParams:
         return max(self.leave_window, self.leaf_window)
 
 
-def leafbot_spec(leaf: Path, leave: Path, candidates: int, opp_leaves: int) -> str:
-    """The --player spec of LeafBot, endgame solved, on a release's leaf
+def deepbot_spec(leaf: Path, leave: Path, candidates: int, opp_leaves: int) -> str:
+    """The --player spec of DeepBot, endgame solved, on a release's leaf
     network and leave inference model."""
     return (
-        f"--type=leafbot-endgame --leaf-model={leaf} --leave-inference={leave} "
+        f"--type=deepbot-endgame --leaf-model={leaf} --leave-inference={leave} "
         f"--candidates={candidates} --opp-leaves={opp_leaves}"
     )
 
 
 def release_spec(root: Path, number: int, candidates: int, opp_leaves: int) -> str:
-    """LeafBot on release `number` of the releases laid out under `root`: a
+    """DeepBot on release `number` of the releases laid out under `root`: a
     tag's, or a measure slot's inbox."""
     leaf, leave = (root / release.export_rel(number, kind) for kind in (LEAF, LEAVE))
-    return leafbot_spec(leaf, leave, candidates, opp_leaves)
+    return deepbot_spec(leaf, leave, candidates, opp_leaves)
 
 
 def _seed_release(paths: TagPaths) -> bool | None:
@@ -159,7 +159,7 @@ def _seed_release(paths: TagPaths) -> bool | None:
 
 
 def run_generate(ctx: WorkerContext) -> int:
-    """Hidden-leaves LeafBot self-play on release 0 without random openings,
+    """Hidden-leaves DeepBot self-play on release 0 without random openings,
     each chunk with the .forgone sidecars the leave inference rows read. The
     trainer publishes release 0 before its data home releases the
     generators; a remote generator may start before the controller's push
@@ -222,7 +222,7 @@ def inputs(params, mount_root: Path) -> dict[str, Path]:
 
 SPEC = WorkloadSpec(
     name=WORKLOAD,
-    title="Advance LeafBot a generation",
+    title="Advance DeepBot a generation",
     params_cls=LeafBotGenerationParams,
     roles=(
         RoleSpec(

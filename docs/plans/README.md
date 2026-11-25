@@ -115,7 +115,7 @@ moved on. New plans go here, not in `docs/` proper.
   deleted; the post-move cross-check delta has an encoder and a diagnostic
   but is not yet a model input.
 - **[leaf_bot_continuous.md](leaf_bot_continuous.md)**: *proposed, not
-  built.* LeafBot trained AlphaZero-style. The leaf takes the opponent's leave
+  built.* DeepBot trained AlphaZero-style. The leaf takes the opponent's leave
   as a belief or a concrete leave, with half its rows hiding the leave.
   Self-play plays the leaf's greedy move at most turns and searches a random
   fraction of them. Each search plays every candidate a few greedy plies over

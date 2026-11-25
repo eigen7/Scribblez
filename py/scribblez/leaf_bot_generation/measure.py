@@ -1,5 +1,5 @@
 """The leaf_bot_generation measure role: a slot plays one assigned match at a
-time, a release as LeafBot against HastyBot or against release 0, over the
+time, a release as DeepBot against HastyBot or against release 0, over the
 same seeds and mirrored pairs for every release, and delivers each game's
 result row. With its match against HastyBot it also delivers the release's
 analysis of the known positions (deep_bot_leaf_eval/positions.py), which the
@@ -57,7 +57,7 @@ def assigned_match(inbox: Path) -> tuple[int, str] | None:
 
 
 def agent_spec(ctx: WorkerContext, number: int) -> str:
-    """LeafBot on release `number` of the slot's inbox, as the matches play
+    """DeepBot on release `number` of the slot's inbox, as the matches play
     it."""
     p = ctx.params
     inbox = ctx.tag_paths().match_inbox_dir(ctx.worker_id)
@@ -70,7 +70,7 @@ def opponent_spec(ctx: WorkerContext, opponent: str) -> str:
 
 def analyze_positions(ctx: WorkerContext, number: int, work: Path) -> Path:
     """Release `number`'s analysis of the known positions, written under
-    `work`: LeafBot over every legal move, its opponent leaves drawn from the
+    `work`: DeepBot over every legal move, its opponent leaves drawn from the
     release's own leave inference model."""
     p = ctx.params
     inbox = ctx.tag_paths().match_inbox_dir(ctx.worker_id)

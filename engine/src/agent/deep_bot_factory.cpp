@@ -1,9 +1,9 @@
-// LeafBot's command-line construction and backend: the only part that reaches
+// DeepBot's command-line construction and backend: the only part that reaches
 // CUDA and TensorRT (the leaf network and the leave inference model), so
-// leaf_bot.cpp's unit tests can inject the CPU reference instead.
+// deep_bot.cpp's unit tests can inject the CPU reference instead.
 
 #include "agent/agent_options.h"
-#include "agent/leaf_bot.h"
+#include "agent/deep_bot.h"
 #include "belief/served_leave_model.h"
 #include "gpu/rollout_backend.h"
 #include "lexicon/hasty_equity.h"
@@ -24,8 +24,8 @@ namespace {
 
 namespace po = boost::program_options;
 
-po::options_description leafbot_options(LeafBot::Params& p) {
-  po::options_description desc("leafbot options");
+po::options_description deepbot_options(DeepBot::Params& p) {
+  po::options_description desc("deepbot options");
   desc.add_options()  //
     ("leaf-model", po::value<std::string>(&p.leaf_model),
      "the leaf network (a deep_bot_leaf_eval ONNX export); 'synthetic' for the CPU reference's "
@@ -45,17 +45,17 @@ po::options_description leafbot_options(LeafBot::Params& p) {
   return desc;
 }
 
-void validate(const LeafBot::Params& p) {
-  if (p.leaf_model.empty()) throw util::CleanException("leafbot: --leaf-model is required");
+void validate(const DeepBot::Params& p) {
+  if (p.leaf_model.empty()) throw util::CleanException("deepbot: --leaf-model is required");
   if (p.leave_inference.empty())
-    throw util::CleanException("leafbot: --leave-inference is required");
-  if (p.candidates < 1) throw util::CleanException("leafbot: --candidates must be positive");
-  if (p.opp_leaves < 1) throw util::CleanException("leafbot: --opp-leaves must be positive");
+    throw util::CleanException("deepbot: --leave-inference is required");
+  if (p.candidates < 1) throw util::CleanException("deepbot: --candidates must be positive");
+  if (p.opp_leaves < 1) throw util::CleanException("deepbot: --opp-leaves must be positive");
 }
 
 // The leaf network the factory serves, or the playouts that stand in for it.
-std::shared_ptr<LeafValues> leaf_values(const LeafBot::Params& p) {
-  if (p.leaf_model == LeafBot::kMonteCarloLeaf)
+std::shared_ptr<LeafValues> leaf_values(const DeepBot::Params& p) {
+  if (p.leaf_model == DeepBot::kMonteCarloLeaf)
     return std::make_shared<MonteCarloLeafValues>(load_dictionary_or_throw());
   RolloutBackend rollouts;
   rollouts.backend = p.leaf_model == RolloutBackend::kSyntheticLeaf ? "cpu" : "gpu";
@@ -66,7 +66,7 @@ std::shared_ptr<LeafValues> leaf_values(const LeafBot::Params& p) {
   return rollouts.shared(load_dictionary_or_throw());
 }
 
-LeafBot::Backend make_backend(const LeafBot::Params& p) {
+DeepBot::Backend make_backend(const DeepBot::Params& p) {
   belief::AgentLeaveModel leave =
     belief::agent_leave_model(p.leave_inference, HastyEquity::instance().leave_values());
   return {
@@ -75,14 +75,14 @@ LeafBot::Backend make_backend(const LeafBot::Params& p) {
 
 }  // namespace
 
-LeafBot::LeafBot(const Params& params) : LeafBot(params, make_backend(params)) {}
+DeepBot::DeepBot(const Params& params) : DeepBot(params, make_backend(params)) {}
 
-LeafBot::Params LeafBot::parse_params(const std::vector<std::string>& tokens, int thread_id,
+DeepBot::Params DeepBot::parse_params(const std::vector<std::string>& tokens, int thread_id,
                                       const std::string& name,
                                       boost::program_options::options_description& extra,
                                       const char* type_label) {
   Params p{.thread_id = thread_id, .name = name};
-  po::options_description desc = leafbot_options(p);
+  po::options_description desc = deepbot_options(p);
   desc.add(extra);
   bool have_seed = false;
   try {
@@ -100,20 +100,20 @@ LeafBot::Params LeafBot::parse_params(const std::vector<std::string>& tokens, in
   return p;
 }
 
-std::unique_ptr<LeafBot> LeafBot::from_spec(const std::vector<std::string>& tokens, int thread_id,
+std::unique_ptr<DeepBot> DeepBot::from_spec(const std::vector<std::string>& tokens, int thread_id,
                                             const std::string& name) {
   po::options_description no_extra;
-  return std::make_unique<LeafBot>(parse_params(tokens, thread_id, name, no_extra, kType));
+  return std::make_unique<DeepBot>(parse_params(tokens, thread_id, name, no_extra, kType));
 }
 
-std::string LeafBot::options_help() {
+std::string DeepBot::options_help() {
   Params defaults;  // binding targets; only the defaults are read
   return agent_options_help(
-    "  LeafBot: the leaf network as a player, no search. Values HastyBot's best moves by\n"
+    "  DeepBot: the leaf network as a player, no search. Values HastyBot's best moves by\n"
     "  static equity at the position after each, over the opponent's leaves drawn from the\n"
     "  leave inference model's belief, and plays the best. Hidden leaves only;\n"
-    "  leafbot-endgame solves the endgame.\n",
-    leafbot_options(defaults));
+    "  deepbot-endgame solves the endgame.\n",
+    deepbot_options(defaults));
 }
 
 }  // namespace scribblez

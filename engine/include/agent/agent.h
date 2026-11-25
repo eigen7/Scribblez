@@ -63,7 +63,7 @@ std::vector<Move> generate_legal_exchanges(const MoveRequest& req);
 // compute on decided games. If the game is not over when the list runs out,
 // the loop resumes prompting.
 // A move the agent weighed and its value to the agent, in the agent's own
-// scale (LeafBot's: its leaf win value).
+// scale (DeepBot's: its leaf win value).
 struct CandidateValue {
   Move move;
   double value = 0;

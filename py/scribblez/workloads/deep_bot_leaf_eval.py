@@ -11,7 +11,7 @@ home. Self-play has no random openings, so every eligible turn's outcome
 follows the policy alone.
 
 The match_eval role (scribblez/match_eval) plays every
-`match_every_generations`th export as LeafBot (engine agent/leaf_bot.h, the
+`match_every_generations`th export as DeepBot (engine agent/deep_bot.h, the
 leaf network valuing HastyBot's best moves with no search) against a fixed
 opponent, its opponent leaves drawn from a leave inference model pinned at
 task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
@@ -131,7 +131,7 @@ class DeepBotLeafEvalParams:
     depth: int = param(4, "transformer layers, or conv residual blocks")
     num_heads: int = param(2, "transformer attention heads (head dim = width / heads)")
     normalize_scalar: bool = param(True, f"conv trunk: {NORMALIZE_SCALAR_HELP}")
-    # Match eval (the match_eval role): LeafBot against a fixed opponent.
+    # Match eval (the match_eval role): DeepBot against a fixed opponent.
     match_every_generations: int = param(
         10, "match-eval cadence: play a match for every Nth exported generation; 0 disables"
     )
@@ -148,7 +148,7 @@ class DeepBotLeafEvalParams:
     )
     match_leave_inference_tag: str = param(
         "",
-        "the leave_inference tag whose model draws LeafBot's opponent leaves; required while "
+        "the leave_inference tag whose model draws DeepBot's opponent leaves; required while "
         "matches are on",
     )
     match_leave_inference_generation: int = param(
@@ -156,13 +156,13 @@ class DeepBotLeafEvalParams:
         "which generation of match_leave_inference_tag (-1: its latest export, pinned at task "
         "creation), the same for every match of the tag",
     )
-    match_candidates: int = param(10, "LeafBot's candidates: HastyBot's best by static equity")
+    match_candidates: int = param(10, "DeepBot's candidates: HastyBot's best by static equity")
     match_opp_leaves: int = param(
-        16, "the opponent's leaves LeafBot values each candidate over, drawn from the belief"
+        16, "the opponent's leaves DeepBot values each candidate over, drawn from the belief"
     )
     # 128 draws over every legal move of the known positions are ~3.7M leaf
     # network calls a generation, an estimated 80 s at the ~48K a second
-    # measured in October for LeafBot's host path; 16 sample the belief too
+    # measured in October for DeepBot's host path; 16 sample the belief too
     # coarsely to tell a leaf's error from its draws'.
     analysis_opp_leaves: int = param(
         128, "the opponent's leaves the Positions tab's analysis values each move over"
@@ -184,7 +184,7 @@ TRAINER_GPU_HEADROOM_GB = 0.5
 _MEASURED_GB = {TRUNK_TRANSFORMER: 1.76, TRUNK_CONV: 1.01}
 # The params the measurements held fixed, at their defaults.
 TRAINER_GPU_KEY = ("batch_size", "width", "depth", "num_heads")
-# Match eval: LeafBot (a 64x4 leaf, a leave_inference export) against
+# Match eval: DeepBot (a 64x4 leaf, a leave_inference export) against
 # HastyBot-endgame, its two TensorRT plans already cached, on the RTX 5000 Ada
 # (2026-11-17): the conv leaf at 28 threads over 1000 pairs peaked at 1.77 GiB,
 # the transformer leaf at 8 and at 28 threads over 100 pairs at 3.31 GiB. On a
@@ -257,13 +257,13 @@ def inputs(params, mount_root: Path) -> dict[str, Path]:
     return {LEAVE_INPUT: leave_model_path(params, mount_root), **known_position_inputs.inputs()}
 
 
-def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
-    """A leaf export as the match plays it (match_eval.runner.Player): LeafBot
+def deepbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
+    """A leaf export as the match plays it (match_eval.runner.Player): DeepBot
     with the endgame solved, under hidden leaves, as the leaf trained."""
     p = ctx.params
     leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(p, ctx.mount_root))
     spec = (
-        f"--type=leafbot-endgame --leaf-model={model} --leave-inference={leave} "
+        f"--type=deepbot-endgame --leaf-model={model} --leave-inference={leave} "
         f"--candidates={p.match_candidates} --opp-leaves={p.match_opp_leaves} --name=model"
     )
     return spec, False
@@ -271,7 +271,7 @@ def leafbot_player(ctx: WorkerContext, model: Path) -> tuple[str, bool]:
 
 def analyze_positions(ctx: WorkerContext, model: Path, gen: int) -> list[tuple[Path, str]]:
     """The match_eval.runner.AfterMatch of the slot: the export's analysis of
-    the known positions, as the matches' LeafBot sees them."""
+    the known positions, as the matches' DeepBot sees them."""
     p = ctx.params
     leave = resolve_input(ctx, LEAVE_INPUT, leave_model_path(p, ctx.mount_root))
     work = ctx.tag_paths().work_dir(ctx.worker_id) / "positions"
@@ -291,9 +291,9 @@ def analyze_positions(ctx: WorkerContext, model: Path, gen: int) -> list[tuple[P
 
 def run_match(ctx: WorkerContext) -> int:
     """The match_eval role's runner: match_eval's, the exports playing as
-    LeafBot, each one's analysis of the known positions delivered with its
+    DeepBot, each one's analysis of the known positions delivered with its
     result."""
-    return match_runner.run(ctx, leafbot_player, analyze_positions)
+    return match_runner.run(ctx, deepbot_player, analyze_positions)
 
 
 def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:

@@ -84,7 +84,7 @@ struct ServedLeaveTable {
 // A leave inference model as an agent draws beliefs from it: the thread-safe
 // forward pass over the process's shared table (ServedLeaveTable::shared) and
 // the leave table its beliefs are over, each keeping the shared table alive,
-// and the model's identity. What LeafBot loads.
+// and the model's identity. What DeepBot loads.
 struct AgentLeaveModel {
   LeaveParamsFn predict;
   std::shared_ptr<const LeaveValueArrays> table;

@@ -127,7 +127,7 @@ def test_every_cycle_plays_leafbot_on_release_0_with_its_forgone_plays(tmp_path,
 
     leaf, leave = (release.export_path(paths, 0, kind) for kind in (LEAF, LEAVE))
     want = (
-        f"--type=leafbot-endgame --leaf-model={leaf} --leave-inference={leave} "
+        f"--type=deepbot-endgame --leaf-model={leaf} --leave-inference={leave} "
         "--candidates=10 --opp-leaves=16"
     )
     assert played == [want, want]  # release 1 changes nothing
@@ -333,7 +333,7 @@ def test_the_match_against_release_0_plays_its_leafbot(paths, tmp_path, monkeypa
 
     inbox = paths.match_inbox_dir("local-1")
     assert played == [
-        f"--type=leafbot-endgame --leaf-model={inbox / release.export_rel(0, LEAF)} "
+        f"--type=deepbot-endgame --leaf-model={inbox / release.export_rel(0, LEAF)} "
         f"--leave-inference={inbox / release.export_rel(0, LEAVE)} "
         "--candidates=10 --opp-leaves=16"
     ]

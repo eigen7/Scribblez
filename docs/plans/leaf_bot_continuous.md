@@ -1,4 +1,4 @@
-# LeafBot: continuous training on searched labels
+# DeepBot: continuous training on searched labels
 
 **Status: proposed 2026-11-24, not built.** What each phase measures shapes
 the next one. No pass or kill thresholds are fixed in advance.
@@ -39,7 +39,7 @@ generation's own models.
   the 19 known positions: 75th at Q(I), 66th at DINER. The positions were
   picked as hard cases, so this overstates ordinary play. Still, today's
   self-play can never play those moves.
-- **The leaf never sees what it ranks.** LeafBot uses the leaf to rank a
+- **The leaf never sees what it ranks.** DeepBot uses the leaf to rank a
   turn's candidates. It trains only on positions after moves that were
   actually played, which are good moves.
 - **The Positions tab's rollout columns measure a different target.**
@@ -83,7 +83,7 @@ in known mode.
 
 **The belief's summaries cost nothing extra.** `LeaveSampler`
 (`engine/include/belief/leave_sampler.h`) makes a pass over every leave to
-sample from the belief, and LeafBot makes that pass every turn already. Its
+sample from the belief, and DeepBot makes that pass every turn already. Its
 `LeaveMoments` already returns the leave value's exact mean and SD. Expected
 counts come from the same pass with a small extension. The belief is the same
 for every candidate at a turn, so the pass runs once per turn.
@@ -211,7 +211,7 @@ the data:
 - a belief-mode row per valued candidate;
 - known-mode rows from the samples.
 
-The sibling rows teach the ranking that LeafBot uses the leaf for.
+The sibling rows teach the ranking that DeepBot uses the leaf for.
 
 **Cost.** A row costs about `R × (k × K + 1)` leaf evaluations, where `R` is
 the average number of draws per candidate after racing and `K` is the plies'
@@ -331,10 +331,10 @@ represent any distribution of positions.
      `LeaveSampler`'s pass;
    - the trainer's two modes on game-result targets;
    - the join plane ablation, with and without;
-   - belief-mode loss against LeafBot's 16-draw average on held-out
+   - belief-mode loss against DeepBot's 16-draw average on held-out
      positions.
-3. **The greedy player:** LeafBot in belief mode, one evaluation per
-   candidate. Measure its speed and its strength against today's LeafBot.
+3. **The greedy player:** DeepBot in belief mode, one evaluation per
+   candidate. Measure its speed and its strength against today's DeepBot.
 4. **The labeled-turn search** in the engine: paired draws, racing, `k`
    greedy plies, a known-mode cutoff. It emits belief-mode and known-mode
    rows.
