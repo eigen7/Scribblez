@@ -1,6 +1,6 @@
 #pragma once
 
-// The win table's input (docs/plans/deep_bot_v0.md, "The win table"): what a
+// The win table's input (docs/plans/subtree_bot_v0.md, "The win table"): what a
 // sim leaf reads off a position, and what the table is fitted against. The
 // fit and the lookup both go through win_table_feature, so they cannot
 // disagree on what a cell means.

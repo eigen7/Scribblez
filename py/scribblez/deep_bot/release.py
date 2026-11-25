@@ -1,4 +1,4 @@
-"""A release (docs/plans/deep_bot_generations.md, "Terms"): a tag's models'
+"""A release (docs/plans/subtree_bot_generations.md, "Terms"): a tag's models'
 exports published together, under the tag at releases/release_<k>/<kind>.onnx,
 beside any files of the workload's own (a Layout names both), with a manifest
 written last. leaf_bot_generation's holds the leave inference model and the

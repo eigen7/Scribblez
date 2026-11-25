@@ -55,9 +55,9 @@ class BlockDecoder {
               const uint8_t* transposes, bool post_move, int64_t output_row_start, float* output);
 
   // The turns of a game that become `task` rows, [begin, end): for kLeafEval,
-  // every turn from the eligible region's start but the last, since a DeepBot
-  // rollout stops at a leaf whatever its bag holds, and only the game's end is
-  // exact; the eligible region (GameMetadata) otherwise.
+  // every turn from the eligible region's start but the last, since a rollout
+  // stops at a leaf whatever its bag holds, and only the game's end is exact;
+  // the eligible region (GameMetadata) otherwise.
   static EligibleSpan row_turns(DecodeTask task, const GameMetadata& meta);
 
   // Whether `task` rows read the .slog's .forgone sidecar.

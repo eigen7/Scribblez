@@ -2,7 +2,7 @@
 
 // What becomes of each empty square of a position over the rest of the game:
 // who places a tile there, whether that move is a bingo, and the signed points
-// of that move. These label the continuation heads of docs/plans/deep_bot.md
+// of that move. These label the continuation heads of docs/plans/subtree_bot.md
 // ("The search network"): five-class ownership, and per-square points of the
 // whole move through the square, not a share of it.
 //

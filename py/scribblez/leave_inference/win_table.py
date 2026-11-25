@@ -1,5 +1,5 @@
 """The win table: P(win | spread + own leave value, tiles unseen) for the side
-to move, fitted from self-play outcomes (docs/plans/deep_bot_v0.md, "The win
+to move, fitted from self-play outcomes (docs/plans/subtree_bot_v0.md, "The win
 table").
 
 The samples come from the engine (ffi.win_table_samples), which computes each

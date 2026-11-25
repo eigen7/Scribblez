@@ -1,5 +1,5 @@
 """The .forgone sidecars the leave inference rows read
-(engine/include/data/forgone_play_log.h; docs/plans/deep_bot_v0.md, "Forgone
+(engine/include/data/forgone_play_log.h; docs/plans/subtree_bot_v0.md, "Forgone
 plays"): one beside each .slog, written by forgone_play_tool where the games
 are played."""
 

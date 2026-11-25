@@ -239,7 +239,7 @@ def played_games(tmp_path_factory) -> Path:
 
 
 def test_the_rows_reach_into_the_endgame(played_games):
-    """A DeepBot rollout stops at a leaf whatever its bag holds, so the rows
+    """A rollout stops at a leaf whatever its bag holds, so the rows
     include leaves whose refills empty the bag, down to an empty pool."""
     ds = SlogDataset(played_games, task=_TASK, apply_symmetry=False, num_workers=1)
     scalar = np.concatenate([b["input_scalar"].numpy() for b in ds.iter_batches(256, seed=0)])

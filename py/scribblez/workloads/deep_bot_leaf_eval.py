@@ -1,8 +1,8 @@
-"""The deep_bot_leaf_eval workload: DeepBot's rollout-leaf value model
+"""The deep_bot_leaf_eval workload: DeepBot's leaf network
 (deep_bot_leaf_eval/model.py), trained on HastyBot self-play with the endgame
-solved: HastyBot is the policy DeepBot's rollouts play their two plies with,
-and the leaf after them, whatever its bag holds, is valued as the rest of such
-a game would go.
+solved, so a leaf, whatever its bag holds, is valued as the rest of such a
+game would go. HastyBot was the policy SubtreeBot's rollouts played their two
+plies with; for DeepBot this is generation 0.
 
 It is generational, like position_eval: any number of generators deliver
 hidden-leaves HastyBot self-play into staging, and the singleton trainer

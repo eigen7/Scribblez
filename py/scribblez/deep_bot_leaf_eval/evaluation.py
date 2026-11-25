@@ -1,8 +1,8 @@
 """The leaf eval model's held-out read, beside the win table's on the same rows.
 
-The win table is what DeepBot's sims value a leaf with today (docs/plans/
-deep_bot.md, "The leaf: a win table"), so it is the baseline the model has to
-beat. Both are scored by the log loss of the mover's expected score (a win 1,
+The win table is what SubtreeBot's sims valued a leaf with (docs/plans/
+subtree_bot.md, "The leaf: a win table"), so it is the baseline the model has
+to beat. Both are scored by the log loss of the mover's expected score (a win 1,
 a draw 1/2) against the outcome, overall, by pool size, and apart on the rows
 whose two refills empty the bag, where the rest of the game is an endgame the
 self-play solved. The model's

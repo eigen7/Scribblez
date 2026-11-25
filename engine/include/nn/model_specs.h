@@ -87,7 +87,7 @@ struct ScoreDiffOutput {
   static constexpr RowDecode kDecode = RowDecode::kIdentity;
 };
 
-// The leaf eval model's continuation heads (docs/plans/deep_bot.md, "The
+// The leaf eval model's continuation heads (docs/plans/subtree_bot.md, "The
 // search network"): what follows the leaf, from the side of the player who
 // just moved. A per-square output is plane-major, kBoardCells floats per
 // plane, in the row's board frame. Points are in units of kScoreDiffInputScale.
@@ -244,7 +244,7 @@ class PositionEvaluationSpec {
 
 // ---------- the leave inference family -----------------------------------
 //
-// The leave inference model (docs/plans/deep_bot_v0.md, "Serving"): N
+// The leave inference model (docs/plans/subtree_bot_v0.md, "Serving"): N
 // positions' rows (encoding/leave_inference_input_encoder.h), each to its 29
 // tilt floats. belief/leave_inference_net.h drives it through NeuralNet
 // directly: its one output is consumed raw, so TrtEvalService's per-row decode

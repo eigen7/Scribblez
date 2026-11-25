@@ -1,4 +1,4 @@
-"""A release's matches (docs/plans/deep_bot_generations.md, "The matches"):
+"""A release's matches (docs/plans/subtree_bot_generations.md, "The matches"):
 what leaf_bot_generation's measure role's worker
 (leaf_bot_generation/measure.py) and the controller's tick
 (leaf_bot_generation/measure_dispatch.py) agree on. The opponents, how a finished match travels,

@@ -1,6 +1,6 @@
 #pragma once
 
-// The leave inference model's output (docs/plans/deep_bot.md, "The leave
+// The leave inference model's output (docs/plans/subtree_bot.md, "The leave
 // inference model"): a tilt of the hypergeometric prior over the leaves of a
 // known length drawable from the leave pool,
 //

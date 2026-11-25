@@ -1,4 +1,4 @@
-"""The leave_inference train role (docs/plans/deep_bot_v0.md, "Workload 1:
+"""The leave_inference train role (docs/plans/subtree_bot_v0.md, "Workload 1:
 leave_inference"): position_eval's consume-and-train loop for the leave
 inference model, with the win table as its side product.
 

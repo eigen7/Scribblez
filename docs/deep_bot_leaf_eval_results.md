@@ -1,8 +1,8 @@
 # DeepBot leaf evaluation: trunk and join-plane comparison
 
 The first runs of the `deep_bot_leaf_eval` workload: a small network that
-values the leaf of a DeepBot rollout ([plans/deep_bot.md](plans/deep_bot.md)),
-which the [win table](plans/deep_bot.md#sims) values today. Four arms crossed
+values the leaf of a SubtreeBot rollout ([plans/subtree_bot.md](plans/subtree_bot.md)),
+which the [win table](plans/subtree_bot.md#sims) values today. Four arms crossed
 two choices: a transformer or a conv trunk, with or without the join planes.
 
 **Result.** Every arm beat the win table on held-out games, by about 0.010
@@ -11,7 +11,7 @@ The four arms finished within 0.0006 nats of each other. That is no larger than
 the spread that comes from training on different games, so on this metric
 neither the trunk nor the join planes made a measurable difference. The conv
 trunk runs about 3x faster under TensorRT, so it is the trunk to serve. The
-join planes are undecided: the metric averages over every leaf, while DeepBot
+join planes are undecided: the metric averages over every leaf, while SubtreeBot
 compares sibling leaves, where hook errors would matter most (see
 [What the metric does not settle](#what-the-metric-does-not-settle)).
 
@@ -22,7 +22,7 @@ AWS rental, through the tag queue.
 
 ### What it values
 
-A DeepBot rollout plays one move from each player's full rack, Alice and then
+A SubtreeBot rollout plays one move from each player's full rack, Alice and then
 Bob, and does not refill either rack. The leaf is the position after Bob's
 reply. Both leaves are known, since the sim holds both racks. The **pool** is
 every tile on neither the board nor a leave; both refills will come from it.
@@ -41,9 +41,9 @@ Before Alice's first move her leave is empty and her whole rack is that draw,
 which is the same form as the leaf after a bingo.
 
 The labels describe the policy that played the games, as the win table's do.
-The training games are HastyBot self-play, and HastyBot is the policy DeepBot's
+The training games are HastyBot self-play, and HastyBot is the policy SubtreeBot's
 rollouts continue with. Seeing both leaves does not bias the value: HastyBot
-never reads its opponent's rack. Averaging the model over DeepBot's sampled
+never reads its opponent's rack. Averaging the model over SubtreeBot's sampled
 opponent leaves gives the value of the leaf from what the player can see.
 
 ### Inputs
@@ -98,7 +98,7 @@ end-of-game outcome with the rest.
 
 ## Throughput: why the model is this small
 
-DeepBot evaluates one leaf per rollout, so the model's speed is the leaf
+SubtreeBot evaluates one leaf per rollout, so the model's speed is the leaf
 budget. The GPU rollout kernel from PR #404 runs 150–600K rollouts/s on this
 machine, depending on how many racks hold a blank.
 
@@ -231,7 +231,7 @@ The spread across arms is 0.0006 nats. Two references for its size:
 ## Conclusions
 
 - **The model beats the win table everywhere, most of all late in the game.**
-  It is a real improvement on DeepBot's current leaf: 0.010 nats overall,
+  It is a real improvement on SubtreeBot's current leaf: 0.010 nats overall,
   0.022 nats with 20 or fewer tiles left.
 - **The trunk does not matter for value at this size, so serve the conv
   trunk.** It matched the transformer and runs about 3x faster under TensorRT
@@ -244,7 +244,7 @@ The spread across arms is 0.0006 nats. Two references for its size:
 
 ## What the metric does not settle
 
-Average log loss over leaves is not what DeepBot asks of the model. DeepBot
+Average log loss over leaves is not what SubtreeBot asks of the model. SubtreeBot
 compares the leaves of sibling candidates: different moves from the same
 position, under the same rollout draws. What matters is how often the model
 orders them the way their outcomes do. The join planes target hook-dependent

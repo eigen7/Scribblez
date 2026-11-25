@@ -1,4 +1,4 @@
-"""The leave inference workload (docs/plans/deep_bot_v0.md, "Workload 1:
+"""The leave inference workload (docs/plans/subtree_bot_v0.md, "Workload 1:
 leave_inference"): DeepBot's model of the opponent's leave, trained on the
 true leaves replay recovers from HastyBot self-play, with the win table
 refitted from the same games as a side product.
@@ -77,7 +77,7 @@ class LeaveInferenceParams:
     hide_private_fraction: float = param(
         0.25,
         "fraction of training rows whose observer's private history (their exchanges and past "
-        "racks) is hidden, as DeepBot's model of its opponent encodes the opponent's view; "
+        "racks) is hidden, as SubtreeBot's model of its opponent encoded the opponent's view; "
         "no effect when public, whose rows withhold it anyway",
     )
     public: bool = param(

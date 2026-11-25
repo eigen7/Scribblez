@@ -1,7 +1,7 @@
 #pragma once
 
 // Sampling the opponent's leave from the leave inference model's belief
-// (docs/plans/deep_bot.md, Algorithm 1), on the CPU. One query is one
+// (docs/plans/subtree_bot.md, Algorithm 1), on the CPU. One query is one
 // position's LeaveParams over the leaves of one length: a pass over
 // LeaveValueArrays gives every row's log weight, the CDF in table order, and
 // log Z. The trainer's loss (py/scribblez/leave_inference/loss.py) runs the

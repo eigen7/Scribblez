@@ -1,4 +1,4 @@
-# DeepBot: two-level simulation with a policy-set model
+# SubtreeBot: two-level simulation with a policy-set model
 
 **Status: proposed 2026-10-14; revised 2026-10-25 to build the agent first
 on static-equity candidates ([Candidates](#candidates)); revised 2026-11-02
@@ -15,11 +15,11 @@ with the policy-set model's set forms moved to an
 Alice's candidates by a screen of every legal move ([The screen at the
 root](#the-screen-at-the-root)) and to put the generations ahead of the
 store ([Build order](#build-order)), which
-[deep_bot_generations.md](deep_bot_generations.md) plans as one workload;
-revised 2026-11-15: [deep_bot_roadmap.md](deep_bot_roadmap.md) orders the
+[subtree_bot_generations.md](subtree_bot_generations.md) plans as one workload;
+revised 2026-11-15: [subtree_bot_roadmap.md](subtree_bot_roadmap.md) orders the
 remaining work, the `hasty` agent and a policy as Bob's reply first, with
 Bob's subtree, the store and the learned budget waiting; not yet placed in
-the [roadmap](../roadmap.md).** DeepBot plays standard Scrabble, with hidden
+the [roadmap](../roadmap.md).** SubtreeBot plays standard Scrabble, with hidden
 leaves. This document is a design to guide development. Its measurements
 inform the next step; no pass or kill thresholds are fixed in advance.
 
@@ -187,13 +187,13 @@ report's outside move 0.253, and the picks:
 | `hasty`, the endgame solver's | 0.324 (0.329 with every candidate solved) |
 | `subtree`, the endgame solver's | 0.324 |
 
-The solves run on the CPU. DeepBot's self-play under `hasty` on the dev
+The solves run on the CPU. SubtreeBot's self-play under `hasty` on the dev
 laptop (28 threads, 168 games) spends 18 core-seconds a game with them
 against 4 without, at the same games a second (0.28 and 0.27), the GPU
 being what bounds it. Solving all 32 late candidates is 42 core-seconds a
 game, which is why the first pass keeps 8.
 
-`deepbot-endgame --peg 1` hands the turn with one tile in the bag to the
+`subtreebot-endgame --peg 1` hands the turn with one tile in the bag to the
 pre-endgame solver, which is exact and single-threaded: on the first 11 of
 the 149 positions it took 8 to 892 seconds a turn, 86 at the median. That
 is a referee's cost, not a player's.
@@ -290,7 +290,7 @@ player's side (or, with the bag empty, the game played to its end).
   reply hastily.
 
 The demo runs one position at a time. One launch is to take
-([deep_bot_v0.md](deep_bot_v0.md#build-order), step 9):
+([subtree_bot_v0.md](subtree_bot_v0.md#build-order), step 9):
 
 - **many positions, in groups that share an unseen pool:** a group is the
   candidates of one chooser at one position, each applied to the board (a
@@ -391,7 +391,7 @@ hold up.
   matters.
 
 Measured 2026-11-13 on the 980 of those positions whose best move is not a
-pass (`py/scripts/deep_bot/blind_spot_picks.py`), DeepBot's pick read
+pass (`py/scripts/deep_bot/blind_spot_picks.py`), SubtreeBot's pick read
 against each position's confirming sim, whose best move outside the
 static-equity top 10 is the position's "outside move". Leaf network `v1`
 generation 1049, leave inference model `v1` generation 292:
@@ -466,12 +466,12 @@ the line, above all a setup only the mover's rack can exploit, and such
 positions are not rare.
 
 **The match that can show the subtree's worth** is against an opponent the
-subtree models well. DeepBot with the `hasty` reply model is one: Bob's
+subtree models well. SubtreeBot with the `hasty` reply model is one: Bob's
 subtree models Bob as a one-level searcher who assumes a hasty Alice, and
-that is what `hasty`-DeepBot is, one ply deeper. In that match the
+that is what `hasty`-SubtreeBot is, one ply deeper. In that match the
 subtree's model of its opponent is nearly exact, and the `hasty` model is
 wrong where it matters. After a candidate that sets up a hook only Alice's
-rack can fill, `hasty`-DeepBot as Bob blocks once his belief gives her the
+rack can fill, `hasty`-SubtreeBot as Bob blocks once his belief gives her the
 tile enough weight, since his sims see her mechanical continuation fill it;
 `hasty`-Alice assumes he never blocks and overvalues the setup, while
 `subtree`-Alice predicts when he does. Macondo's BestBot is the other such
@@ -598,7 +598,7 @@ opponent. The pools label exactly that ([Labels](#labels)), so the head is
 the [policy form](#the-policy) of the policy-set model, trained on pools
 from self-play positions, from the mover's side.
 
-DeepBot uses it at Bob's level, where it is the right question: Bob's
+SubtreeBot uses it at Bob's level, where it is the right question: Bob's
 subtree is that search, with Alice replying hastily, so `π` predicts the
 move his subtree would choose with unlimited sims. There is no model of Bob
 as such. Alice poses the question from his side: his rack `r`, and his
@@ -647,7 +647,7 @@ value with `hasty`. The head predicts `Δ` as a mean and a variance, and
 admit and order candidates before their children are evaluated. After that,
 `q̂(a)` is composed from the children, so the head reads no store.
 
-- **Its labels come from DeepBot's own turns.** Successive halving values
+- **Its labels come from SubtreeBot's own turns.** Successive halving values
   every candidate with `hasty` first and runs the subtree for the survivors
   ([Budget](#budget)), over the same Bob racks, so each survivor's `Δ` is a
   paired difference, less noisy than either value alone. Self-play logs it
@@ -655,7 +655,7 @@ admit and order candidates before their children are evaluated. After that,
   candidates.
 - **A value correction, not a two-level policy.** The root admits
   candidates by expected improvement, from means and variances, so
-  `V + Δ̂` and its spread carry what Alice needs. A kind of move DeepBot has
+  `V + Δ̂` and its spread carry what Alice needs. A kind of move SubtreeBot has
   not searched keeps a correction near zero, and its one-level value
   stands, where a two-level policy would extrapolate freely.
 
@@ -685,7 +685,7 @@ moves revealed that the network did not see.
   an empty store.
 - **Grouped pools** ([below](#the-evidence-store)) train the value and
   policy outputs with a store.
-- **DeepBot's root records** train the root correction head.
+- **SubtreeBot's root records** train the root correction head.
 
 **Coverage grows with generations.** Bob decides after Alice's candidates,
 including setups and exchanges that self-play rarely plays, so at generation
@@ -930,7 +930,7 @@ policy's top `N`.
 The events "`a` is the best move" are disjoint, so `Σ_{a∈S} q(a)` is the
 probability that `S` holds the best move. A policy that matched `q` would
 therefore make the best set for recall and cover at every `N`, from one
-pass. DeepBot builds many sets per turn, one per `(a, r)` in Bob's
+pass. SubtreeBot builds many sets per turn, one per `(a, r)` in Bob's
 subtrees alone, and each network call is one batched call over all the
 sets in progress. The policy is the [search network's](#the-search-network)
 policy head. Measured 2026-10-29 on 2,000 pools it tied equity on recall;
@@ -974,7 +974,7 @@ a rollout is slow and its outcome noisy. A label rollout instead plays the
 two mechanical replies on the GPU and ends at the [leaf network](#sims),
 whose identity the pool records.
 
-**Generations.** Once DeepBot runs, its own evaluations label positions, and
+**Generations.** Once SubtreeBot runs, its own evaluations label positions, and
 each policy-set generation trains on the previous agent's labels, as the move
 proposal model's generations do.
 
@@ -1012,7 +1012,7 @@ reads:
   tile kind `τ`, how much more the best play needing `τ` (the move's tiles
   plus one more `τ`) would have scored. The network cannot search the lexicon
   for this itself, and a large margin says the leave probably lacks `τ`
-  ([deep_bot_v0.md](deep_bot_v0.md#forgone-plays)).
+  ([subtree_bot_v0.md](subtree_bot_v0.md#forgone-plays)).
 
 **The output: 29 floats.**
 
@@ -1129,10 +1129,10 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
 - **Train `I_k` on the newest games, warm-started from `I_{k−1}`.** Trained
   on a buffer that mixes generations, an inference network converges to Bayes'
   rule under the *average* policy, not the current one, so the window is
-  short: a few of DeepBot's own generations, which differ far less than
+  short: a few of SubtreeBot's own generations, which differ far less than
   HastyBot differs from any of them
-  ([deep_bot_generations.md](deep_bot_generations.md#the-trainer)). The games come from
-  the agent itself at a reduced budget: DeepBot under the `hasty` reply
+  ([subtree_bot_generations.md](subtree_bot_generations.md#the-trainer)). The games come from
+  the agent itself at a reduced budget: SubtreeBot under the `hasty` reply
   model, whose [screen](#the-screen-at-the-root) finds the moves static
   equity buries in a fifth of a second a turn. The policy's top move without
   search would be cheaper still, but it does not play those moves yet: on the
@@ -1144,7 +1144,7 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   play, and his belief about her leave is `I_0`'s reading of them. A setup
   that keeps the S for a hook reads as a rack without the S: HastyBot,
   holding it, would have used it. Measured 2026-11-13 over 156 turns of
-  DeepBot's play (`--subtree-dump`, agent/belief_truth.h; leave inference
+  SubtreeBot's play (`--subtree-dump`, agent/belief_truth.h; leave inference
   model `v1` generation 292): the log probability Bob's belief gives the
   leave Alice in fact keeps after a candidate, over that of a uniform draw
   from the tiles he cannot see, by the candidate's static-equity rank:
@@ -1164,7 +1164,7 @@ A frozen policy `P_k` generates games, and those games train `I_k`, the
   Alice would not play from her rack the row stays negative under any
   belief that follows Bayes' rule, since the racks that play it are not
   hers, so each generation is read at the move played
-  ([deep_bot_generations.md](deep_bot_generations.md#measurements)).
+  ([subtree_bot_generations.md](subtree_bot_generations.md#measurements)).
 
 `I_k` models opponents who play like `P_k`. Against Macondo or human players
 that is a mismatch. Fine-tuning on recorded games with known racks is the
@@ -1328,9 +1328,9 @@ Three cheaper levers remain:
 ## Build order
 
 Each step names what it measures. The measurements guide the next step.
-Steps 1 to 3 are planned in detail in [deep_bot_v0.md](deep_bot_v0.md).
+Steps 1 to 3 are planned in detail in [subtree_bot_v0.md](subtree_bot_v0.md).
 Steps 4 to 6 run on the equity proposer, so step 3 does not gate them.
-Steps 1 to 10 are built. [deep_bot_roadmap.md](deep_bot_roadmap.md) sets
+Steps 1 to 10 are built. [subtree_bot_roadmap.md](subtree_bot_roadmap.md) sets
 the order from here: step 11's generations under the `hasty` reply, then a
 policy as Bob's reply in the sims, which this list does not have; the
 subtree's part of step 11 and steps 12 and 13 wait.
@@ -1352,7 +1352,7 @@ subtree's part of step 11 and steps 12 and 13 wait.
 4. **Bob's subtree, offline.** At known positions, for Bob's sampled racks
    after each of Alice's top candidates: Bob's chosen replies, how often
    each kind (bingo, setup, other) is chosen, and how stable the choice is
-   in `R_B`. DeepBot's `--subtree-dump` records these per turn in play
+   in `R_B`. SubtreeBot's `--subtree-dump` records these per turn in play
    (agent/subtree_dump.h), in place of a separate tool.
 5. **The agent.**
    - The GPU sims with groups and racing rounds, the leaf network, pairing,
@@ -1362,7 +1362,7 @@ subtree's part of step 11 and steps 12 and 13 wait.
    - *Measure:* the picks at the known positions
      (`positions/NWL23/interesting-positions/`, the blind_spots tag), turn
      time, and the subtree against the `hasty` reply model: the two
-     DeepBots against each other, and each pick played out from the
+     SubtreeBots against each other, and each pick played out from the
      self-play turns where they disagree ([Candidates](#candidates)); then
      matches against BestBot and `mset-sim` in standard Scrabble. The
      ablation against HastyBot is done, and null by design.
@@ -1387,7 +1387,7 @@ subtree's part of step 11 and steps 12 and 13 wait.
    network's predictions, and the agent forms residuals against the leaf
    network's prediction on the post-move position (v0, [The search
    network](#the-search-network)). *Measure:* the noise of a square's
-   residual against the rollout count. Done; measured on DeepBot's
+   residual against the rollout count. Done; measured on SubtreeBot's
    after-reply sims under the `v1` leaf network, 3 games each at 4, 12 and
    48 sims per rack (`py/scripts/deep_bot/residual_noise.py`), per start
    summed over its ~180 empty squares: the points residual's squared signal
@@ -1445,21 +1445,21 @@ subtree's part of step 11 and steps 12 and 13 wait.
       read alike. The heads are trained, not yet exported: the agent reads
       maps from the leaf network until the store needs the search network's
       (step 12);
-    - the measurement at the agent's positions (built): DeepBot's
+    - the measurement at the agent's positions (built): SubtreeBot's
       `--policy-model` serves a policy-set export beside the subtrees, and
       each dumped candidate records how often the policy's top move at Bob's
       position, over his whole pool and over the candidates his subtree
       simmed, is the reply the subtree chose (agent/policy_agreement.h), next
       to HastyBot's share; `py/scripts/deep_bot/policy_agreement.py`
       tabulates a dump by bag. Measured 2026-11-13 on 156 turns of
-      DeepBot's play under the `policy_set` tag `v1`'s generation 69, over
+      SubtreeBot's play under the `policy_set` tag `v1`'s generation 69, over
       1,218 searched candidates: the policy's top move over Bob's pool is
       his subtree's reply at 46.2% of racks, HastyBot's move at 46.5%, and
       the reply of a second run of the subtree on fresh samples at 45.0%. At
       `R_B = 20` the reply is too noisy a reference to tell a policy from
       HastyBot: each agrees with it as often as it agrees with itself.
 11. **Generations,** as one dashboard workload
-    ([deep_bot_generations.md](deep_bot_generations.md)). DeepBot plays
+    ([subtree_bot_generations.md](subtree_bot_generations.md)). SubtreeBot plays
     itself under the `hasty` reply model, and its games train the next leave
     inference model (warm-started, on a short window), leaf network and
     policy, the pools kept from self-play's own screen and the grouped pools
@@ -1536,7 +1536,7 @@ subtree's part of step 11 and steps 12 and 13 wait.
 ## Where this sits
 
 - **[simulation_information_flow.md](../simulation_information_flow.md).**
-  In that document's vocabulary, DeepBot steers sideways at the root and
+  In that document's vocabulary, SubtreeBot steers sideways at the root and
   below it: one sim's residuals choose which moves are simmed elsewhere,
   across Bob's racks and across Alice's candidates. Alice's valuation stays
   local, each of her payoffs from her own sims; Bob's choice at a rack reads
@@ -1559,13 +1559,13 @@ subtree's part of step 11 and steps 12 and 13 wait.
   varying number of tiles.
 - **AlphaZero** trains its network on positions from its own self-play, with
   its search's results as targets. The search network does the same: the
-  positions come from DeepBot's self-play, the policy's targets from the
+  positions come from SubtreeBot's self-play, the policy's targets from the
   pools' one-level search, the search Bob's subtree runs, and the root
-  correction head's from DeepBot's own root search.
+  correction head's from SubtreeBot's own root search.
 - **Macondo's BestBot** runs the same outer loop: candidates, sampled
   opponent racks, sims. Its opponent plays the static-equity argmax, so he
   never tries a setup that equity ranks low, and his rack is drawn
-  uniformly. DeepBot with the `hasty` reply model is that loop with inferred
+  uniformly. SubtreeBot with the `hasty` reply model is that loop with inferred
   racks and the leaf network. With `subtree`, it replaces that opponent with
   a decision made on the opponent's own information.
 - **Many-tree information-set search** (Cowling, Powley & Whitehouse, 2015)
@@ -1687,7 +1687,7 @@ yields many rows.
 
 ### Many sets at once
 
-DeepBot builds many sets per turn. Bob's subtrees alone need one per
+SubtreeBot builds many sets per turn. Bob's subtrees alone need one per
 `(a, r)`, about 100 per candidate. With either form, each network call is one
 batched call over all the sets in progress. Form 1 makes `N` such calls, all
 but the first of them light; Form 2 and the policy make one.

@@ -3,8 +3,8 @@
 **Status: feasibility analysis and build plan, 2026-10-23; a standalone demo
 is built (see [Demo results](#demo-results)). The first integration, the
 policy-set model's label generation, is planned as steps 9-11 of
-[deep_bot_v0.md](deep_bot_v0.md#build-order); DeepBot's sims run on it
-([deep_bot.md](deep_bot.md#sims)).** Whether
+[subtree_bot_v0.md](subtree_bot_v0.md#build-order); SubtreeBot's sims run on it
+([subtree_bot.md](subtree_bot.md#sims)).** Whether
 batches of HastyBot rollouts can run on the GPU with substantially better
 throughput than the multithreaded CPU engine, and how to build it if so.
 
@@ -24,7 +24,7 @@ unseen pool (the bag plus the opponent's rack). One rollout:
 
 The task is `N` rollouts and their mean. This is the mechanical core of every
 simulation the project runs: SimRunner's rollouts, the policy-set labels, and
-DeepBot's subtrees (where the draws come from the leave inference model and the
+SubtreeBot's subtrees (where the draws come from the leave inference model and the
 rollout runs a few plies to a win table). The sampling and the leaf differ
 there; the per-ply work does not.
 
@@ -127,7 +127,7 @@ What the model does not capture, and the microbenchmark will:
 
 Batching: one block of 128 threads per rollout with ~4 KB of shared memory
 gives ~16 resident blocks per SM, about 1,200 rollouts in flight. A batch
-should hold 10K+ rollouts to amortize the launch and the tail. DeepBot's shape
+should hold 10K+ rollouts to amortize the launch and the tail. SubtreeBot's shape
 (candidates times sampled opponent racks times sampled own racks times a
 policy set, of order 10^5-10^6 rollouts per turn) is a natural batch; a
 SimRunner call of 30 candidates times 100 rollouts is a small one and runs in
@@ -215,7 +215,7 @@ bag size, the two subrack leave arrays, the span list, the running best.
    each a KWG walk, one lane each. Anchors are re-evaluated around the placed
    tiles.
 4. **Leaf.** The score differential with the play-out adjustments. The mean
-   is a reduction across blocks. For DeepBot, a `K`-ply loop and the win
+   is a reduction across blocks. For SubtreeBot, a `K`-ply loop and the win
    table (a small table, device-resident) replace this step.
 
 ### Blanks
@@ -307,7 +307,7 @@ tool keep their CPU path; a backend selector routes batches to the device.
 
 Deferred: the opponent-ply table. The rest of PR 5's integration, with the
 leaf network on the device instead of a `K`-ply horizon to the win table, is
-steps 9-11 of [deep_bot_v0.md](deep_bot_v0.md#build-order).
+steps 9-11 of [subtree_bot_v0.md](subtree_bot_v0.md#build-order).
 
 ## Demo results
 
@@ -404,7 +404,7 @@ would already run 5-6x faster fed from the kernel than from the host.
 ### The sim maps on the device
 
 A sim also returns maps of the board's future
-([DeepBot plan, "Sims"](deep_bot.md#sims)). The kernel records what each
+([SubtreeBot plan, "Sims"](subtree_bot.md#sims)). The kernel records what each
 rollout settled of them (`rollout_abi::RolloutFates`, one per task, left on
 the device beside the leaf state): for every square its plies filled, who
 filled it, whether in a bingo and the move's signed points; a square still
@@ -420,7 +420,7 @@ bit-identical: `gpu_kernel_tests` asserts so, and `gpu_rollout_demo` found
 every start's maps identical at 65,536 rollouts of a late position with 10,620
 finished games among them. Only the per-start sums come back to the host (12
 KB per start), never the per-rollout fates, and only for a batch that asks for
-them (`RolloutBatch::sum_maps`): DeepBot's raced launches run a few rollouts
+them (`RolloutBatch::sum_maps`): SubtreeBot's raced launches run a few rollouts
 per start, so summing and downloading maps nobody reads would cost up to
 30% of a launch.
 

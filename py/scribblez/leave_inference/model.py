@@ -1,4 +1,4 @@
-"""The leave inference network (docs/plans/deep_bot_v0.md, "Python work"): a
+"""The leave inference network (docs/plans/subtree_bot_v0.md, "Python work"): a
 conv tower over the row's planes and an MLP over its scalars, fused into a
 context vector, then one of two heads.
 

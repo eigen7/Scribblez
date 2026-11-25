@@ -32,7 +32,7 @@ moved on. New plans go here, not in `docs/` proper.
   inform any decision. Built as a learned reader over fixed probes first
   (gated against shrinkage on face-up leaves, then repeated in standard
   Scrabble), then learned move choices, then learned draws.
-- **[deep_bot.md](deep_bot.md)**: *proposed, partly built.* A two-level
+- **[subtree_bot.md](subtree_bot.md)**: *proposed, partly built.* A two-level
   simulation agent for standard Scrabble. For each candidate and each sampled
   opponent rack, the opponent's reply is chosen in a subtree run on the
   opponent's own beliefs. Sims are two mechanical moves ending at a leaf
@@ -42,8 +42,8 @@ moved on. New plans go here, not in `docs/` proper.
   stored for the turn and read back by the same network, which steers which
   moves get sims, across racks and candidates, chooses the opponent's reply,
   and budgets the opponent's subtrees.
-- **[deep_bot_v0.md](deep_bot_v0.md)**: *proposed, not built.* The
-  implementation plan for DeepBot's first two models, trained from
+- **[subtree_bot_v0.md](subtree_bot_v0.md)**: *proposed, not built.* The
+  implementation plan for SubtreeBot's first two models, trained from
   HastyBot-vs-HastyBot games in standard Scrabble. First, a standalone leave
   inference model, with free labels from replay, a 5-move history with
   pre-move cross-checks, and a 29-float output (a weight per letter plus a
@@ -55,16 +55,16 @@ moved on. New plans go here, not in `docs/` proper.
   publishes eval metrics. The win table is a standalone fit that the leave
   inference workload also refits each generation, and every artifact carries
   a format version distinct from its generation.
-- **[deep_bot_roadmap.md](deep_bot_roadmap.md)**: *proposed, not built.*
-  The order of DeepBot's remaining work. The agent whose sims use HastyBot's
+- **[subtree_bot_roadmap.md](subtree_bot_roadmap.md)**: *proposed, not built.*
+  The order of SubtreeBot's remaining work. The agent whose sims use HastyBot's
   replies is matured first: an exact last turn, its parts measured one at a
   time against Macondo's BestBot's, and generations. Then the policy, as a
   transformer, becomes the opponent's reply inside the sims, so that the
   sims' opponent blocks a setup. The opponent's subtree, the evidence store
   and the learned budget wait.
-- **[deep_bot_generations.md](deep_bot_generations.md)**: *proposed, not
-  built.* One workload whose tag is a line of DeepBot generations. GPU
-  generators play DeepBot against itself on the tag's newest models, and
+- **[subtree_bot_generations.md](subtree_bot_generations.md)**: *proposed, not
+  built.* One workload whose tag is a line of SubtreeBot generations. GPU
+  generators play SubtreeBot against itself on the tag's newest models, and
   self-play's own root screen supplies the policy's pools. One trainer
   trains the leave inference model, the leaf network and the policy on each
   generation, scoring them on it first, and publishes the three as a release

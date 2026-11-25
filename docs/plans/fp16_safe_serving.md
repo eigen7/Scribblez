@@ -111,7 +111,7 @@ reference, which keeps the served path honest.
 
 ## The leaf network
 
-DeepBot's and LeafBot's leaf network (`deep_bot_leaf_eval`) is evaluated once
+SubtreeBot's and LeafBot's leaf network (`deep_bot_leaf_eval`) is evaluated once
 per rollout, so its throughput is the search's leaf budget, and it is served
 in FP16 (`--leaf-precision`). BF16 is not an option there: on the transformer
 leaf, LeafBot's analysis of the known positions ran 15 to 18 times slower in
@@ -156,7 +156,7 @@ residual stream feeds the final LayerNorm.
   cost is what that run's series shows.
 - **The peak as a series.** Each generation's evaluation records
   `activation_peak`, the largest input or output of any module on the
-  held-out rows in FP32 (`scribblez/activation_peak.py`); deep_bot records it
+  held-out rows in FP32 (`scribblez/activation_peak.py`); subtree_bot recorded it
   as `leaf_activation_peak`. It should plateau far below 65504.
 - **A hard error on a non-finite leaf.** Every read of the leaf's WLD in the
   GPU leaf service (`GpuRolloutValues`) refuses a non-finite logit, so an

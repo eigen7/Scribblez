@@ -88,7 +88,7 @@ Dashboard and compute:
   and the student trained on them, against the v1 curves and the static-equity
   shortlist. Its code has since been removed.
 - **[deep_bot_leaf_eval_results.md](deep_bot_leaf_eval_results.md)**: the
-  DeepBot rollout-leaf model's first runs. Transformer against conv trunk,
+  SubtreeBot rollout-leaf model's first runs. Transformer against conv trunk,
   with and without the join planes, against the win table. The TensorRT
   throughput sweep behind the model's size, and why the conv trunk is the one
   to serve.

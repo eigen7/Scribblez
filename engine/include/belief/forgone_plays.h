@@ -1,7 +1,7 @@
 #pragma once
 
 // Forgone plays: a lexical input for the leave inference model
-// (docs/plans/deep_bot_v0.md, "Forgone plays"). For a play and each tile kind
+// (docs/plans/subtree_bot_v0.md, "Forgone plays"). For a play and each tile kind
 // tau, how much more the best play needing tau would have scored, had the
 // player also held tau. A large margin is evidence that the leave lacks tau.
 //

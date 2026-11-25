@@ -174,7 +174,7 @@ add_library(scribblez_nn STATIC
   src/nn/onnx_metadata.cpp
   src/nn/neural_net.cpp
   src/nn/trt_eval_service.cpp
-  # The leave inference model's runtime (docs/plans/deep_bot_v0.md, "Serving").
+  # The leave inference model's runtime (docs/plans/subtree_bot_v0.md, "Serving").
   src/belief/leave_inference_net.cpp
   src/belief/served_leave_model.cpp)
 set_target_properties(scribblez_nn PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -328,7 +328,7 @@ target_link_libraries(gcg_to_slog PRIVATE
   Threads::Threads)
 
 # Forgone-play (.forgone) sidecars for .slog data, the leave inference model's
-# lexical input (docs/plans/deep_bot_v0.md).
+# lexical input (docs/plans/subtree_bot_v0.md).
 add_executable(forgone_play_tool apps/forgone_play_tool.cpp)
 target_link_libraries(forgone_play_tool PRIVATE
   scribblez_core

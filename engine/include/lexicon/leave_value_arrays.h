@@ -4,7 +4,7 @@
 // LeaveValues answers "what is this leave worth?" by lookup; LeaveValueArrays
 // holds, for each length 1..6, every leave in one flat array, for the passes
 // that scan all leaves of a length: the leave inference model's likelihood,
-// and sampling from it (docs/plans/deep_bot.md, "The leave inference model").
+// and sampling from it (docs/plans/subtree_bot.md, "The leave inference model").
 // A 7-tile leave arises only from a pass; passes are rare enough that the
 // model does not try to model them and assumes a uniform draw instead, so
 // there are no 7-tile rows.

@@ -10,7 +10,7 @@
 
 namespace scribblez {
 
-// The format version of a scribblez win table (docs/plans/deep_bot_v0.md,
+// The format version of a scribblez win table (docs/plans/subtree_bot_v0.md,
 // "Versions"). Bump it whenever the grid's shape or the meaning of a cell
 // (win_table_feature.h) changes; load_versioned accepts only this version.
 inline constexpr int kWinTableFormatVersion = 1;
@@ -22,7 +22,7 @@ inline constexpr char kWinTableMagicLine[] = "# scribblez-win-table";
 // given the spread from its point of view and the number of tiles it cannot
 // see (bag plus opponent's rack). Macondo's simmer turns a truncated
 // rollout's final position into a win probability with Macondo's table
-// (winpct.csv); DeepBot's sims use scribblez tables, fitted from self-play
+// (winpct.csv); SubtreeBot's sims used scribblez tables, fitted from self-play
 // (py/scribblez/leave_inference/win_table.py).
 //
 // This class owns the scribblez format: it writes and reads it, and
