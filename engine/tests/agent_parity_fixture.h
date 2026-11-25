@@ -2,9 +2,7 @@
 
 // Shared checks that a model-driven agent feeds its model exactly what the
 // training pipeline encodes for the same position: its board row against the
-// row the BlockDecoder reconstructs by replay (NeuralAgent, MsetSimAgent,
-// UltimateBotAgent), and its per-candidate move features against
-// move_set::encode_move (MsetSimAgent, UltimateBotAgent).
+// row the BlockDecoder reconstructs by replay (NeuralAgent).
 
 #include "agent/agent.h"
 #include "data/binary_log.h"
@@ -19,7 +17,6 @@
 #include "game_fixture.h"
 #include "lexicon/dictionary.h"
 #include "sim_agent_fixture.h"
-#include "training/move_set_encoder.h"
 
 #include <gtest/gtest.h>
 
@@ -87,78 +84,6 @@ inline void expect_input_rows_match(const std::vector<float>& agent_row,
     any_nonzero = any_nonzero || agent_row[i] != 0.0f;
   }
   ASSERT_TRUE(any_nonzero);
-}
-
-// The pre-move row a move-set agent (MsetSimAgent, UltimateBotAgent) encodes
-// with encode_board_row must equal the decoder's pre-move row for the
-// three-turn game. `Service` is the stub model the agent is built with.
-template <typename AgentT, typename Service>
-void check_pre_move_row_matches_decoder(std::array<int, 2> initial_scores) {
-  Dictionary dict = opening_dict();
-  const std::vector<float> dec_row =
-    decode_three_turn_row(dict, initial_scores, /*post_move=*/false);
-
-  typename AgentT::Params p;
-  p.name = "Agent";
-  p.dict = &dict;
-  AgentT agent(p, std::make_unique<Service>());
-  const std::array<Move, 3> moves = three_turn_moves();
-  agent.begin_game({initial_scores});
-  agent.observe_move(moves[0]);
-  agent.observe_move(moves[1]);
-
-  // The agent takes board and scores from its own replay of observed moves;
-  // only the rack comes from the request, so the rest of it is arbitrary.
-  const Rack no_leave;
-  const Board board;
-  const MoveRequest req{board,           dict,           three_turn_mover_rack(), no_leave,
-                        /*my_score=*/10,
-                        /*opp_score=*/5, /*bag_size=*/50};
-  std::vector<float> agent_row(size_t(input_floats(InputEncodingSpec{&dict})), 0.0f);
-  agent.encode_board_row(req, agent_row.data());
-  expect_input_rows_match(agent_row, dec_row);
-}
-
-// Candidate `i`'s features in `got` are what encode_move, the encoder the
-// training rows go through, makes of `move` at `pre_diff`.
-inline void expect_candidate_features_match(const move_set::MoveFeatureArrays& got, size_t i,
-                                            const Move& move, int pre_diff) {
-  int32_t letters[move_set::kMoveMaxPlaced];
-  uint8_t blanks[move_set::kMoveMaxPlaced];
-  int32_t squares[move_set::kMoveMaxPlaced];
-  uint8_t tile_mask[move_set::kMoveMaxPlaced];
-  float scalars[move_set::kMoveScalars];
-  move_set::encode_move(move, pre_diff, letters, blanks, squares, tile_mask, scalars);
-
-  const size_t tile_base = i * move_set::kMoveMaxPlaced;
-  for (int t = 0; t < move_set::kMoveMaxPlaced; ++t) {
-    EXPECT_EQ(got.letters[tile_base + t], letters[t]) << "move " << i << " tile " << t;
-    EXPECT_EQ(got.blanks[tile_base + t], blanks[t]) << "move " << i << " tile " << t;
-    EXPECT_EQ(got.squares[tile_base + t], squares[t]) << "move " << i << " tile " << t;
-    EXPECT_EQ(got.tile_mask[tile_base + t], tile_mask[t]) << "move " << i << " tile " << t;
-  }
-  for (int s = 0; s < move_set::kMoveScalars; ++s) {
-    EXPECT_EQ(got.scalars[i * move_set::kMoveScalars + s], scalars[s])
-      << "move " << i << " scalar " << s;
-  }
-}
-
-// expect_candidate_features_match over the whole candidate set, and checks
-// that its cross-check features are what encode_moves_cross_checks -- the
-// training rows' encoder -- makes of the set on `board`.
-inline void expect_move_features_match(const move_set::MoveFeatureArrays& got, const Board& board,
-                                       const Dictionary& dict, const std::vector<Move>& candidates,
-                                       int pre_diff) {
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    expect_candidate_features_match(got, i, candidates[i], pre_diff);
-  }
-  const size_t n = candidates.size();
-  std::vector<int32_t> cells(n * move_set::kMoveCrossSlots);
-  std::vector<uint8_t> letters(n * move_set::kMoveCrossLetters);
-  move_set::encode_moves_cross_checks(board, dict, candidates.data(), int64_t(n), cells.data(),
-                                      letters.data());
-  EXPECT_EQ(got.cross_cells, cells);
-  EXPECT_EQ(got.cross_letters, letters);
 }
 
 }  // namespace scribblez::testing

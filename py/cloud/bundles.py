@@ -53,14 +53,8 @@ BUNDLE_BINARY_NAMES = [
     "forgone_play_tool",
     # One-shot: migrates a worker's v10 .slog corpora (apps/slog_migrate_v11.cpp).
     "slog_migrate_v11",
-    # The GPU labeling tools (policy_set and hidden_blind_spots generators).
-    # They need no library play_game does not.
-    "policy_set_pool_tool",
-    "blind_spot_confirm_tool",
-    "sim_obs_tool",
+    # The blind_spots generator's survey.
     "sim_candidate_survey_tool",
-    "move_set_eval_target_generator",
-    "transfer_test_generator",
     # The known positions' tools (deep_bot/known_positions.py): the GCGs to a
     # .slog, and an agent's picks there (leaf_eval_hasty_rollouts' rollouts role).
     "gcg_to_slog",

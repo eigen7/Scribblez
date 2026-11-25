@@ -2,7 +2,7 @@
 
 The smallest experiment in the lexical-NN track
 ([rack_best_experiments.md](rack_best_experiments.md) is the next rung, and
-[lexical_nn.md](lexical_nn.md) the larger per-lane task; the tools are
+max-move-per-lane the larger per-lane task; the tools are
 catalogued in [lexical_tools.md](lexical_tools.md)). It asks one question:
 can a neural network learn to *use* a frozen, compiled lexicon as a tool, and
 so generalize to words it never saw in training?

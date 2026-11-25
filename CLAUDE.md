@@ -146,7 +146,7 @@ experiments, so tests stay cheap:
   compares the engine's TensorRT outputs with PyTorch for every model family.
   Run it when a change reaches TensorRT inference or what feeds it: engine/
   src/nn or engine/include/nn, the agents' model sessions, ONNX export
-  (py/scribblez/onnx_export_util.py, */onnx_export.py, proposal_export.py),
+  (py/scribblez/onnx_export_util.py, */onnx_export.py),
   a model definition, or the input/move encodings a model consumes.
 - **Small configurations.** Search budgets, game counts, epochs and corpus
   sizes are the smallest that still exercise what the test asserts; a case

@@ -1,10 +1,9 @@
 # The learning-rate schedule: cyclic warmup-stable-decay
 
 The `wsd` optimizer arm: AdamW with a cyclic warmup-stable-decay (WSD)
-learning rate over the rows-clock. It is the only schedule of the
-max_move_per_lane and evidence_trajectories trainers, and one of two arms of
-position_eval and move_set_eval, which default to the other arm,
-`schedule_free` (AdamWScheduleFree; see `py/scribblez/generational/optim.py`).
+learning rate over the rows-clock. It is one of the generational trainers'
+optimizer arms; they default to `schedule_free` (AdamWScheduleFree; see
+`py/scribblez/generational/optim.py`).
 
 The code is `WsdSchedule` and `WsdLrController` in
 `py/scribblez/generational/controls.py`. This document records why the
@@ -104,35 +103,19 @@ Each trainer's params carry `lr` (the peak), `lr_warmup_rows` and
 `lr_cycle_rows`. The last two are in **that trainer's own rows-clock units**,
 which differ. The defaults are starting points to retune from the loss plots.
 
-- **position_eval and max_move_per_lane** count positions. With
+- **position_eval** counts positions. With
   `games_per_generation=20000`, `window=4` and `turns_per_game=1`, a
   generation is ~80k rows. `lr_warmup_rows = 200_000` (~2.5 generations);
   `lr_cycle_rows = 2_000_000` (~25 generations per cycle, which gives several
   annealed checkpoints over a long run without squeezing the stable phase
   where most training happens).
-- **move_set_eval** counts candidate moves. The reference run in
-  [move_set_eval_results.md](move_set_eval_results.md) trained 772M rows over
-  25 passes, ~31M rows per pass: two orders of magnitude more than the other
-  trainers. Their defaults would end warmup within the first 1% of pass 1 and
-  thrash through ~15 cycles per pass. `lr_warmup_rows = 15_000_000` (~0.5
-  pass); `lr_cycle_rows = 300_000_000` (~10 passes, so ~2.5 cycles over a
-  25-pass run, with decays landing around passes 12–13 and 22–23). These are
-  sized from that one run; re-check against a live tag's rows per pass.
-- **evidence_trajectories** counts held-out candidate rows.
-  `lr_warmup_rows = 800_000` (~half a pass over a 350k-position corpus);
-  `lr_cycle_rows = 16_000_000` (~10 passes).
 
-On position_eval and move_set_eval, `lr_warmup_rows` also sets the
+On every trainer, `lr_warmup_rows` also sets the
 schedule-free arm's warmup, and `lr` left at 0 takes each arm's own default
 (`generational/optimizer_arms.py`).
 
 ## Open questions
 
-- **move_set_eval has a knowable horizon** once its corpus is complete
-  (`target_pairs` plus `train_epochs`), which is the classic single-decay WSD
-  case. A horizon-aware policy (decay over the last k epochs on the finished
-  corpus) would fit it better than periodic cycles. Its default arm is
-  schedule-free, so this matters only for `wsd` runs.
 - Whether periodic restarts beat a monotone horizon-free schedule (warmup
   plus a floored inverse-sqrt decay, no cycles) on the open-ended trainers is
   unmeasured.
@@ -152,7 +135,7 @@ may want to revisit.
 | 3 | scope | Nothing verified a real decay before merge. | Adopted: a live position_eval run with a shrunk cycle crossed every boundary (7 `lr` events at the exact expected positions) before merge. |
 | 4 | scope | Decay and floor fractions were per-trainer fields with identical values. | Adopted: module constants; two params per trainer. |
 | 5 | hidden complexity | Tags started under a hand-set rate had no migration: resumed under the schedule, their cursor lands wherever the clock says, possibly at the peak with no re-warmup. | Accepted as a limitation; a persisted schedule-origin field was rejected to keep the controller stateless. Such tags finish under the code they started with, or restart. |
-| 6 | rival | Split policies: single-decay horizon-aware WSD for `move_set_eval`; monotone warmup plus floored inverse-sqrt for the open-ended trainers; no cycles or re-warmups, which the plan offered no evidence for. | Rejected: the open-ended trainers' output is a checkpoint stream evaluated by match readouts under a moving data window, so periodic annealed checkpoints are the point, and an inverse-sqrt floor is no less arbitrary than a cycle length. Neither side has evidence, and two policies double the surface. The `move_set_eval` half is conceded on the merits (see Open questions). |
+| 6 | rival | Split policies: single-decay horizon-aware WSD for `move_set_eval`; monotone warmup plus floored inverse-sqrt for the open-ended trainers; no cycles or re-warmups, which the plan offered no evidence for. | Rejected: the open-ended trainers' output is a checkpoint stream evaluated by match readouts under a moving data window, so periodic annealed checkpoints are the point, and an inverse-sqrt floor is no less arbitrary than a cycle length. Neither side has evidence, and two policies double the surface. The `move_set_eval` half is conceded on the merits. |
 
 Also considered by the author and set aside at the time: ScheduleFree+
 (Defazio et al., arXiv 2605.19095), whose "anytime" framing fits the

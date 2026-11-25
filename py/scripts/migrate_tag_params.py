@@ -27,8 +27,8 @@ Usage:
     ./py/scripts/migrate_tag_params.py position_eval --tag footprints-official \
         --drop mask_placement
 
-    ./py/scripts/migrate_tag_params.py evidence_trajectories --all \
-        --rename traj_rollouts=rollouts --set temperature=1.0 --dry-run
+    ./py/scripts/migrate_tag_params.py leaf_bot_generation --all \
+        --set analysis_opp_leaves=64 --dry-run
 """
 
 import argparse

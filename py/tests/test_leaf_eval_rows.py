@@ -16,7 +16,7 @@ from scribblez.selfplay import hasty_player_spec, run_games
 from scribblez.supply_registers import TILE_COUNTS
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
-# test_move_set_eval_targets.py.
+# test_dataloader.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 _TASK = "deep_bot_leaf_eval"
 

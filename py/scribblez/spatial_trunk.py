@@ -130,8 +130,8 @@ class SpatialTrunk(nn.Module):
     the one branch into the tower whose scale nothing bounds: over a long run of
     small-batch steps its two weight matrices can grow until it outweighs the
     batch-normalized stem by orders of magnitude, and the board's features drown
-    in the sum (a policy_set run went from 1x to 8e4x and collapsed to a uniform
-    policy). Tags trained before it existed run with it off.
+    in the sum (a policy-set model's run went from 1x to 8e4x and collapsed to a
+    uniform policy). Tags trained before it existed run with it off.
     """
 
     def __init__(

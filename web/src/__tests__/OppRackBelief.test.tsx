@@ -46,13 +46,9 @@ describe('OppRackBelief', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('names its model, and the pools\' own when it stands in for that one', () => {
-    const { rerender } = render(<OppRackBelief chart={chart(true)} />);
+  it('names its model', () => {
+    render(<OppRackBelief chart={chart(true)} />);
     expect(screen.getByText('leave inference v1 gen 292')).toBeInTheDocument();
-    rerender(<OppRackBelief chart={{ ...chart(true), stand_in_for: 'tilted2 gen 1188' }} />);
-    expect(
-      screen.getByText('leave inference v1 gen 292, standing in for tilted2 gen 1188 that labeled the pools'),
-    ).toBeInTheDocument();
   });
 
   it('draws inferred bars equal to the uniform ones where the model has nothing to say', () => {

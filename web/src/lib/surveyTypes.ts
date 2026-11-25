@@ -1,6 +1,6 @@
 // The sim-survey viewer's data, as py/scribblez/sim_survey_viewer.py builds it
-// from a CPU survey and py/scribblez/blind_spots_viewer.py from a
-// hidden_blind_spots tag; each script of the same name serves it at /api/survey.
+// from a CPU survey; py/scripts/sim_survey_viewer.py serves it at /api/survey.
+// Also the opponent-rack chart the leaf Positions tab shows (RackBeliefChart).
 import { PlacedTile } from '../types';
 
 // One side's next move after the candidate, over the confirming sim's rollouts.
@@ -35,7 +35,7 @@ export interface SurveyMove {
   move: string; // GCG notation
   display: string; // the same with played-through tiles spelled out: "A4 (mO)u(N)T"
   hasty_rank: number; // 1-based; 0 for a pass outside the static-equity ranking
-  equity?: number; // absent from blind spots, which do not record it
+  equity: number;
   score: number;
   leave: string;
   is_setup: boolean;
@@ -43,27 +43,23 @@ export interface SurveyMove {
   outside: boolean; // from outside HastyBot's top moves
   win_pct: number; // in the confirming sim
   rollouts: number; // the confirming sim's
-  // The CPU survey's rollout summaries; blind spots' GPU sims keep none.
-  stats?: SurveyMoveStats;
-  // Blind spots only: the screen's (the pool's raced sim) reading of the move.
-  screen_win_pct?: number;
-  screen_q?: number; // P(the move is the pool's best)
+  // The confirming sim's rollout summaries.
+  stats: SurveyMoveStats;
   // Only on a play from outside the top moves: how it fared against the best of
-  // them (`versus`) in the confirming sim; blind spots carry no sigmas.
+  // them (`versus`) in the confirming sim.
   gain_pct?: number;
   sigmas?: number;
   beats_cut?: boolean;
   versus?: string;
 }
 
-// What the mover believes about the opponent's rack (blind spots only): per
-// tile, the chance the rack holds at least one, under the leave inference
-// model and under no information. `modelled` is false where the model says
-// nothing (turn 0, after a pass or an empty leave, an empty bag): the rack is
-// then a uniform draw, and `inferred` equals `uniform` and is drawn as such.
-// Precomputed with sample racks (py/scribblez/blind_spots_beliefs.py) under
-// `model`; `stand_in_for` names the pools' own model when that one differs.
-// The kept leave's value in points (the leave table's), its mean and standard
+// What the mover believes about the opponent's rack: per tile, the chance the
+// rack holds at least one, under the leave inference model and under no
+// information. `modelled` is false where the model says nothing (turn 0, after
+// a pass or an empty leave, an empty bag): the rack is then a uniform draw, and
+// `inferred` equals `uniform` and is drawn as such. Precomputed with sample
+// racks (py/scribblez/leave_inference/beliefs.py, LeaveBeliefs.chart) under
+// `model`. The kept leave's value in points (the leave table's), its mean and standard
 // deviation under the model and under a uniform draw of the leave.
 export interface LeaveValueMoments {
   inferred: { mean: number; sd: number };
@@ -79,7 +75,6 @@ export interface RackBeliefChart {
   leave_value?: LeaveValueMoments | null;
   racks: { leave: string; refill: string }[];
   model: string; // "<leave_inference tag> gen <N>"
-  stand_in_for?: string;
 }
 
 export interface SurveyPosition {
@@ -93,13 +88,12 @@ export interface SurveyPosition {
   scores: [number, number];
   bag_size: number;
   solved_endgames: boolean; // the confirming sim's rollouts solved their endgames
-  num_legal_moves?: number; // absent from blind spots
+  num_legal_moves: number;
   played: string;
   board: (string | null)[][];
   // The opponent's move before this one ("O7 FLUNG +34", "exch 3", "pass") and
   // the squares it placed tiles on; null at the game's first turn.
   last_move: { text: string; squares: [number, number][] } | null;
-  belief?: RackBeliefChart; // blind spots only, when the tag's pools used the model
   moves: SurveyMove[]; // the outside plays, best first, then the top moves by hasty rank
 }
 

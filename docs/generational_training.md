@@ -1,9 +1,7 @@
 # Generational training
 
-The training loop shared by the trainers of the position_eval and
-max_move_per_lane workloads
-([scribblez/position_eval/trainer.py](../py/scribblez/position_eval/trainer.py),
-[scribblez/max_move_per_lane/trainer.py](../py/scribblez/max_move_per_lane/trainer.py)),
+The training loop of the generational trainers, position_eval's foremost
+([scribblez/position_eval/trainer.py](../py/scribblez/position_eval/trainer.py)),
 and the machinery it is designed to grow into. This document covers the
 rationale; the protocol (roles, staging, scheduler, failure handling) is in
 [position_eval_workload.md](position_eval_workload.md), and the data pipeline
@@ -83,11 +81,9 @@ param (`scribblez/generational/optim.py`):
   averaged iterate, so every generation's export is equally deployable. The
   average is uniform for the first `averaging_window_rows` rows and covers only
   the most recent that many after, since a whole-run average of a long run mixes
-  weights that have drifted apart (generational/optim.py). The default for
-  position_eval and move_set_eval.
+  weights that have drifted apart (generational/optim.py). The default.
 - `wsd`: AdamW on a cyclic warmup-stable-decay schedule over the rows-clock,
-  which leaves a well-annealed checkpoint at the end of every cycle. The only
-  schedule for max_move_per_lane and evidence_trajectories.
+  which leaves a well-annealed checkpoint at the end of every cycle.
 
 Both are pure functions of `rows_trained` plus the checkpointed optimizer
 state, so a resume continues exactly where it stopped. The WSD design and its

@@ -14,8 +14,8 @@
 // memory budget where it can, and files the batch does not need are evicted.
 //
 // A kPositionEval row is input_floats(spec) input floats followed by the label
-// block defined in training/training_targets.h; kMaxMovePerLane and
-// kLeaveInference rows use their tasks' layouts (BlockDecoder::row_floats_for).
+// block defined in training/training_targets.h; the other tasks' rows use
+// their own layouts (BlockDecoder::row_floats_for).
 //
 // The inner classes follow AlphaZeroArcade's DataLoader design:
 //

@@ -16,10 +16,8 @@ Tables:
   meta            one row of run config (args, model size, timestamps)
   metrics         long-format scalar series: (epoch, name) -> value
   loss_weights    each loss component's coefficient in the optimized total
-  lane_pred       max_move_per_lane's per-checkpoint lane-analysis predictions
   match_eval      per-generation match result vs a fixed opponent
-  release_match   per-release match result vs each of deep_bot's opponents
-  release_pick    per-release pick at each known position, per reply model
+  release_match   per-release match result vs each of a release's opponents
   match_arm       per-arm match result of a match_arms experiment
   control         live operator controls and their current values
   control_event   when each control change took effect, on the rows clock
@@ -37,7 +35,6 @@ import io
 import json
 import sqlite3
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -75,15 +72,6 @@ CREATE TABLE IF NOT EXISTS loss_weights (
   name TEXT PRIMARY KEY,        -- a per-component loss series ('loss_<head>')
   weight REAL                   -- its coefficient in the optimized total loss
 );
-CREATE TABLE IF NOT EXISTS lane_pred (
-  generation INTEGER,           -- checkpoint index this prediction was made at
-  positions  INTEGER,           -- positions trained at that checkpoint (display label)
-  position   INTEGER,           -- lane-analysis dataset position index
-  occ        BLOB,              -- (30,15,27) uint8: thresholded predicted occupancy union
-  score_pmf  BLOB,              -- (30,100) float32: predicted per-lane score distribution
-  has_move   BLOB,              -- (30,) float32: predicted per-lane has-move probability
-  PRIMARY KEY (generation, position)
-);
 CREATE TABLE IF NOT EXISTS match_eval (
   epoch INTEGER PRIMARY KEY,    -- generation index of the model under test
   positions INTEGER,            -- rows trained at that checkpoint (display label)
@@ -103,15 +91,6 @@ CREATE TABLE IF NOT EXISTS release_match (
   ci_half_width REAL,           -- pointwise CI half-width around score
   elapsed_s REAL,
   PRIMARY KEY (release, opponent)
-);
-CREATE TABLE IF NOT EXISTS release_pick (
-  release INTEGER,              -- the deep_bot release asked
-  reply TEXT,                   -- the reply model it was asked under
-  position TEXT,                -- a known position's id
-  pick TEXT,                    -- its move there, as the pick tool writes it
-  reading TEXT,                 -- reference, equity or other (deep_bot/known_positions.py)
-  seconds REAL,
-  PRIMARY KEY (release, reply, position)
 );
 CREATE TABLE IF NOT EXISTS match_arm (
   arm TEXT PRIMARY KEY,         -- arm name from the task's frozen arms param
@@ -284,69 +263,6 @@ def read_control_events(conn: sqlite3.Connection, name: str | None = None) -> li
     return [dict(r) for r in conn.execute(sql, params)]
 
 
-def write_lane_preds(conn: sqlite3.Connection, generation: int, positions: int, preds: dict):
-    """Store one generation's lane-analysis predictions, one row per dataset
-    position (shapes in the lane_pred schema, stacked over positions).
-    Re-recording a generation replaces its rows, so a resumed run is safe."""
-    occ, pmf, has = preds["occ"], preds["score_pmf"], preds["has_move"]
-    rows = [
-        (generation, positions, i, to_blob(occ[i]), to_blob(pmf[i]), to_blob(has[i]))
-        for i in range(occ.shape[0])
-    ]
-    conn.executemany(
-        "INSERT INTO lane_pred (generation, positions, position, occ, score_pmf, has_move) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(generation, position) DO UPDATE SET positions=excluded.positions, "
-        "occ=excluded.occ, score_pmf=excluded.score_pmf, has_move=excluded.has_move",
-        rows,
-    )
-    conn.commit()
-
-
-def read_lane_generations(conn: sqlite3.Connection) -> list[dict]:
-    """The generations with lane predictions, oldest first: the stops of the
-    Lane analysis tab's generation slider."""
-    return [
-        {"generation": r["generation"], "positions": r["positions"]}
-        for r in conn.execute(
-            "SELECT generation, MAX(positions) AS positions FROM lane_pred "
-            "GROUP BY generation ORDER BY generation"
-        )
-    ]
-
-
-def read_lane_pred(conn: sqlite3.Connection, generation: int, position: int) -> dict | None:
-    """One generation's prediction for one dataset position, or None."""
-    r = conn.execute(
-        "SELECT occ, score_pmf, has_move FROM lane_pred WHERE generation=? AND position=?",
-        (generation, position),
-    ).fetchone()
-    if r is None:
-        return None
-    return {
-        "occ": from_blob(r["occ"]),
-        "score_pmf": from_blob(r["score_pmf"]),
-        "has_move": from_blob(r["has_move"]),
-    }
-
-
-@dataclass(frozen=True)
-class PredTable:
-    """A per-generation prediction table: the array names a trainer record
-    carries for it, and the writer that stores them."""
-
-    arrays: tuple[str, ...]
-    write: object  # callable(conn, generation, positions, {array name: ndarray})
-
-
-# The prediction tables a trainer's generation record may carry, by table name.
-# generational/records.py packs the arrays; train_ingest.py unpacks them into
-# `write`.
-PRED_TABLES = {
-    "lane_pred": PredTable(("occ", "score_pmf", "has_move"), write_lane_preds),
-}
-
-
 def read_record_ledger(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     """Every ingested trainer record, name -> (mtime_ns, size) as ingested."""
     return {
@@ -492,29 +408,6 @@ def read_release_matches(conn: sqlite3.Connection) -> list[dict]:
     for r in rows:
         r["pair_counts"] = json.loads(r["pair_counts"])
     return rows
-
-
-def write_release_picks(conn: sqlite3.Connection, release: int, picks: dict[str, list[dict]]):
-    """Store a release's picks at the known positions, per reply model.
-    Asking a release again replaces its rows."""
-    conn.executemany(
-        "INSERT OR REPLACE INTO release_pick (release, reply, position, pick, reading, seconds) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        [
-            (release, reply, r["id"], r["pick"], r["reading"], float(r["seconds"]))
-            for reply, rows in picks.items()
-            for r in rows
-        ],
-    )
-    conn.commit()
-
-
-def read_release_picks(conn: sqlite3.Connection) -> list[dict]:
-    """Every release's picks, oldest release first."""
-    return [
-        dict(r)
-        for r in conn.execute("SELECT * FROM release_pick ORDER BY release, reply, position")
-    ]
 
 
 def write_match_arm(conn: sqlite3.Connection, arm: str, record: dict):

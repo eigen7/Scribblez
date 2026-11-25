@@ -10,7 +10,6 @@ namespace scribblez {
 // encoding followed by labels. PositionEncoder replays a game to a sampled
 // position and hands the context to Task::encode_row, so one replay pipeline
 // serves several training problems; docs/architecture.md describes the replay.
-// MaxMovePerLaneTask is the other task.
 
 // The position evaluation task: the input_encoder.h input, then AllTargets.
 struct PositionEvalTask {

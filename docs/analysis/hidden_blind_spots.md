@@ -2,7 +2,7 @@
 
 A blind spot is a position where a move from outside HastyBot's ten best by
 static equity out-sims all ten
-([blind_spots.md](../blind_spots.md#hidden-leaves-blind-spots-on-the-gpu)).
+(the GPU section of `docs/blind_spots.md`, since deleted).
 These positions are the motivating examples for DeepBot
 ([plans/deep_bot.md](../plans/deep_bot.md)): each one shows something a sim
 sees and static equity does not. This page works through a few of them by

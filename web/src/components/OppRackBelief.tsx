@@ -2,9 +2,8 @@ import { useState } from 'react';
 import LeaveValueCurves from './LeaveValueCurves';
 import { RackBeliefChart } from '../lib/surveyTypes';
 
-// The blind-spots viewer's opponent-rack panel: what the mover believes the
-// opponent holds, from the leave inference model (py/scribblez/blind_spots_viewer.py,
-// BeliefPanel). A grouped bar per tile -- the chance the rack holds one under
+// The leaf Positions tab's opponent-rack panel (LeafOppBelief): what the mover
+// believes the opponent holds, from the leave inference model. A grouped bar per tile -- the chance the rack holds one under
 // the model, beside the same under no information -- the kept leave's value
 // under each (LeaveValueCurves) where the chart has it, and sample racks, the
 // kept leave apart from the refill, all precomputed.
@@ -91,11 +90,7 @@ export default function OppRackBelief({ chart }: { chart: RackBeliefChart }) {
           ? `kept ${chart.leave_length} at their last move, drew ${chart.refill} · P(holds at least one)`
           : `no leave inference here, so inferred is uniform: a uniform rack of ${chart.refill} · P(holds at least one)`}
       </div>
-      <div className="belief-sub">
-        {chart.stand_in_for
-          ? `leave inference ${chart.model}, standing in for ${chart.stand_in_for} that labeled the pools`
-          : `leave inference ${chart.model}`}
-      </div>
+      <div className="belief-sub">{`leave inference ${chart.model}`}</div>
       <div className="belief-legend">
         <span>
           <i style={{ background: INFERRED }} /> inferred

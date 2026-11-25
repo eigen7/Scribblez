@@ -1,27 +1,16 @@
 #include "data/format_layout.h"
 
 #include "data/binary_log.h"
-#include "data/group_log.h"
-#include "data/pool_log.h"
-#include "data/probe_log.h"
-#include "data/probe_replay.h"
-#include "data/sim_observation_log.h"
-#include "data/survivor_log.h"
 #include "encoding/input_encoder.h"
 #include "encoding/leaf_eval_input_encoder.h"
 #include "game/glyph.h"
 #include "game/move.h"
 #include "game/rack.h"
 #include "lexicon/leave_value_arrays.h"
-#include "sim/sim_maps.h"
 #include "sim/sim_runner.h"
-#include "sim/transfer_candidates.h"
 #include "sim/win_pct_table.h"
 #include "sim/win_table_feature.h"
 #include "training/leave_inference_task.h"
-#include "training/move_set_eval_target_log.h"
-#include "training/policy_set_format.h"
-#include "training/policy_set_inputs.h"
 #include "training/training_targets.h"
 #include "util/metaprogramming.h"
 
@@ -55,7 +44,7 @@ struct FieldInfo {
 // serialize as their underlying byte.
 consteval const char* scalar_code(std::meta::info t) {
   if (util::type_is<uint8_t>(t) || util::type_is<Glyph>(t) || util::type_is<MoveType>(t) ||
-      util::type_is<SimObsRole>(t) || util::type_is<bool>(t))
+      util::type_is<bool>(t))
     return "u1";
   if (util::type_is<int8_t>(t)) return "i1";
   if (util::type_is<uint16_t>(t)) return "<u2";
@@ -73,7 +62,7 @@ consteval const char* scalar_code(std::meta::info t) {
 // keyed by the type's own identifier (build_structs serves them under it).
 consteval bool is_served_struct(std::meta::info t) {
   return util::type_is<Move>(t) || util::type_is<RolloutStats>(t) ||
-         util::type_is<WinTableFeature>(t) || util::type_is<PoolModelRecord>(t);
+         util::type_is<WinTableFeature>(t);
 }
 
 // Fills in the dtype of one field: a nested struct reference, a char array
@@ -138,41 +127,14 @@ json::object build_structs() {
   json::object s;
   s["Move"] = struct_json<Move>();
   s["RolloutStats"] = struct_json<RolloutStats>();
-  s["SobsFileHeader"] = struct_json<SimObsFileHeader>();
-  s["SobsPositionHeader"] = struct_json<SimObsPositionHeader>();
-  s["SobsRecord"] = struct_json<SimObsRecord>();
-  s["MsetFileHeader"] = struct_json<move_set_eval::TargetFileHeader>();
-  s["MsetPositionHeader"] = struct_json<move_set_eval::TargetPositionHeader>();
   s["SlogFileHeader"] = struct_json<binlog::FileHeader>();
-  s["PoolFileHeader"] = struct_json<PoolFileHeader>();
-  s["PoolPositionHeader"] = struct_json<PoolPositionHeader>();
-  s["PoolOppRack"] = struct_json<PoolOppRack>();
-  s["PoolCandidate"] = struct_json<PoolCandidate>();
-  s["PoolModelRecord"] = struct_json<PoolModelRecord>();
-  s["SurvivorFileHeader"] = struct_json<SurvivorFileHeader>();
-  s["SurvivorPositionHeader"] = struct_json<SurvivorPositionHeader>();
-  s["SurvivorRecord"] = struct_json<SurvivorRecord>();
-  s["GroupFileHeader"] = struct_json<GroupFileHeader>();
-  s["GroupHeader"] = struct_json<GroupHeader>();
-  s["GroupRack"] = struct_json<GroupRack>();
-  s["GroupMapHeader"] = struct_json<GroupMapHeader>();
   s["WinTableFeature"] = struct_json<WinTableFeature>();
   s["WinTableSample"] = struct_json<WinTableSample>();
   s["SlogGameMetadata"] = struct_json<binlog::GameMetadata>();
   s["SlogInitialRacks"] = struct_json<binlog::InitialRacks>();
   s["SlogTurnBlob"] = struct_json<binlog::TurnBlob>();
-  s["ProbeFileHeader"] = struct_json<ProbeFileHeader>();
-  s["ProbePositionHeader"] = struct_json<ProbePositionHeader>();
-  s["ProbeCandidate"] = struct_json<ProbeCandidate>();
-  s["ProbeRecord"] = struct_json<ProbeRecord>();
-  s["ProbeRootState"] = struct_json<ProbeRootState>();
-  s["ProbeCandidateState"] = struct_json<ProbeCandidateState>();
-  s["ProbeStartState"] = struct_json<ProbeStartState>();
-  s["ProbeTurnState"] = struct_json<ProbeTurnState>();
   return s;
 }
-
-constexpr size_t kStrata = std::meta::enumerators_of(^^Stratum).size();
 
 json::object build_constants() {
   json::object c;
@@ -180,48 +142,6 @@ json::object build_constants() {
   c["slog"] = {{"magic", binlog::kMagic},
                {"version", binlog::kVersion},
                {"flag_face_up_leaves", binlog::kFlagFaceUpLeaves}};
-  c["sobs"] = {{"magic", kSimObsMagic},
-               {"version", kSimObsVersion},
-               {"flag_retired_open_rack", 1},
-               {"flag_open_leaves", kSimObsFlagOpenLeaves},
-               {"flag_trajectory", kSimObsFlagTrajectory},
-               {"flag_labels", kSimObsFlagLabels},
-               {"role_anchor", static_cast<uint8_t>(SimObsRole::kAnchor)},
-               {"role_on_policy", static_cast<uint8_t>(SimObsRole::kOnPolicy)},
-               {"role_off_policy", static_cast<uint8_t>(SimObsRole::kOffPolicy)}};
-  c["policy_set"] = {{"format_version", kPolicySetFormatVersion},
-                     {"opp_rack_floats", policy_set::kOppRackFloats},
-                     {"equity_floor", policy_set::kEquityFloor}};
-  c["pool"] = {{"magic", kPoolMagic},
-               {"version", kPoolFormatVersion},
-               {"flag_leave_inference", kPoolFlagLeaveInference}};
-  c["survivors"] = {{"magic", kSurvivorMagic},
-                    {"version", kSurvivorFormatVersion},
-                    {"source_sims", static_cast<uint8_t>(SurvivorSource::SIMS)},
-                    {"source_solved", static_cast<uint8_t>(SurvivorSource::SOLVED)}};
-  {
-    // SimMaps' layout, [name, rows, cols] per field in order.
-    json::array fields;
-    for (const SimMapsField& f : sim_maps_fields())
-      fields.push_back(json::array{f.name, f.rows, f.cols});
-    c["group"] = {{"magic", kGroupMagic},
-                  {"version", kGroupFormatVersion},
-                  {"sim_maps_fields", std::move(fields)}};
-  }
-  c["sprobe"] = {{"magic", kProbeMagic},
-                 {"version", kProbeVersion},
-                 {"flag_face_up_leaves", kProbeFlagFaceUpLeaves},
-                 {"strata", kStrata}};
-  {
-    json::array target_names;
-    for (const char* name : move_set_eval::kTargetNamesV1) target_names.emplace_back(name);
-    c["mset"] = {{"magic", move_set_eval::kTargetMagic},
-                 {"version", move_set_eval::kTargetVersion},
-                 {"flag_open_leaves", move_set_eval::kTargetFlagOpenLeaves},
-                 {"flag_full_sweep", move_set_eval::kTargetFlagFullSweep},
-                 {"target_names_v1", std::move(target_names)},
-                 {"plane_width", move_set_eval::kPlaneWidth}};
-  }
   // The leave inference row (training/leave_inference_task.h): the version
   // models stamp, and the codes of a row's LeaveRowCause target.
   c["leave_inference"] = {{"format_version", kLeaveInferenceFormatVersion},
@@ -263,7 +183,7 @@ json::object build_constants() {
                     {"exchange", int(MoveType::EXCHANGE)},
                     {"pass", int(MoveType::PASS)}};
   // The four placement heads in declaration order (training_targets.h). This is
-  // also the .mset plane order and the RolloutStats count-plane order.
+  // also the RolloutStats count-plane order.
   c["placement_head_names"] = {OppNextPlacementTarget::kName, SelfNextPlacementTarget::kName,
                                OppWinPlacementTarget::kName, SelfWinPlacementTarget::kName};
   // The per-side legality-mask targets (opp, self), in row order. There is one

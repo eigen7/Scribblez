@@ -133,7 +133,7 @@ the network.
 Re-evaluation is set-conditioned scoring,
 `score(M′ | board, {(Mᵢ, sim-resultᵢ)})` for every legal move `M′`, in the
 shape of an attentive neural process
-([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)):
+(`evidence_fusion.py`):
 
 - **Evidence tokens.** One per simmed candidate: its move encoding (the move
   set evaluation model's move encoder, reused), fused with its sim
@@ -153,7 +153,7 @@ shape of an attentive neural process
 
 **The predictions have to be inputs; the network cannot recover them.** An
 evidence encoder that reads observations alone (the kill-test's
-[sim_evidence/model.py](../../py/scribblez/sim_evidence/model.py), whose fusion
+`sim_evidence/model.py`, whose fusion
 is a plain additive `x + ev_spatial`, with the encoder blind to `x`) can
 express `posterior = prior + g(observation)` but not
 `posterior = prior + k·(observation − prior)`. The second needs a term that
@@ -182,7 +182,7 @@ re-scoring pass run, with outputs bit-identical to a full recompute. This
 makes **late fusion a load-bearing constraint**: evidence must not modulate
 the trunk's own layers, or the trunk cannot be cached across rounds. The
 engine runs this as two ONNX graphs, a per-turn `cache` graph and a
-per-iteration `step` graph ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
+per-iteration `step` graph (`evidence_staging.h`).
 
 The predictions carried by an evidence token are the **evidence-free
 first-pass** predictions, so they cache with the move encodings and a token
@@ -550,7 +550,7 @@ controls. The magnitude is bounded by saturation of the root readout, and an
 8× late-versus-early phase gradient supports the mechanism. Full numbers and
 conclusions: [sim_obs_experiment_results.md](../sim_obs_experiment_results.md).
 
-The pipeline was [sim_obs_tool](../../engine/apps/sim_obs_tool.cpp)
+The pipeline was sim_obs_tool (`engine/apps/sim_obs_tool.cpp`)
 (candidates are the HastyBot-equity top K, so each position's evidence
 contains the played move's own sim) feeding a four-armed trainer. The
 evidence-conditioned model was a zero-initialized fusion stage on the regular
@@ -585,11 +585,11 @@ a tag fails loudly.
 | Step | Build | Depends on | Status |
 |------|-------|-----------|--------|
 | 1 | Conjunction heads on the position evaluation model, targets from logs. Useful as probes even if the loop is never built. | — | **Done.** `opp_win_placement` / `self_win_placement`, plus the `self_next_placement` occupancy partner, through the full pipeline (target registry, decoder, FFI, model heads and losses, ONNX export, TensorRT binding, dashboard loss series). Since made footprint-categorical. |
-| 2 | Sim machinery emitting per-head empirical distributions, value estimates and counts; **common random numbers across candidates at a position**; a storage format for sim observations beside `.slog`. | 1 | **Done.** [sim_runner.h](../../engine/include/sim/sim_runner.h) (CRN rollouts over play, exchange and pass candidates; W/D/L and delta moments; footprint histograms) and [sim_observation_log.h](../../engine/include/data/sim_observation_log.h) (the versioned `.sobs` sidecar). |
+| 2 | Sim machinery emitting per-head empirical distributions, value estimates and counts; **common random numbers across candidates at a position**; a storage format for sim observations beside `.slog`. | 1 | **Done.** [sim_runner.h](../../engine/include/sim/sim_runner.h) (CRN rollouts over play, exchange and pass candidates; W/D/L and delta moments; footprint histograms) and `sim_observation_log.h` (the versioned `.sobs` sidecar). |
 | 3 | **Kill-test**: evidence-conditioned position evaluation model against the baseline. **Go/no-go gate for everything below.** | 2 | **Done: passed** (above). |
-| 4 | Evidence encoder and fusion stage reading the shared trunk, with tokens carrying the model's post-move predictions beside the observations; multi-size evidence-set training. | 3 | **Built on the student side**: the fusion stage and its exactness tests ([evidence_fusion.py](../../py/scribblez/evidence_fusion.py)) and the multi-prefix trainer (`py/scribblez/evidence/`). Evidence training of the position evaluation model stays deferred with the conditioned-teacher variant. |
+| 4 | Evidence encoder and fusion stage reading the shared trunk, with tokens carrying the model's post-move predictions beside the observations; multi-size evidence-set training. | 3 | **Built on the student side**: the fusion stage and its exactness tests (`evidence_fusion.py`) and the multi-prefix trainer (`py/scribblez/evidence/`). Evidence training of the position evaluation model stays deferred with the conditioned-teacher variant. |
 | 5 | The **move proposal model** ([above](#the-move-proposal-model)): the student copy with the proves-best head (best-so-far as an input), trained gain-first with the sim-outcome auxiliaries and no self-distillation anchor, on subset-assembled rows from the hybrid pools. | 4; roadmap items 2 to 4 | **Built; training waits on a deployment-quality corpus.** The gen-1 frozen-backbone trial over the 200-rollout v1 corpus is the recorded floor: conditioned − plain soft-CE −0.0008, acquisition hit rate 0.57 against the plain value's 0.61. |
-| 6 | The sequential agent (the decision procedure at `B = 1, R = K`) driven by the proves-best head; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way. | 5 | **Built** as UltimateBot ([roadmap.md](../roadmap.md) item 6, [ultimate_bot_agent.h](../../engine/include/agent/ultimate_bot_agent.h), loop in [evidence_loop.h](../../engine/include/agent/evidence_loop.h)). Budget and threshold measurements wait on a trained head. |
+| 6 | The sequential agent (the decision procedure at `B = 1, R = K`) driven by the proves-best head; budget tuning and the early-stopping threshold. Batched multi-round scheduling is the fallback, not a step on the way. | 5 | **Built** as UltimateBot ([roadmap.md](../roadmap.md) item 6, `ultimate_bot_agent.h`, loop in `evidence_loop.h`). Budget and threshold measurements wait on a trained head. |
 
 ## Open questions
 

@@ -14,15 +14,12 @@ Records, under the tag's records/ directory (paths.py names them):
                    weights, the controls' starting values. Rewritten freely
                    (a trainer re-stamps the parameter count once its model
                    exists).
-  gen_NNNNNN.json  one trained generation: its metrics row, the control
-                   events since the previous record, and which prediction
-                   tables its .npz sidecar carries. A trainer writes it last
+  gen_NNNNNN.json  one trained generation: its metrics row and the control
+                   events since the previous record. A trainer writes it last
                    of the generation's outputs -- after the ONNX export, the
                    rolling checkpoint and train_state.json -- so it is also
                    the commit marker: its existence means everything the
                    generation produced is in place.
-  gen_NNNNNN.npz   the per-dataset-position prediction arrays, keyed
-                   "<table>/<array>" (dashboard/db.py's PRED_TABLES).
 
 Controls travel the other way as one file, controls.json at the tag root. The
 dashboard rewrites it with every control's current value whenever the
@@ -34,19 +31,15 @@ Torch-free, since the controller imports it too.
 
 import json
 import os
-import tempfile
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
-from scribblez.dashboard.db import PRED_TABLES
 from scribblez.paths import (
     CONTROLS_REL,
     RUN_RECORD_REL,
     TagPaths,
-    generation_preds_rel,
     generation_record_rel,
 )
 
@@ -89,36 +82,29 @@ class TrainRecorder:
             {"positions": int(positions), "name": name, "value": float(value), "t": time.time()}
         )
 
-    def commit_generation(
-        self, generation: int, positions: int, metrics: dict, preds: dict | None = None
-    ):
-        """Deliver a trained generation's record. `metrics` is its scalar row;
-        `preds` maps a PRED_TABLES name to that table's arrays. Call only once
-        the generation's other outputs are in place: this record is the commit
-        marker that says they are."""
-        self.deliver_staged(self.stage_generation(generation, positions, metrics, preds))
+    def commit_generation(self, generation: int, positions: int, metrics: dict):
+        """Deliver a trained generation's record. `metrics` is its scalar row.
+        Call only once the generation's other outputs are in place: this
+        record is the commit marker that says they are."""
+        self.deliver_staged(self.stage_generation(generation, positions, metrics))
 
     def stage_generation(
-        self, generation: int, positions: int, metrics: dict, preds: dict | None = None
+        self, generation: int, positions: int, metrics: dict
     ) -> "StagedGeneration":
         """The first half of commit_generation, for a trainer that delivers off
-        its training thread: snapshot the record and prediction arrays now,
-        claiming the control events held so far, and leave the pushes to
-        deliver_staged."""
+        its training thread: snapshot the record now, claiming the control
+        events held so far, and leave the push to deliver_staged."""
         record = {
             "generation": int(generation),
             "positions": int(positions),
             "metrics": {k: _jsonable(v) for k, v in metrics.items()},
             "control_events": self._events,
-            "preds": sorted(preds) if preds else [],
         }
         self._events = []
-        return StagedGeneration(generation, record, _preds_file(preds) if preds else None)
+        return StagedGeneration(generation, record)
 
     def deliver_staged(self, staged: "StagedGeneration"):
-        """Push the prediction arrays, then the record that names them."""
-        if staged.preds_file is not None:
-            self._sink.push_file(staged.preds_file, generation_preds_rel(staged.generation))
+        """Push the record."""
         self._sink.push_json(generation_record_rel(staged.generation), staged.record)
 
 
@@ -126,20 +112,6 @@ class TrainRecorder:
 class StagedGeneration:
     generation: int
     record: dict
-    preds_file: Path | None  # a temp file, moved into the tag by the push
-
-
-def _preds_file(preds: dict) -> Path:
-    arrays = {
-        f"{table}/{name}": np.ascontiguousarray(preds[table][name])
-        for table in preds
-        for name in PRED_TABLES[table].arrays
-    }
-    fd, tmp = tempfile.mkstemp(suffix=".npz")
-    with os.fdopen(fd, "wb") as f:
-        np.savez(f, **arrays)
-    os.chmod(tmp, 0o644)  # mkstemp's private mode would follow the file into the tag
-    return Path(tmp)
 
 
 def read_controls(sink) -> dict[str, float]:

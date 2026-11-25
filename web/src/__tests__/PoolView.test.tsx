@@ -46,26 +46,26 @@ describe('PoolView', () => {
   it('shows each machine with its GPU and what holds it', async () => {
     serve([
       machine({}),
-      machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['move_set_eval/x/local-0'], state: 'busy' }),
+      machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['position_eval/x/local-0'], state: 'busy' }),
       machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0, reason: '' }, state: 'leased' }),
     ]);
     render(<PoolView onOpenTag={openTag} />);
     await waitFor(() => expect(screen.getByTestId('pool-state-asus').textContent).toBe('free'));
-    expect(screen.getByTestId('pool-state-localhost').textContent).toBe('busy: move_set_eval/x/local-0');
+    expect(screen.getByTestId('pool-state-localhost').textContent).toBe('busy: position_eval/x/local-0');
     expect(screen.getByTestId('pool-state-l4').textContent).toBe('position_eval/tune-wsd (running)');
     expect(screen.getAllByText('1 × 4.0 GiB').length).toBe(3);
   });
 
   it('opens a tag named in a machine\'s state or the queue', async () => {
     serve([
-      machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['move_set_eval/x/local-0'], state: 'busy' }),
+      machine({ name: 'localhost', kind: 'local', machine: null, occupants: ['position_eval/x/local-0'], state: 'busy' }),
       machine({ name: 'l4', lease: { workload: 'position_eval', tag: 'tune-wsd', phase: 'running', since: 0, reason: '' }, state: 'leased' }),
     ], [row({})]);
     render(<PoolView onOpenTag={openTag} />);
     fireEvent.click(await screen.findByText('position_eval/tune-wsd'));
     expect(openTag).toHaveBeenLastCalledWith('position_eval', 'tune-wsd');
-    fireEvent.click(screen.getByText('move_set_eval/x'));
-    expect(openTag).toHaveBeenLastCalledWith('move_set_eval', 'x');
+    fireEvent.click(screen.getByText('position_eval/x'));
+    expect(openTag).toHaveBeenLastCalledWith('position_eval', 'x');
     fireEvent.click(screen.getByText('position_eval/tune-a'));
     expect(openTag).toHaveBeenLastCalledWith('position_eval', 'tune-a');
   });

@@ -56,7 +56,7 @@ def chunk(tmp_path_factory) -> Path:
 def save_tiny_seed(paths: TagPaths, kind: str):
     """Save a tiny standalone seed of `kind` where the tag keeps its seeds."""
     unit = units.UNIT_CLASSES[kind](SEED_PARAMS[kind], CPU)
-    config = asdict(SEED_PARAMS[kind]) | units.unit_versions(kind, unit)
+    config = asdict(SEED_PARAMS[kind]) | unit.versions()
     path = seeds.seed_path(paths, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": unit.model.state_dict(), "config": config}, path)

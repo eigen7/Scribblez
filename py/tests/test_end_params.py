@@ -55,19 +55,11 @@ def test_an_end_parameter_must_be_an_int():
 # deliberate edit here, since the queue's "has an end condition" reads them.
 END_PARAMS = {
     "position_eval": {"max_rows"},
-    "max_move_per_lane": {"max_rows"},
-    "move_set_eval": {"target_pairs", "train_epochs"},
-    "evidence_trajectories": {"target_pairs", "train_epochs"},
     "blind_spots": {"target_positions"},
-    "hidden_blind_spots": {"target_positions"},
     "match_arms": set(),
-    "transfer_test": {"target_positions"},
-    "transfer_reader": {"train_steps"},
     "leave_inference": {"max_rows"},
-    "policy_set": {"max_rows"},
     "deep_bot_leaf_eval": {"max_rows"},
     "leaf_eval_hasty_rollouts": set(),
-    "deep_bot": {"max_generations"},
     "leaf_bot_generation": {"max_generations"},
 }
 
@@ -82,24 +74,11 @@ def test_every_workload_declares_its_end_parameters():
 @pytest.mark.parametrize("limit", UNBOUNDED_SPELLINGS)
 def test_generational_trainers_keep_training_when_unbounded(limit):
     from scribblez.generational.checkpoint import GenerationalState
-    from scribblez.max_move_per_lane import trainer as mmpl
     from scribblez.position_eval import trainer as pe
 
     state = GenerationalState(rows_trained=10**9)
-    for rows_left in (pe._rows_left, mmpl._rows_left):
-        assert rows_left(SimpleNamespace(max_rows=limit), state)
-        assert not rows_left(SimpleNamespace(max_rows=100), state)
-
-
-@pytest.mark.parametrize("limit", UNBOUNDED_SPELLINGS)
-def test_pair_trainers_keep_training_when_unbounded(limit):
-    from scribblez.evidence import trainer as evidence
-    from scribblez.move_set_eval import trainer as mset
-
-    for module in (mset, evidence):
-        state = SimpleNamespace(settled_epochs=10**6)
-        assert module.epochs_left(SimpleNamespace(train_epochs=limit), state)
-        assert not module.epochs_left(SimpleNamespace(train_epochs=20), state)
+    assert pe._rows_left(SimpleNamespace(max_rows=limit), state)
+    assert not pe._rows_left(SimpleNamespace(max_rows=100), state)
 
 
 @pytest.mark.parametrize("limit", UNBOUNDED_SPELLINGS)

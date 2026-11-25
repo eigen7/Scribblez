@@ -82,7 +82,7 @@ from scribblez.paths import (
     SCHEDULER_STATE_REL,
     TRAINER_OUTPUT_DIRS,
 )
-from scribblez.workloads.base import DeliveredSet, SchedulerHooks, uses_gpu
+from scribblez.workloads.base import DeliveredSet, SchedulerHooks
 from scribblez.workloads.worker import stats_rel_path
 
 # After an ssh machine fails a probe, how long it is assumed still unreachable
@@ -303,11 +303,6 @@ def _is_pool_machine(m: pool_mod.PoolMachine, target: str) -> bool:
     if m.kind == "local":
         return target == LOCAL_TARGET
     return target in pool_mod.host_names(m)
-
-
-def _uses_gpu(spec, task: tasks.TaskRecord, role: str) -> bool:
-    """Whether a `role` slot of `task` uses a GPU (workloads.base.uses_gpu)."""
-    return uses_gpu(spec.role(role), _gpu_need(spec, task, role))
 
 
 def _gpu_need(spec, task: tasks.TaskRecord, role: str) -> float | None:
@@ -1140,7 +1135,7 @@ class WorkerManager:
             # _bundle_for_start saw the bundle cover this slot's arch.
             arch = self._slot_arch(spec, task, w)
             env["SCZ_BUNDLE_ARCH"] = arch
-            gpus = _uses_gpu(spec, task, w.role)
+            gpus = spec.role(w.role).gpu
             machine.create_container(name, image, env, gpus=gpus, volume=volume)
             self._copy_payload(machine, name, role, w.bundle_id, arch)
             self._seed_stats(machine, name, spec, task, w.worker_id)
@@ -1173,7 +1168,7 @@ class WorkerManager:
     ):
         role_spec = spec.role(role)
         assert kind in role_spec.kinds, f"role '{role}' does not support {kind} workers"
-        gpu = _uses_gpu(spec, task, role)
+        gpu = spec.role(role).gpu
         if machine is not None and gpu and machine.gpu_count == 0:
             # Refused here rather than by `docker run --gpus all` on the
             # remote, after a bundle deploy. Only a machine known to have no
@@ -1253,7 +1248,7 @@ class WorkerManager:
         for s, t in [(spec, task), *others]:
             for w in t.workers:
                 if (
-                    not _uses_gpu(s, t, w.role)
+                    not s.role(w.role).gpu
                     or _slot_target(w.kind, None, self._slot_host(t, w)) != target
                 ):
                     continue

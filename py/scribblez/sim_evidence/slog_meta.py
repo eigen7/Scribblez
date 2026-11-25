@@ -15,9 +15,9 @@ from pathlib import Path
 import numpy as np
 
 from scribblez.ffi import format_layout, struct_dtype
-from scribblez.sim_evidence.sobs import MOVE_DTYPE
 
 SLOG_MAGIC = format_layout()["constants"]["slog"]["magic"]
+MOVE_DTYPE = struct_dtype("Move")
 
 _FILE_HEADER = struct_dtype("SlogFileHeader")
 GAME_METADATA = struct_dtype("SlogGameMetadata")

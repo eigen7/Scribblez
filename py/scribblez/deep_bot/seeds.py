@@ -13,12 +13,12 @@ Importable without torch: the dashboard installs the seeds at task creation.
 import shutil
 from pathlib import Path
 
-from scribblez.deep_bot import KINDS, LEAF, LEAVE, POLICY
+from scribblez.deep_bot import LEAF, LEAVE
 from scribblez.params import ParamsError
 from scribblez.paths import TagPaths
 
 # The standalone workload each model's seed is a tag of.
-WORKLOADS = {LEAVE: "leave_inference", LEAF: "deep_bot_leaf_eval", POLICY: "policy_set"}
+WORKLOADS = {LEAVE: "leave_inference", LEAF: "deep_bot_leaf_eval"}
 
 
 def seed_path(paths: TagPaths, kind: str) -> Path:
@@ -28,11 +28,6 @@ def seed_path(paths: TagPaths, kind: str) -> Path:
 def files(paths: TagPaths, kinds: tuple[str, ...]) -> list[str]:
     """The seeds of `kinds`, tag-relative."""
     return [str(seed_path(paths, kind).relative_to(paths.root)) for kind in kinds]
-
-
-def tag_files(paths: TagPaths, params) -> list[str]:
-    """deep_bot's train role's RoleSpec.tag_files: its three seeds."""
-    return files(paths, KINDS)
 
 
 def checkpoint_of(tag: str, workload: str, mount_root: Path) -> Path:

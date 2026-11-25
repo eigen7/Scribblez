@@ -1,11 +1,9 @@
 #pragma once
 
 // Checks of the GPU rollout kernel (gpu/hasty_rollouts_gpu.h) against its CPU
-// reference (sim/hasty_rollout_task.h), shared by gpu_kernel_tests and
-// gpu_rollout_demo: a position reached by HastyBot self-play, a batch over the
-// mover's candidates whose rollouts seat known opponent leaves of every length,
-// and task-by-task comparisons of the results and of the leaf rows the device
-// encodes.
+// reference (sim/hasty_rollout_task.h), for gpu_kernel_tests: a position reached by HastyBot
+// self-play, a batch over the mover's candidates whose rollouts seat known opponent leaves of every
+// length, and task-by-task comparisons of the results and of the leaf rows the device encodes.
 
 #include "game/board.h"
 #include "game/move.h"

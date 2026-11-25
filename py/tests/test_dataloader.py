@@ -17,8 +17,9 @@ from scribblez.ffi import (
     task_target_shapes,
 )
 
-# This checkout's own binaries, not the primary checkout's -- see the note in
-# test_move_set_eval_targets.py.
+# This checkout's own binaries, not the primary checkout's, so a worktree's tests
+# exercise the code built beside them. A fixed /workspace/repo path would let a
+# broken engine change pass in its worktree and fail only after merge.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 
 # The four placement heads, the two per-side legality masks, and the footprint

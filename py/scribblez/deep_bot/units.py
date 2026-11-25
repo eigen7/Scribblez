@@ -1,6 +1,5 @@
-"""A multi-model trainer's units (deep_bot's three, leaf_bot_generation's
-two), built from the tag's seeds (docs/plans/deep_bot_generations.md, "Seeds
-and warm start").
+"""A multi-model trainer's units (leaf_bot_generation's two), built from the
+tag's seeds (docs/plans/deep_bot_generations.md, "Seeds and warm start").
 
 A seed is a rolling checkpoint copied to seeds/<kind>.pt under the tag
 (seeds.py): a standalone workload's, or a multi-model trainer's, which holds
@@ -17,25 +16,19 @@ from pathlib import Path
 
 import torch
 
-from scribblez.deep_bot import LEAF, LEAVE, POLICY
+from scribblez.deep_bot import LEAF, LEAVE
 from scribblez.deep_bot.seeds import seed_path
 from scribblez.deep_bot_leaf_eval.unit import LeafEvalUnit
 from scribblez.leave_inference.unit import LeaveInferenceUnit
 from scribblez.paths import TagPaths
-from scribblez.policy_set.unit import VERSION_KEYS, PolicySetUnit, versions
 from scribblez.workloads.deep_bot_leaf_eval import DeepBotLeafEvalParams
 from scribblez.workloads.leave_inference import LeaveInferenceParams
-from scribblez.workloads.policy_set import PolicySetParams
 
 # A game's eligible turns, for sizing a rows-clock when a unit trains them all.
 TURNS_PER_GAME = 20
 
-UNIT_CLASSES = {LEAVE: LeaveInferenceUnit, LEAF: LeafEvalUnit, POLICY: PolicySetUnit}
-PARAMS_CLASSES = {
-    LEAVE: LeaveInferenceParams,
-    LEAF: DeepBotLeafEvalParams,
-    POLICY: PolicySetParams,
-}
+UNIT_CLASSES = {LEAVE: LeaveInferenceUnit, LEAF: LeafEvalUnit}
+PARAMS_CLASSES = {LEAVE: LeaveInferenceParams, LEAF: DeepBotLeafEvalParams}
 
 
 def window(params, kind: str) -> int:
@@ -45,11 +38,8 @@ def window(params, kind: str) -> int:
 
 def rows_per_generation(params, kind: str) -> int:
     """About how many rows `kind` trains each generation, the unit of its
-    rows-clock: every game of its window, at its turns (or pools) per game."""
-    if kind == POLICY:
-        per_game = params.pool_positions_per_game
-    else:
-        per_game = getattr(params, f"{kind}_turns_per_game") or TURNS_PER_GAME
+    rows-clock: every game of its window, at its turns per game."""
+    per_game = getattr(params, f"{kind}_turns_per_game") or TURNS_PER_GAME
     return params.games_per_generation * window(params, kind) * per_game
 
 
@@ -65,30 +55,16 @@ def unit_params(kind: str, seed_config: dict, params):
         "lr_warmup_rows": params.warmup_generations * rows,
         "averaging_window_rows": params.averaging_generations * rows,
         "max_rows": -1,
+        "turns_per_game": getattr(params, f"{kind}_turns_per_game"),
     }
-    if kind != POLICY:
-        changes["turns_per_game"] = getattr(params, f"{kind}_turns_per_game")
     return replace(seed, **changes)
 
 
-def unit_versions(kind: str, unit) -> dict:
-    """What a seed's config must match for `unit` to start from it."""
-    return versions() if kind == POLICY else unit.versions()
-
-
-def check_seed(kind: str, unit, seed_config: dict, path: Path, params):
+def check_seed(unit, seed_config: dict, path: Path):
     """Refuse a seed written under other formats or leave values than this
-    code's and this machine's, and a policy whose pools pruned blank moves
-    at another margin than this tag's pools will."""
-    keys = VERSION_KEYS if kind == POLICY else tuple(unit.versions())
-    current = unit_versions(kind, unit)
-    if kind == POLICY and seed_config["blank_prune_points"] != params.blank_prune_points:
-        raise RuntimeError(
-            f"{path} was trained on pools with blank_prune_points="
-            f"{seed_config['blank_prune_points']}, but this tag labels its pools with "
-            f"{params.blank_prune_points}"
-        )
-    for key in keys:
+    code's and this machine's."""
+    current = unit.versions()
+    for key in current:
         if seed_config.get(key) != current[key]:
             raise RuntimeError(
                 f"{path} has {key}={seed_config.get(key)}, but this run has {current[key]}; "
@@ -117,7 +93,7 @@ def build_unit(kind: str, paths: TagPaths, params, device):
     path = seed_path(paths, kind)
     config, weights = seed_part(torch.load(path, map_location=device, weights_only=False), kind)
     unit = UNIT_CLASSES[kind](unit_params(kind, config, params), device)
-    check_seed(kind, unit, config, path, params)
+    check_seed(unit, config, path)
     unit.model.load_state_dict(weights)
     return unit
 

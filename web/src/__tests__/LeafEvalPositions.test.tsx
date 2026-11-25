@@ -33,7 +33,7 @@ function payload(generation: number) {
 function fakeFetch(url: string): Promise<Response> {
   const json = (body: unknown) =>
     Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
-  if (url.startsWith('/api/deep_bot/positions')) {
+  if (url.startsWith('/api/known_positions')) {
     return json({ positions: [{ id: 'tori', title: 'TORI: a square where the Q counts twice' }] });
   }
   if (url.startsWith('/api/deep_bot_leaf_eval/generations')) {

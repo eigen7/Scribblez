@@ -55,7 +55,7 @@ class GpuRolloutValues : public RolloutValues {
   };
   const Timings& last_timings() const { return timings_; }
   const Timings& total_timings() const { return totals_; }
-  // The parts, for checks against the CPU reference (gpu_rollout_demo).
+  // The parts, for checks against the CPU reference (gpu/rollout_check.h).
   GpuHastyRollouts& rollouts() { return rollouts_; }
   nn::NeuralNet<nn::LeafEvalSpec>& net() { return net_; }
 

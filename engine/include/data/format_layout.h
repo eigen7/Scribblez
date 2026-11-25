@@ -1,6 +1,6 @@
 #pragma once
 
-// A JSON description of the binary file formats (.slog, .sobs, .mset) and the
+// A JSON description of the binary file formats (.slog and its sidecars) and the
 // constants that go with them, so Python readers build their numpy dtypes from
 // the C++ structs rather than mirroring them by hand. Field lists come from
 // reflection over the structs, so the document cannot drift from them. The FFI

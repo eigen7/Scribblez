@@ -10,7 +10,7 @@ from scribblez import ffi
 from scribblez.leave_inference import win_table as wt
 
 # This checkout's own binaries, not the primary checkout's -- see the note in
-# test_move_set_eval_targets.py.
+# test_dataloader.py.
 _ENGINE_DIR = Path(__file__).resolve().parents[2] / "target" / "engine"
 
 

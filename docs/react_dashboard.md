@@ -2,8 +2,8 @@
 
 The master dashboard ([master_dashboard.md](master_dashboard.md)) is a React
 app over a Python data API. For the training workloads it adds analysis tabs:
-Bokeh metric figures embedded in React, plus three native interactive boards
-(**Positions**, **Trajectories**, **Lane analysis**) described below.
+Bokeh metric figures embedded in React, plus native interactive boards, of
+which position_eval's **Positions** tab is described below.
 
 ## Why React with embedded Bokeh
 
@@ -32,12 +32,12 @@ Stats are generic and come from the task view itself.
 | Workload | Tabs |
 |---|---|
 | position_eval | Loss · Positions · Match · Training · Controls · Info |
-| max_move_per_lane | Loss · Lane analysis · Controls · Info |
-| move_set_eval | Loss · Training · Controls · Info |
-| evidence_trajectories | Loss · Trajectories · Match · Training · Controls · Info |
 | match_arms | Arms · Info |
+| leave_inference | Loss · Training · Controls · Info |
+| deep_bot_leaf_eval | Loss · Training · Match · Positions · Controls · Info |
+| leaf_bot_generation | Loss · Training · Matches · Positions · Controls · Info |
 
-Loss, Match, Training and Arms embed API figures and re-fetch when a cheap
+Loss, Match, Matches, Training and Arms embed API figures and re-fetch when a cheap
 version token advances.
 
 ## Positions (position_eval)
@@ -80,100 +80,3 @@ ground truth over a GCG dataset
   MC truth, or their residual; paired model-vs-MC WLD bars; the MC score-delta
   histogram with the model's Gaussian overlaid; and an alternate-leaves
   what-if (model only) for either rack.
-
-## Trajectories (evidence_trajectories)
-
-Shows the sequential evidence loop working on a hand-maintained position set
-([positions/NWL23/face-up-trajectory-set](../positions/NWL23/face-up-trajectory-set/README.md)),
-and how the trained model responds to it.
-
-- **Position sets.** A `.gcg` is the position: its final recorded state, the
-  side to move next, and that side's rack from a `#RackN` pragma. The
-  trajectory sidecars are simmed on first request under the tag's own proposer
-  and recipe (`sim_evidence.position_sets.ensure_sobs`, cached under
-  `<mount>/cache/trajectory_sets/`), so the tab shows exactly the trajectory
-  the generator would produce there.
-- **Model.** Generation 0 is the frozen student itself (the tag's
-  `student_checkpoint`). Generation N is the trainer's torch checkpoint
-  `checkpoints/model_epoch_{N-1}.pt`, run in torch on CPU
-  (`scribblez.evidence.trajectory_view`). The FFI (`gcg_position_inputs`)
-  rebuilds the decision as the generator saw it: the board row under the
-  checkpoint's input arm, the pre-move score differential, and the full
-  equity-ranked legal move list. The plain (evidence-free) pass runs once per
-  (checkpoint, position); only the fusion stage and re-score run per evidence
-  prefix.
-- **UI.**
-  - Generation slider, set and position pickers, and an **evidence prefix**
-    slider from 0 to the number of on-policy picks (off-policy draws are never
-    evidence).
-  - The trajectory strip (anchor → on-policy → off-policy, dimmed beyond the
-    prefix). Each card shows its sim value ± SE, the delta moments, and the
-    plain and conditioned values.
-  - The board, previewing the selected candidate with the Positions tab's
-    placement overlay: sim count planes vs. the conditioned pass's planes, as
-    residual, model, or sim.
-  - The legal moves re-ranked by conditioned value, with the shift from the
-    plain rank, the proves-best gain, and the loop's **next sim** (the
-    unsimmed move with the highest gain) marked.
-
-  At prefix 0 the conditioned pass equals the plain one by construction; at
-  generation 0 conditioning is the identity and there is no gain column.
-- The trainer's `posset_*` metrics (Training tab) score the same set at every
-  prefix: the rank of the sim-best candidate under conditioned vs. plain
-  value. What that chart summarizes is what this tab shows.
-
-![The Trajectories tab on the egotize-lane exhibit: the anchor's opp-play-and-win residual lights the 13G–13N lane red (the model under-reads the opponent's EGOTIZE lane), the trajectory strip, and the conditioned re-ranking](images/trajectories_tab.png)
-
-## Positions (deep_bot)
-
-Shows one known position
-([positions/NWL23/known-positions](../positions/NWL23/known-positions/README.md))
-at a time under one of the tag's releases: what the release played there and
-what two of its models read in it (`scribblez.deep_bot.position_view`, routes
-in `dashboard/deep_bot_api.py`).
-
-- **Model outputs** are computed once, by the trainer as it publishes the
-  release (`scribblez.deep_bot.release_positions`), and kept beside its
-  exports as `positions.json`, so the dashboard runs no model and the file
-  travels with the release from a remote trainer. The manifest's GCGs, each
-  cut after the move made at the position, become one .slog with its
-  .forgone sidecar, once per trainer process; the exports run on it on the
-  CPU under onnxruntime, about 2 s a release. The leave inference model gives
-  the mover's belief about the opponent's rack (the blind-spots viewer's
-  panel). The policy scores every candidate PolicyBot chooses among
-  (`ffi.policy_candidates`), its opponent-rack input summarized from the same
-  belief (`LeaveValueArrays.opp_rack_summary`), as PolicyBot reads it: a
-  probability and a value per candidate. The leaf network values rollout
-  leaves two plies on, so a position has no output of its own and the tab
-  shows none. A release published before the trainer wrote the file shows
-  its board and picks only.
-- **Picks** are the measure role's `release_pick` rows: the release's move
-  under each reply model, read against the position's reference move and
-  static equity's.
-- **UI.** Release slider and position picker; the board with the selected
-  move drawn on it; the reference, static equity's move and the picks, each
-  with its policy rank; the opponent-rack belief; and the policy table, the
-  25 likeliest candidates plus any move the answers name.
-
-## Lane analysis (max_move_per_lane)
-
-Shows how each generation solves the max-move-per-lane task
-([lexical_nn.md](lexical_nn.md)) over a GCG dataset
-(`positions/NWL23/max-move-per-lane-test-dataset/`).
-
-- **Dataset contract.** Each `pos-N.gcg` is a full game whose
-  `#Rack1`/`#Rack2` headers are the racks at the final position. The player
-  on move (by move-count parity) holds the full 7-tile rack, which defines
-  exactly one analysis position per file.
-- **Ground truth.** Replay to the final board, then compute per-lane targets
-  and enumerate each lane's best moves (all moves tied for the lane's max,
-  with word, coordinates and score).
-- **Predictions.** The trainer builds the dataset's input batch once through
-  the FFI and caches it under the tag. After each checkpoint it decodes
-  per-lane predictions (occupancy union, score PMF, has-move) into the
-  generation's record, which the dashboard ingests into `dashboard.db`.
-- **UI.** Generation slider, position picker, and orientation radio;
-  `Board.tsx` with per-lane pass/fail badges and lane highlighting; a lane
-  detail pane with the true best move(s) and the true-vs-predicted tile-union
-  diff; and the selected lane's predicted score PMF with the true bin
-  highlighted.

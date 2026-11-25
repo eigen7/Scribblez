@@ -1,7 +1,7 @@
 #pragma once
 
-// Shared helpers for the model-driven simulating agents' tests (NeuralSimAgent,
-// MsetSimAgent, UltimateBotAgent). They script a model over the same opening
+// Shared helpers for the model-driven simulating agents' tests (NeuralSimAgent).
+// They script a model over the same opening
 // position and check that the sim set follows the model's ranking rather than
 // static equity's, so they share the candidate space, the model ranking, and a
 // way to script a model that favours chosen candidates.

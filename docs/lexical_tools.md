@@ -4,9 +4,7 @@ A *lexicon tool* is a frozen, compiled form of the lexicon plugged into a
 network as an input the network learns to query. It is the common premise of
 the lexical-NN experiments
 ([word_validity_experiments.md](word_validity_experiments.md),
-[rack_best_experiments.md](rack_best_experiments.md), and the
-`lexicon_module` param of the max_move_per_lane workload,
-[lexical_nn.md](lexical_nn.md)). The compiled lexicon lives in non-trainable
+[rack_best_experiments.md](rack_best_experiments.md)). The compiled lexicon lives in non-trainable
 buffers. Only thin adapters around it train, and those adapters are the
 network learning to use the tool.
 

@@ -378,7 +378,7 @@ hold up.
 
 - **Static equity buries the moves the sims exist to find.** At 680 of the
   1,005 positions of the `hidden_blind_spots` tag `v1`
-  ([blind_spots.md](../blind_spots.md#hidden-leaves-blind-spots-on-the-gpu)),
+  (the GPU section of `docs/blind_spots.md`, since deleted),
   the best move is not among the static-equity top 32: a setup that keeps
   the tile for a hook, a fish, a one-tile play that leaves the bag open.
 - **It costs a tenth of a subtree turn.** A screen runs about 17,000
@@ -1641,7 +1641,7 @@ not depend on `S`: the board trunk, the move encodings and the cross-check
 encodings are computed once per position and cached. Each step reruns only
 the set-conditioning stage and the gain head, a small fraction of a full
 pass. This is the cache-graph and step-graph split the evidence path already
-uses ([evidence_staging.h](../../engine/include/agent/evidence_staging.h)).
+uses (`evidence_staging.h`).
 Total compute is about one full pass plus `N` light ones, but the steps
 remain serial.
 

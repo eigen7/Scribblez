@@ -169,9 +169,6 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     spent = _spent_marks(held, recorded | _quarantined_generations(paths))
     for name in spent:
         slot.remove(f"{inbox}/{name}")
-        # The worker marks only a move-proposal export's cache graph; clear its
-        # step/ companion too.
-        slot.remove(f"{inbox}/step/{name.removesuffix(DONE_SUFFIX)}")
     if any(name.startswith(ONNX_PREFIX) and name not in spent for name in held):
         return  # busy: an unplayed export, or a result still in transit
     # Sidecars go first and stay: models need them to load, and they are shared
@@ -179,12 +176,7 @@ def _assign(paths: TagPaths, conn, every: int, slot):
     for sidecar in paths.onnx_sidecars:
         if sidecar.name not in held:
             slot.put(sidecar, f"{inbox}/{sidecar.name}")
-    # A move-proposal export is a pair. The worker polls for the cache graph,
-    # so the step graph must arrive first.
     model = paths.onnx_path(gen)
-    step = paths.proposal_step_path(gen)
-    if step.exists():
-        slot.put(step, f"{inbox}/step/{step.name}")
     slot.put(model, f"{inbox}/{model.name}")
 
 

@@ -5,8 +5,8 @@ import UnseenTiles from './UnseenTiles';
 import { PlacedTile, TileInfo } from '../types';
 import { getJSON } from '../lib/api';
 
-// What the Positions tabs (deep_bot's, deep_bot_leaf_eval's) share of a known
-// position (positions/NWL23/known-positions): the board before the move with
+// What the leaf Positions tab (deep_bot_leaf_eval's and leaf_bot_generation's)
+// shows of a known position (positions/NWL23/known-positions): the board before the move with
 // a move previewed on it, both racks, the unseen tiles, and the picker over
 // the positions. A tab adds its models' outputs beside them.
 
@@ -182,7 +182,7 @@ export function useKnownPositions(active: boolean): KnownPosition[] {
     if (positions.length > 0 || !active) return;
     let cancelled = false;
     const tryFetch = () =>
-      getJSON('/api/deep_bot/positions')
+      getJSON('/api/known_positions')
         .then((d) => { if (!cancelled && d.positions.length) setPositions(d.positions); })
         .catch(() => {});
     tryFetch();

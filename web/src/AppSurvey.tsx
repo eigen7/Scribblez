@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import Board from './components/Board';
-import OppRackBelief from './components/OppRackBelief';
 import { BagFilter, NavState, formatNav, parseNav, passesBag } from './lib/surveyNav';
 import Rack from './components/Rack';
 import UnseenTiles from './components/UnseenTiles';
@@ -183,37 +182,11 @@ function VersusRow({ move }: { move: SurveyMove }) {
 }
 
 function MoveFacts({ move }: { move: SurveyMove }) {
-  const equity = move.equity !== undefined ? ` / ${move.equity.toFixed(1)}` : '';
   return (
     <div className="survey-stat-group">
       <StatRow label="hasty rank" value={rankLabel(move.hasty_rank)} />
-      <StatRow label={move.equity !== undefined ? 'score / equity' : 'score'} value={`${move.score}${equity}`} />
+      <StatRow label="score / equity" value={`${move.score} / ${move.equity.toFixed(1)}`} />
       <StatRow label="leave" value={move.leave || '—'} />
-    </div>
-  );
-}
-
-// A blind spot's move: its confirming and screening sims, which keep only
-// win rates.
-function CompactStatsPanel({ move, section }: { move: SurveyMove; section: Section }) {
-  return (
-    <div className={`survey-stats survey-tint-${section}`}>
-      <div className="survey-stats-move">{move.display}</div>
-      <MoveFacts move={move} />
-      <div className="survey-stat-group">
-        <div className="survey-stat-title">Confirming sim ({move.rollouts})</div>
-        <StatRow label="win" value={`${move.win_pct.toFixed(1)}%`} />
-        <VersusRow move={move} />
-      </div>
-      <div className="survey-stat-group">
-        <div className="survey-stat-title">Screen</div>
-        <StatRow label="win" value={`${(move.screen_win_pct ?? 0).toFixed(1)}%`} hint="the pool's raced sim" />
-        <StatRow
-          label="P(best)"
-          value={`${(100 * (move.screen_q ?? 0)).toFixed(1)}%`}
-          hint="the pool's label: the probability that this move is the position's best"
-        />
-      </div>
     </div>
   );
 }
@@ -224,7 +197,6 @@ function StatsPanel({
   move, section, peaks,
 }: { move: SurveyMove; section: Section; peaks: HistPeaks }) {
   const s = move.stats;
-  if (!s) return <CompactStatsPanel move={move} section={section} />;
   return (
     <div className={`survey-stats survey-tint-${section}`}>
       <div className="survey-stats-move">{move.display}</div>
@@ -340,7 +312,7 @@ function PositionSummary({ position }: { position: SurveyPosition }) {
     <>
       turn {position.turn} · to move {mine}–{theirs} ({signed(mine - theirs, 0)}) · bag{' '}
       {position.bag_size} ·{' '}
-      {position.num_legal_moves !== undefined && `${position.num_legal_moves} legal moves · `}
+      {`${position.num_legal_moves} legal moves · `}
       {position.solved_endgames ? 'endgames solved' : 'greedy endgames'}
     </>
   );
@@ -564,7 +536,6 @@ function PositionView({ data, position }: { data: SurveyData; position: SurveyPo
             />
           ))}
         </div>
-        {position.belief && <OppRackBelief chart={position.belief} />}
       </div>
     </div>
   );

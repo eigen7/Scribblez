@@ -158,11 +158,6 @@ void GameRunner::Params::add_options(boost::program_options::options_description
      "play games in mirrored pairs: games 2k and 2k+1 share one game seed "
      "with the seats swapped, so per-seed tile luck cancels out of paired "
      "comparisons (requires an even --games)")  //
-    ("pool-positions-per-game",
-     po::value<int>(&pool_positions_per_game)->default_value(pool_positions_per_game),
-     "if > 0, with --binary-log-dir: write each .slog's .pool and .survivors sidecars from the "
-     "searches its agents record (deepbot's screen and the sims of its picks), this many turns "
-     "of each game drawn uniformly from the turns searched")  //
     ("results-file", po::value<std::string>(&results_file),
      "write one JSON line per finished game ({seed, seat_players, "
      "seat_scores, turns, end_reason}), flushed as games complete")  //
@@ -196,13 +191,9 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
       seed_(SeedProducer::instance().next()),
       engine_(GameEngine::Params{params.threads, seed_, params.random_handicap_max,
                                  params.random_opening_mean, params.respect_projections,
-                                 params.face_up_leaves, params.pool_positions_per_game > 0},
+                                 params.face_up_leaves},
               player_params) {
   if (params_.games < 1) throw util::CleanException("--games must be >= 1");
-  if (params_.pool_positions_per_game < 0)
-    throw util::CleanException("--pool-positions-per-game must be >= 0");
-  if (params_.pool_positions_per_game > 0 && params_.binary_log_dir.empty())
-    throw util::CleanException("--pool-positions-per-game needs --binary-log-dir");
   if (params_.paired && params_.games % 2 != 0) {
     throw util::CleanException("--paired requires an even --games");
   }
@@ -221,8 +212,8 @@ GameRunner::GameRunner(const Params& params, const PlayerFactory::Params& player
                                  params_.binary_log_dir);
     }
     binary_writer_ = std::make_unique<binlog::BinaryLogWriter>(
-      params_.binary_log_dir, kGamesPerFile, params_.face_up_leaves ? binlog::kFlagFaceUpLeaves : 0,
-      params_.pool_positions_per_game);
+      params_.binary_log_dir, kGamesPerFile,
+      params_.face_up_leaves ? binlog::kFlagFaceUpLeaves : 0);
   }
   std::ofstream results_out;
   if (!params_.results_file.empty()) {

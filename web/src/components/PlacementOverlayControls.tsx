@@ -1,5 +1,4 @@
-// The Positions tab's placement-overlay sidebar controls, shared with the
-// evidence_trajectories Trajectories tab: the head radio group, the
+// The Positions tab's placement-overlay sidebar controls: the head radio group, the
 // residual | model | sim segmented control, and the fixed-scale legend. The
 // overlay math itself lives in lib/placementOverlay.ts.
 import {

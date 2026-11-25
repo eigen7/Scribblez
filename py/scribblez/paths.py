@@ -24,8 +24,8 @@ artifact tied to a tag lives under one root, `<mount_root>/tags/<task>/<tag>/`:
       models/                     model_epoch_XXXX.onnx
       dashboard.db                metrics + eval data (rendered by the dashboard)
 
-Workloads use the subset of this tree they need (move_set_eval keeps its pairs
-under data/slogs/; only the training workloads have checkpoints or a dashboard DB).
+Workloads use the subset of this tree they need (only the training workloads
+have checkpoints or a dashboard DB).
 Code derives every path from a `TagPaths` rather than reassembling
 subdirectories.
 
@@ -69,9 +69,6 @@ EVAL_POSITIONS_DIRS = (
 # Workload identifiers: the `<task>` level of the tags/ tree, the workload
 # registry keys, and the dashboard's task slugs.
 POSITION_EVAL = "position_eval"
-MAX_MOVE_PER_LANE = "max_move_per_lane"
-MOVE_SET_EVAL = "move_set_eval"
-EVIDENCE_TRAJECTORIES = "evidence_trajectories"
 MATCH_ARMS = "match_arms"
 
 # The data/ subdirectories of the match-eval exchange. They are defined here
@@ -103,10 +100,6 @@ CONTROLS_REL = "controls.json"
 
 def generation_record_rel(generation: int) -> str:
     return f"{RECORDS_DIR}/gen_{generation:06d}.json"
-
-
-def generation_preds_rel(generation: int) -> str:
-    return f"{RECORDS_DIR}/gen_{generation:06d}.npz"
 
 
 # Appended to an inbox model's filename by the worker once it has played it:
@@ -227,18 +220,6 @@ class TagPaths:
 
     def onnx_path(self, epoch: int) -> Path:
         return self.onnx_dir / f"{ONNX_PREFIX}{epoch:04d}.onnx"
-
-    # The evidence trainer exports two graphs per generation: move_proposal_cache
-    # at onnx_path (the generation's model, as far as exported_generations and
-    # the match inbox are concerned) and its move_proposal_step companion under
-    # step/. In unfrozen mode it also exports the plain student under plain/.
-    # Subdirectories keep the companions out of the model_epoch_* glob and out
-    # of onnx_sidecars.
-    def proposal_step_path(self, epoch: int) -> Path:
-        return self.onnx_dir / "step" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
-
-    def plain_onnx_path(self, epoch: int) -> Path:
-        return self.onnx_dir / "plain" / f"{ONNX_PREFIX}{epoch:04d}.onnx"
 
     # The leave inference trainer's companion (docs/plans/deep_bot_v0.md): each
     # generation's win table. A subdirectory, like the evidence trainer's

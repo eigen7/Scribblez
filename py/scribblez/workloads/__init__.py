@@ -8,20 +8,12 @@ runs.
 
 from scribblez.workloads import (
     blind_spots,
-    deep_bot,
     deep_bot_leaf_eval,
-    evidence_trajectories,
-    hidden_blind_spots,
     leaf_bot_generation,
     leaf_eval_hasty_rollouts,
     leave_inference,
     match_arms,
-    max_move_per_lane,
-    move_set_eval,
-    policy_set,
     position_eval,
-    transfer_reader,
-    transfer_test,
 )
 from scribblez.workloads.base import (
     RoleSpec,
@@ -36,19 +28,11 @@ WORKLOADS = {
     spec.name: spec
     for spec in (
         position_eval.SPEC,
-        max_move_per_lane.SPEC,
-        move_set_eval.SPEC,
-        evidence_trajectories.SPEC,
         match_arms.SPEC,
         blind_spots.SPEC,
-        hidden_blind_spots.SPEC,
-        transfer_test.SPEC,
-        transfer_reader.SPEC,
         leave_inference.SPEC,
-        policy_set.SPEC,
         deep_bot_leaf_eval.SPEC,
         leaf_eval_hasty_rollouts.SPEC,
-        deep_bot.SPEC,
         leaf_bot_generation.SPEC,
     )
 }

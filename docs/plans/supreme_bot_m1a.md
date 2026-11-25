@@ -90,7 +90,7 @@ rollout. It reports:
 face-up hasty batch and measures one position per game, rather than sampling
 another tag's corpus: the self-play is negligible next to the sims, and the
 games come from the same policy. Candidates come from
-[transfer_candidates.h](../../engine/include/sim/transfer_candidates.h). Each
+`transfer_candidates.h`. Each
 `.slog` gets two sidecars: `.tmeasure` (JSON: parameters, timings, and per
 position its candidates, couplings and saturation curves) and `.trollouts`
 (every rollout's expected score and score difference, as float32).
@@ -237,7 +237,7 @@ A new tool, `transfer_test_generator`, and its workload:
   so one corpus serves every held-out split, the graded variant and the
   partner ablation.
 - **The workload** follows
-  [move_set_eval.py](../../py/scribblez/workloads/move_set_eval.py): the tool
+  `move_set_eval.py`: the tool
   joins the worker bundle, and the sidecars are delivered through the pair
   store. The step-0 measurement mode is a flag on the same tool.
 
@@ -252,7 +252,7 @@ step 0. Where it differs from the list above:
   mover, racks, bag count and score come back by replay from the position
   after the candidate; PR 3 reads them through the FFI, as `.slog` rows are.
   The header carries the leaf model's hash, the lexicon's name, the horizon
-  and the probe count. Format: [probe_log.h](../../engine/include/data/probe_log.h).
+  and the probe count. Format: `probe_log.h`.
 - **Coupling tags are not stored.** They are a pure function of the
   candidates (`find_couplings`), so readers recompute them; each candidate
   stores its stratum.
@@ -266,8 +266,8 @@ step 0. Where it differs from the list above:
 ## PR 3: the data side of the reader
 
 - A numpy reader for `.sprobe`, on the pattern of
-  [targets.py](../../py/scribblez/move_set_eval/targets.py); labels through
-  [sobs.py](../../py/scribblez/sim_evidence/sobs.py).
+  `targets.py`; labels through
+  `sobs.py`.
 - **The prior cache.** Once per position: the frozen teacher's root trunk
   tokens (board rows from `ffi.decode_rows`) and each candidate's post-move
   predictions, meaning win/draw/loss, the score mean and standard deviation,

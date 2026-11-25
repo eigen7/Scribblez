@@ -1,8 +1,6 @@
 """Serving the sim-survey viewer (web ?tool=survey): its data at /api/survey
 on a loopback API server, and the Vite dev server that the browser loads and
-that proxies /api to it. Shared by the scripts that feed the viewer
-(py/scripts/sim_survey_viewer.py, py/scripts/blind_spots_viewer.py), which use
-the same gateway service and ports, so one replaces the other."""
+that proxies /api to it, for py/scripts/sim_survey_viewer.py."""
 
 import json
 import os

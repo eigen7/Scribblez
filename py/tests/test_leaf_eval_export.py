@@ -1,7 +1,7 @@
 """The DeepBot leaf eval model's ONNX export: the graph takes the full row
 (join planes included, whether or not the model reads them), emits every
 head, and carries the metadata the engine's LeafEvalSpec gates on; and the
-trainer's per-generation export, where a policy_set task pins it."""
+trainer's per-generation export, which the tag's matches and analyses read."""
 
 from pathlib import Path
 
@@ -64,7 +64,7 @@ def test_export_carries_the_row_and_the_metadata(tmp_path, join_planes):
     assert outputs["end_points"] == ["batch", 2]
 
 
-def test_each_generation_exports_where_a_policy_set_task_pins_it(tmp_path):
+def test_each_generation_exports_into_the_tags_models(tmp_path):
     torch.manual_seed(0)
     params = DeepBotLeafEvalParams(trunk="conv", join_planes=True, width=8, depth=1, num_heads=1)
     unit = LeafEvalUnit(params, torch.device("cpu"))

@@ -41,9 +41,5 @@ nn::NeuralNetParams<Spec> NeuralServiceOptions::net_params(int min_rows) const {
 
 template nn::NeuralNetParams<nn::PositionEvaluationSpec>
 NeuralServiceOptions::net_params<nn::PositionEvaluationSpec>(int min_rows) const;
-template nn::NeuralNetParams<nn::MoveSetEvaluationSpec>
-NeuralServiceOptions::net_params<nn::MoveSetEvaluationSpec>(int min_rows) const;
-template nn::NeuralNetParams<nn::PolicySetSpec> NeuralServiceOptions::net_params<nn::PolicySetSpec>(
-  int min_rows) const;
 
 }  // namespace scribblez

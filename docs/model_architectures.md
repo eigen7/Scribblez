@@ -1,14 +1,13 @@
 # Model architectures
 
-Wiring diagrams and loss tables for the two trained networks and the spatial
-trunk they share, for anyone reading or changing the model code. What the
-models are *for*, and in what order they are trained, is in
-[roadmap.md](roadmap.md). Authoritative code:
+Wiring diagrams and loss tables for the position evaluation network and the
+spatial trunk the trained networks share, for anyone reading or changing the
+model code. What the models are *for* is in [roadmap.md](roadmap.md).
+Authoritative code:
 [spatial_trunk.py](../py/scribblez/spatial_trunk.py),
-[position_eval/model.py](../py/scribblez/position_eval/model.py),
-[move_set_eval/model.py](../py/scribblez/move_set_eval/model.py).
+[position_eval/model.py](../py/scribblez/position_eval/model.py).
 
-> **Keep in sync.** An architecture change in either `model.py` belongs in the
+> **Keep in sync.** An architecture change in either file belongs in the
 > same commit as the matching change here. The figures are generated: edit
 > [py/tools/plot_model_architectures.py](../py/tools/plot_model_architectures.py)
 > and re-run it, never the SVGs.
@@ -22,11 +21,7 @@ Symbols used throughout:
 | `C_mid` | `transformer_mid_channels`, the width inside a transformer-tower block | 192 |
 | `R` | register tokens appended to the transformer tower's cell sequence (the 27 tile-supply tokens) | 27 |
 | `P_in` / `S_in` | spatial planes / scalar width of the board input | 87 / 136; 87 / 163 under the open-leaves arm |
-| `B` | batch of board positions (`P` in move-set code) | — |
-| `M` | candidate moves in a batch, flattened across positions | — |
-| `T` | placed-tile slots per move (`kMoveMaxPlaced` = `RACK_SIZE`) | 7 |
-| `E` | padded evidence tokens per position | — |
-| `d` | `d_spatial`, the per-token spatial feature width | 32 |
+| `B` | batch of board positions | — |
 | `‖` | concatenate along the channel/feature dim | — |
 
 A **footprint** recurs below: the squares a move newly covers, identified as
@@ -115,16 +110,14 @@ logits by learned gains rather than by the projection weights.
 The sequence may carry `R` **register tokens** after the cells: extra tokens
 the model supplies, with learnable 2D positions initialised just off the
 board's left edge, which every attention layer sees alongside the cells.
-`PositionEvalModel` and `MoveSetEvalModel` fill them with the tile-supply
-tokens of §2.
+`PositionEvalModel` fills them with the tile-supply tokens of §2.
 
 `trunk_channels` and `num_blocks` keep their meaning (`C` and `N`);
 `transformer_mid_channels`, `transformer_heads` and `transformer_ffn_channels`
-size the inside of a block. Both models select the tower with their workload's
-`trunk` param, and the `transformer` and `conv` parameter profiles pick an arm
-together with its recipe (the transformer profile adds `grad_clip = 1` and, in
-position_eval, turns activation checkpointing off). The
-per-lane model always uses the conv tower.
+size the inside of a block. `PositionEvalModel` selects the tower with its
+workload's `trunk` param, and the `transformer` and `conv` parameter profiles
+pick an arm together with its recipe (the transformer profile adds
+`grad_clip = 1` and turns activation checkpointing off).
 
 ---
 
@@ -163,9 +156,7 @@ which is what left the per-cell heads with systematic magnitude errors on the
 test positions.
 
 The exported graph emits raw logits (`kIdentity`), and every consumer masks
-and softmaxes for itself. The `.mset` teacher target stores the masked
-footprint distribution directly, so the student distills in footprint space.
-Only the dashboard reduces a head to a per-cell `(15, 15)` marginal (summing
+and softmaxes for itself. Only the dashboard reduces a head to a per-cell `(15, 15)` marginal (summing
 footprint probability over the covered cells), for the human occupancy view.
 
 ### Tile-supply register tokens (transformer trunk)
@@ -188,9 +179,7 @@ thermometer encoding; and under the open-leaves arm, the opponent's known
 leave). A square that hooks on S or Y then reads S and Y supply directly in
 every attention layer, graded by the actual counts and distinguishing
 "available to me" from "available to the opponent", which a single gated
-input plane cannot. `MoveSetEvalModel`'s transformer arm carries the same
-tokens, because the teacher value it distills turns on the same hook
-supply.
+input plane cannot.
 
 ### Losses
 
@@ -205,221 +194,7 @@ supply.
 `MAD_TO_STD = sqrt(π/2)` rescales the absolute-residual target so its optimum
 is a Gaussian σ.
 
-Neither model's recipe carries a penalty on activation magnitude. They are
-served in BF16, which has FP32's exponent range, so the trunk's activations
+The model's recipe carries no penalty on activation magnitude. It is served
+in BF16, which has FP32's exponent range, so the trunk's activations
 may grow without risk of overflow
 ([fp16_safe_serving.md](plans/fp16_safe_serving.md)).
-
----
-
-## 3. `MoveSetEvalModel`
-
-Encode `P` boards once, then score `M` candidate moves against them in the same
-pass. Moves are flattened with no padding; each carries
-`move_pos_id ∈ [0, P)`.
-
-![MoveSetEvalModel: board tokens and position summary from the trunk, move queries cross-attending into their own position's board](images/arch_move_set_eval.svg)
-
-Grouping the queries by position keeps one K/V copy per board, so attention's
-`W_k`/`W_v` projections are amortized across candidates the same way the trunk
-is. The padded `(P, maxK, C)` query grid is the only place padding appears.
-
-### The move encoder
-
-![MoveEncoder: tile embeddings fused with the move's scalars into one query vector](images/arch_move_encoder.svg)
-
-`move_scalars = [resultant_score_diff, tiles/7, is_play]`. Letters are A..Z with
-a separate blank flag, so a natural tile and its blank twin share letter
-semantics. The layout is owned by
-[move_set_encoder.h](../engine/include/training/move_set_encoder.h).
-
-### The cross-check encoder
-
-The trunk encodes the pre-move board, cross-check planes included, but the
-teacher scores each candidate on its post-move board -- and the cross-checks a
-move changes are not inferable from its tiles: the two ends of the word it
-forms carry that word's hooks. A move changes at most 16 cross-check squares
-(two ends per perpendicular run it extends, plus its own word's two ends), so
-each candidate carries them sparsely: `move_cross_cells (M, 16)` holds
-`1 + axis·225 + square` per changed entry (0 in an empty slot; emptiness lives
-there because a real entry can have no legal letter left), and
-`move_cross_letters (M, 16·26)` its post-move legal-letter flags.
-`CrossCheckEncoder` makes each entry a token -- the 26 flags projected, plus an
-axis embedding, plus the board token at its square, which carries the
-pre-move state there -- masked-mean pools them, and adds the result to the
-`MoveEncoder` embedding. Its output projection is zero-initialised, so a fresh
-model starts out exactly as the tile-only encoder.
-
-### Losses (distillation from the position evaluation teacher)
-
-| Head | Target | Loss | Weight |
-|------|--------|------|--------|
-| `wld` | teacher probabilities (M, 3) | soft cross-entropy | 1 |
-| `score_diff[:,0]` | teacher mean | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `score_diff[:,1]` | teacher std | Huber (δ=10) | `lambda_sd` = 0.004 |
-
-The student distills only the teacher's value: no placement readout. Its
-consumers want a per-move value, and the planes would cost ~95% of each
-`.mset` record.
-
-Ranking metric: `win_equity = P(win) + 0.5·P(draw)`, applied identically to
-student and teacher probabilities.
-
-### The evidence fusion stage
-
-An optional late-fusion stage
-([evidence_fusion.py](../py/scribblez/evidence_fusion.py)) that conditions the
-scoring on the sims run so far at a decision point. It belongs to the move
-proposal model ([roadmap.md](roadmap.md) item 5).
-
-Each simmed candidate contributes one token, built from:
-
-- its move encoding (the MoveEncoder, reused);
-- a conv encode of 65 spatial channels: the four observed rollout-frequency
-  footprint histograms (each head as 13 slot channels), plus the candidate's
-  own footprint as a one-hot in a final 13;
-- eleven scalars: the sim's W/D/L frequencies, spread moments and rollout
-  count, beside the model's evidence-free value prediction.
-
-Feeding the value prediction in as an input is load-bearing: with
-observations alone the encoder can express `prior + g(obs)` but not the
-residual `prior + k·(obs − prior)`. The observed planes have no predicted
-counterpart, since the model has no placement readout. The channel layout is
-canonical in `EVIDENCE_PLANE_NAMES`, and the engine's staging
-([evidence_staging.h](../engine/include/agent/evidence_staging.h)) mirrors it.
-
-![EvidenceFusion: per-candidate token encode, evidence self-attention, and cross-attention rewriting the board map](images/arch_evidence_fusion.svg)
-
-Tokens self-attend, then the 225 board tokens cross-attend into them. The
-value each square receives carries the token's own spatial feature at that
-square, so *where* the evidence says something survives fusion. The stage
-rewrites `board` and `g` between the trunk and the scoring machinery, which
-reads the conditioned pair exactly as it reads the plain one. Because this is
-late fusion, the trunk output, the move encodings and the per-candidate tokens
-are computed once per decision point, and only self-attention, fusion and
-re-scoring run per loop iteration.
-
-All three output projections are zero-initialized and an empty evidence set
-hard-gates the stage off, so a fresh model, and any evidence-free forward at
-any weights, computes exactly the plain one-pass model.
-
-Scale is pinned at the stage's seams. The fused tokens are LayerNorm'd before
-self-attention; the cross-attention's queries and keys are LayerNorm'd per
-head (QK-norm), so its logits do not scale with the projection weights; and
-`attended`, the per-square `local` mix and the pooled summary are each
-LayerNorm'd before their zero-init output projections. Without these, the
-tokens of the first evidence run grew 40× at peak LR while its loss stood
-still, the board rewrite outgrew the trunk map, and the frozen scoring
-attention reading that map blew up the gradients. The trainer's clipping and
-divergence guards (below) are the second line of defense.
-
-### The proves-best head
-
-`proves_best` is a small softplus MLP reading the same fused per-move vector as
-the value head (`4C`), plus the scalar
-**best-so-far** (`4C + 1` in). It outputs `gain` (M,) ≥ 0: the expected
-improvement `E[max(0, v − best-so-far)]` that simming the candidate would add
-over the best candidate simmed so far.
-
-Best-so-far is fed in directly because a mean-pooled evidence summary cannot
-carry the max the target is measured from. It is not a separate model input:
-each evidence token already carries its candidate's observed win and draw
-frequencies, so `evidence_fusion.best_so_far` takes the max of the observed
-win value over the set's real tokens (0 for the empty set, the floor the
-training target is measured from). The `move_proposal_step` graph computes it
-the same way in-graph, so the engine stages nothing for it. The head is
-meaningful only with evidence; at the empty set it collapses to the value
-itself.
-
-### Training the evidence path (`scribblez.evidence`)
-
-This trains the **move proposal model** of [roadmap.md](roadmap.md) item 5: a
-copy of the student trained on sim outcomes, gain first, with the conditioned
-value heads as auxiliaries and no distillation anchor. The roadmap has the
-rationale and the recorded frozen-trial floor.
-
-Rows are `(position, evidence subset, held-out simmed candidate)`, assembled
-from trajectory `.sobs` pools. Each pool is drawn `subsets_per_pool` times per
-pass, with the subset empty at rate `empty_fraction` (or uniform over sizes
-when unset). Both are tag parameters because they set the rows-clock the LR
-schedule runs on. The targets are the held-out candidate's sim outcomes, never
-teacher readouts:
-
-| Head | Target | Loss | Weight |
-|------|--------|------|--------|
-| `wld` (conditioned) | sim W/D/L frequencies | soft cross-entropy | 1 |
-| `score_diff` (conditioned) | sim spread mean / std | Huber (δ=10) | `lambda_sd` = 0.004 |
-| `gain` | `max(0, v_c − max subset v)`, CRN-paired | Huber (δ=0.05) | `lambda_gain` = 1 |
-
-The trainer has two modes:
-
-- **Frozen** (the default; `freeze_backbone`). Everything outside
-  `evidence_fusion` and `proves_best` has `requires_grad=False` and is pinned
-  to eval mode, so the trunk's BatchNorm keeps the student's statistics. Only
-  the fusion stage and the proves-best head learn. This is the diagnostic
-  that produced the recorded floor.
-- **Unfrozen** (`unfreeze_backbone`), the move proposal model proper. The
-  whole model trains on the same loss, with two AdamW groups: the evidence
-  path (fusion + proves-best, from zero or random init) at `lr`, and the
-  backbone at `lr × backbone_lr_mult` (default 0.1). The WSD schedule scales
-  both, and BatchNorm runs in train mode. The plain student is exported as
-  ONNX each pass in this mode only.
-
-There is no distillation anchor in either mode. The empty-subset rows keep the
-plain pass calibrated on the simmed candidates. The plain first pass that
-feeds the evidence tokens is read without gradients (it is an input, not a
-training path), and because the fusion's gate is structural, the plain and
-conditioned passes agree exactly at prefix 0.
-
-Gradients over the trainable params are clipped to `grad_clip` (default 1) per
-step. A batch with a non-finite loss or gradient takes no step and is counted;
-a pass that leaves non-finite parameters, or skips more than a handful of
-batches, stops the run before anything is checkpointed.
-
-Held-out metrics compare the conditioned pass with the plain one on the same
-rows (soft-CE, value MAE), report the gain error and the acquisition hit rate
-(argmax gain over a position's held-out candidates against the one that simmed
-best, with the plain value's argmax as the baseline), and check exactness on
-prefix-0 rows. Unfrozen, the frozen student's soft-CE on the same rows is
-added (`student_wld_ce`) as the flat reference the moving plain pass's drift
-is read against.
-
----
-
-## 4. Side by side
-
-|  | `PositionEvalModel` | `MoveSetEvalModel` |
-|--|---------------------|--------------------|
-| Trunk | `SpatialTrunk`, shared implementation | same |
-| Unit of output | one board | one candidate move |
-| Board encodes per output | 1 | 1 per candidate set |
-| Move conditioning | none (the board is post-move) | tile embeddings + cross-attention |
-| Heads | wld, score_diff, 4 footprint placement heads | wld, score_diff, proves-best gain |
-| Supervision | game outcomes and observed spread | teacher readouts (`.mset` sidecar); sim outcomes for the move proposal copy |
-| ONNX outputs | `wld`, `score_diff`, 4 footprint-logit heads | plain graph: `wld`, `score_diff`; the evidence-path step graph (below) adds `gain` |
-
-The move set evaluation model has two ONNX export paths. The plain graph
-([onnx_export.py](../py/scribblez/move_set_eval/onnx_export.py)) emits `wld`
-and `score_diff` for the one-pass agent. The evidence path
-([proposal_export.py](../py/scribblez/move_set_eval/proposal_export.py),
-roadmap item 3) splits the move proposal model into two graphs the engine runs
-incrementally ([sim_residual_feedback.md](plans/sim_residual_feedback.md)):
-
-| Graph | Run | Inputs | Outputs |
-|-------|-----|--------|---------|
-| `move_proposal_cache` | once per turn | board + `M` candidates | `board (1,225,C)`, `g (1,3C)`, `move_enc (M,C)`, plain `wld`, `score_diff` |
-| `move_proposal_step` | per evidence-loop iteration | the cache tensors + a padded width-`E` evidence set | evidence-conditioned `wld`, `score_diff`, `gain` |
-
-The cache graph's plain `wld` and `score_diff` are the evidence-free value
-predictions that a simmed candidate's evidence token carries.
-
-In the engine, [move_proposal_nets.h](../engine/include/agent/move_proposal_nets.h)
-holds the pair of networks (`NeuralNet<MoveProposalCacheSpec>` and
-`NeuralNet<MoveProposalStepSpec>`, one shared serialized pair per run, created
-by `MoveProposalNets::create()`).
-[move_proposal_session.h](../engine/include/agent/move_proposal_session.h)
-drives them, one session per consumer holding the retained position, behind
-the GPU-free [move_proposal_service.h](../engine/include/agent/move_proposal_service.h)
-interface the loop consumers program against. The pair is served at FP32 and
-verified against `MoveSetEvalModel.forward` by
-`test_proposal_inference_parity.cpp`.

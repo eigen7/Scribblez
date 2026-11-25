@@ -16,7 +16,7 @@ in four parts:
 - **A search plays each candidate a few plies on with the greedy policy**,
   over sampled opponent racks, and stops at the leaf's value. There are no
   HastyBot plies anywhere.
-- **Generators play the newest release**, as deep_bot's already do. The
+- **Generators play the newest release**, as the deleted deep_bot's did. The
   training window spans many releases.
 
 The Positions tab follows. It drops the hasty rollouts for the same search
@@ -125,7 +125,7 @@ about once.
 **Proposed:** each turn is a labeled turn with probability `p`. This is
 KataGo's playout cap randomization, applied here: search on a random fraction
 of turns, which alone make training rows, and cheap play everywhere else.
-deep_bot already does a version of this for its policy data
+The deleted deep_bot workload did a version of this for its policy data
 (`pool_positions_per_game`).
 
 **A greedy turn** values every legal move under the belief-input leaf and
@@ -156,6 +156,10 @@ cost below).
 over different inputs, so that their misses are largely unrelated. Each stump
 picks a subset of the legal moves, and the union of those subsets should
 almost always hold the leaf's best. Static equity's top `K` is S1.
+
+**The stumps are non-neural.** A stump runs on every legal move of every turn,
+so it must cost far less than the leaf evaluations it saves. A network, even a
+small one, costs too much to be worth it there.
 
 **What makes it measurable:** the union's recall is S1's recall plus
 P(S1 misses) × P(S2 finds the best | S1 misses), and so on for each further
@@ -197,8 +201,9 @@ the data:
    leaves, so it values the position with the leaf in known mode. A game that
    ends within the plies takes its exact result. Turns with the bag empty
    still go to the endgame solver, as they do today.
-4. **Race.** The search runs in rounds, as `PoolLabeler` does, and drops
-   candidates once they are clearly behind. A dropped candidate keeps a rough
+4. **Race.** The search runs in rounds and drops candidates once they are
+   clearly behind. The policy-set pool labeler did this; it was deleted, and
+   sim/pool_labeler.h is in git history. A dropped candidate keeps a rough
    value that leans low, because it was dropped for looking bad.
 
 **What a labeled turn yields:**
@@ -268,13 +273,13 @@ The mixing weight is a knob to measure, not a fixed choice.
 
 ## Continuous training
 
-Generators take the tag's newest release, as deep_bot's generators do
-(workloads/deep_bot.py), rather than release 0 for the tag's life. The
+Generators take the tag's newest release, as the deleted deep_bot workload's
+generators did (workloads/deep_bot.py, in git history), rather than release 0
+for the tag's life. The
 trainer's window spans the recent generations whatever release produced
 them, and each row records its release.
 
-This is a new workload. leaf_bot_generation's definition is a fixed policy,
-and the live release1 tag runs under its stored params.
+This is a new workload: leaf_bot_generation's definition is a fixed policy.
 
 ## The Positions tab
 
@@ -346,9 +351,8 @@ represent any distribution of positions.
 - **`k`, `R`, `K`, `p`,** and the number of candidates a search values
   against the budget. Phase 0's spread and prefilter measurements set the
   first values.
-- **The prefilter stumps** beyond S1, and the `K` for S1 inside the search's
-  plies, chosen from the counts and the kept misses. The move proposal model
-  (docs/plans/sim_residual_feedback.md) is one candidate stump.
+- **The prefilter stumps** beyond S1, all non-neural, and the `K` for S1
+  inside the search's plies, chosen from the counts and the kept misses.
 - **The weight of the game result** in the played candidate's target.
 - **The leaf's architecture:** whether the speed of a conv leaf outweighs
   the transformer's quality once evaluations are the whole cost.

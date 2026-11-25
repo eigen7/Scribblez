@@ -3,8 +3,8 @@
 // The opponent's view of one of the chooser's candidates
 // (docs/plans/deep_bot.md, "Bob's subtree"): the leave inference query the
 // opponent, holding a sampled rack, would make about the leave the candidate
-// keeps. DeepBot's Alice makes one per (candidate, rack she samples for Bob)
-// to model Bob's belief about her rack.
+// keeps: one per (candidate, rack sampled for the opponent) models the
+// opponent's belief about the chooser's rack.
 //
 // It is the row training would encode at the opponent's turn with the
 // observer's private history hidden (LeaveHistory::hide_private): inside the

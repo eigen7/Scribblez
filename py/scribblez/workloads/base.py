@@ -80,9 +80,8 @@ class RoleSpec:
     # controller's machine) or "ssh" (a container on a machine reached over
     # ssh, either the operator's own or one rented for the task).
     kinds: tuple[str, ...] = ("local", "ssh")
-    # Whether the role may need a GPU. A slot uses one when its tag's measured
-    # need (WorkloadSpec.gpu_need) is not zero (uses_gpu): its container then
-    # gets the machine's GPUs, and a machine known to have none refuses it.
+    # Whether the role needs a GPU: its container gets the machine's GPUs, and
+    # a machine known to have none refuses it.
     gpu: bool = False
     # The worker image a remote slot runs on (cloud/runtime_abi.py): "engine"
     # when the binaries and the FFI cover the role, "torch" when it imports the
@@ -132,14 +131,6 @@ class RoleSpec:
 # slot on a machine without a cached plan builds one first, and the build may
 # take up to the cap on top of what the slot then serves with.
 TRT_WORKSPACE_GB = 1.0
-
-
-def uses_gpu(role: RoleSpec, gpu_gb: float | None) -> bool:
-    """Whether a slot of `role` whose tag needs `gpu_gb` GiB (None when
-    unmeasured) uses a GPU: the role may, and the tag's configuration does not
-    rule it out, as transfer_test's terminal rollouts, which load no model,
-    do with a need of 0."""
-    return role.gpu and gpu_gb != 0.0
 
 
 @dataclass(frozen=True)

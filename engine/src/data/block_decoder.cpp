@@ -5,7 +5,6 @@
 #include "data/forgone_play_log.h"
 #include "training/leaf_eval_task.h"
 #include "training/leave_inference_task.h"
-#include "training/max_move_per_lane_task.h"
 #include "training/training_task.h"
 #include "util/assert.h"
 #include "util/exception.h"
@@ -29,8 +28,6 @@ int BlockDecoder::input_floats_for(DecodeTask task, const InputEncodingSpec& spe
   switch (task) {
     case DecodeTask::kPositionEval:
       return input_floats(spec);
-    case DecodeTask::kMaxMovePerLane:
-      return MaxMovePerLaneTask::kInputFloats;
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kInputFloats;
@@ -44,8 +41,6 @@ int BlockDecoder::label_floats_for(DecodeTask task) {
   switch (task) {
     case DecodeTask::kPositionEval:
       return kLabelFloats;
-    case DecodeTask::kMaxMovePerLane:
-      return MaxMovePerLaneTask::kLabelFloats;
     case DecodeTask::kLeaveInference:
     case DecodeTask::kPublicLeaveInference:
       return LeaveInferenceTask::kLabelFloats;
@@ -57,8 +52,6 @@ int BlockDecoder::label_floats_for(DecodeTask task) {
 
 EligibleSpan BlockDecoder::row_turns(DecodeTask task, const GameMetadata& meta) {
   switch (task) {
-    case DecodeTask::kMaxMovePerLane:
-      return {0, int(meta.num_turns)};
     case DecodeTask::kLeafEval:
       // The game's last turn ended it.
       return {meta.eligible_begin, std::max(int(meta.eligible_begin), int(meta.num_turns) - 1)};
@@ -117,16 +110,13 @@ void BlockDecoder::decode_one(const char* buf, const std::string& path, uint32_t
   }
   const GameLog g = game_view(buf, game_idx, nullptr);
   float* out = output + output_row * row_floats_;
-  // The lane and leave inference tasks encode the pre-move position (the lane
-  // labels come from enumerating legal moves there, and the leave is inferred
-  // before the observer moves), and the leaf eval task the post-move one (a
-  // rollout leaf follows a move), so they ignore the caller's post_move flag.
+  // The leave inference tasks encode the pre-move position (the leave is
+  // inferred before the observer moves), and the leaf eval task the post-move
+  // one (a rollout leaf follows a move), so they ignore the caller's post_move
+  // flag.
   switch (task_) {
     case DecodeTask::kPositionEval:
       pos_.encode_row<PositionEvalTask>(g, int(turn_idx), post_move, augment, out);
-      return;
-    case DecodeTask::kMaxMovePerLane:
-      pos_.encode_row<MaxMovePerLaneTask>(g, int(turn_idx), /*post_move=*/false, augment, out);
       return;
     case DecodeTask::kLeaveInference:
       decode_leave_row<LeaveInferenceTask>(buf, path, g, game_idx, turn_idx, augment, out,

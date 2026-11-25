@@ -49,28 +49,6 @@ def _pointer(array: np.ndarray, ctype):
     return array.ctypes.data_as(ctypes.POINTER(ctype))
 
 
-class _PolicySetOutputs(ctypes.Structure):
-    """ScribblezPolicySetOutputs (scribblez_ffi.h)."""
-
-    _fields_ = [
-        ("rows", ctypes.POINTER(ctypes.c_float)),
-        ("opp_rack", ctypes.POINTER(ctypes.c_float)),
-        ("letters", ctypes.POINTER(ctypes.c_int32)),
-        ("blanks", ctypes.POINTER(ctypes.c_uint8)),
-        ("squares", ctypes.POINTER(ctypes.c_int32)),
-        ("tile_mask", ctypes.POINTER(ctypes.c_uint8)),
-        ("scalars", ctypes.POINTER(ctypes.c_float)),
-        ("cross_cells", ctypes.POINTER(ctypes.c_int32)),
-        ("cross_letters", ctypes.POINTER(ctypes.c_uint8)),
-        ("equity", ctypes.POINTER(ctypes.c_float)),
-        ("played", ctypes.POINTER(ctypes.c_int32)),
-        ("ownership", ctypes.POINTER(ctypes.c_int8)),
-        ("square_points", ctypes.POINTER(ctypes.c_int16)),
-        ("going_out", ctypes.POINTER(ctypes.c_int8)),
-        ("end_points", ctypes.POINTER(ctypes.c_int16)),
-    ]
-
-
 # ---------------------------------------------------------------------------
 # Public data classes
 # ---------------------------------------------------------------------------
@@ -113,15 +91,6 @@ def _setup_lib(lib: ctypes.CDLL):
 
     lib.scribblez_task_row_floats.restype = ctypes.c_int
     lib.scribblez_task_row_floats.argtypes = [ctypes.c_void_p, ctypes.c_int]  # session, task
-
-    lib.scribblez_max_move_per_lane_analyze_gcg.restype = ctypes.c_int
-    lib.scribblez_max_move_per_lane_analyze_gcg.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # gcg_text
-        ctypes.c_char_p,  # out_json
-        ctypes.c_int,  # out_cap
-        ctypes.POINTER(ctypes.c_float),  # out_input
-    ]
 
     lib.scribblez_position_eval_analyze_gcg.restype = ctypes.c_int
     lib.scribblez_position_eval_analyze_gcg.argtypes = [
@@ -241,18 +210,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_int,  # err_cap
     ]
 
-    lib.scribblez_opp_rack_summary.restype = ctypes.c_int
-    lib.scribblez_opp_rack_summary.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_float),  # params, nullable
-        ctypes.c_int,  # length
-        ctypes.POINTER(ctypes.c_int32),  # leave_pool, nullable with params
-        ctypes.POINTER(ctypes.c_int32),  # unseen
-        ctypes.c_void_p,  # out_opp_rack (PoolOppRack)
-        ctypes.c_char_p,  # out_err
-        ctypes.c_int,  # err_cap
-    ]
-
     lib.scribblez_win_table_write.restype = ctypes.c_int
     lib.scribblez_win_table_write.argtypes = [
         ctypes.c_char_p,  # path
@@ -269,147 +226,6 @@ def _setup_lib(lib: ctypes.CDLL):
         ctypes.c_void_p,  # features (WinTableFeature records)
         ctypes.c_int64,  # n
         ctypes.POINTER(ctypes.c_float),  # out
-        ctypes.c_char_p,  # out_err
-        ctypes.c_int,  # err_cap
-    ]
-
-    lib.scribblez_move_set_encode_moves.restype = None
-    lib.scribblez_move_set_encode_moves.argtypes = [
-        ctypes.c_void_p,  # moves (packed 16-byte Move records)
-        ctypes.c_int64,
-        ctypes.POINTER(ctypes.c_int32),  # pre_move_score_diffs
-        ctypes.POINTER(ctypes.c_int32),  # letters
-        ctypes.POINTER(ctypes.c_uint8),  # blanks
-        ctypes.POINTER(ctypes.c_int32),  # squares
-        ctypes.POINTER(ctypes.c_uint8),  # tile_mask
-        ctypes.POINTER(ctypes.c_float),  # scalars
-    ]
-
-    lib.scribblez_move_set_move_dims.restype = None
-    lib.scribblez_move_set_move_dims.argtypes = [
-        ctypes.POINTER(ctypes.c_int32),
-        ctypes.POINTER(ctypes.c_int32),
-        ctypes.POINTER(ctypes.c_int32),
-        ctypes.POINTER(ctypes.c_int32),
-    ]
-
-    lib.scribblez_move_set_positions.restype = ctypes.c_int
-    lib.scribblez_move_set_positions.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # .slog path
-        ctypes.POINTER(ctypes.c_int64),  # game_idx
-        ctypes.POINTER(ctypes.c_int64),  # turn_idx
-        ctypes.POINTER(ctypes.c_int64),  # move_counts
-        ctypes.c_int64,  # n_positions
-        ctypes.c_void_p,  # moves
-        ctypes.POINTER(ctypes.c_float),  # out_rows
-        ctypes.POINTER(ctypes.c_int32),  # out_cells
-        ctypes.POINTER(ctypes.c_uint8),  # out_letters
-        ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable with out_moves
-        ctypes.c_void_p,  # out_moves, nullable with transposes
-    ]
-
-    lib.scribblez_policy_set_positions.restype = ctypes.c_int
-    lib.scribblez_policy_set_positions.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # .slog path
-        ctypes.POINTER(ctypes.c_int64),  # game_idx
-        ctypes.POINTER(ctypes.c_int64),  # turn_idx
-        ctypes.POINTER(ctypes.c_int64),  # move_counts
-        ctypes.c_int64,  # n_positions
-        ctypes.c_void_p,  # moves
-        ctypes.c_void_p,  # opp_racks (PoolOppRack[n_positions])
-        ctypes.POINTER(ctypes.c_uint8),  # transposes, nullable
-        ctypes.POINTER(_PolicySetOutputs),  # out
-    ]
-
-    lib.scribblez_policy_candidates.restype = ctypes.c_int64
-    lib.scribblez_policy_candidates.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # .slog path
-        ctypes.c_int64,  # game_idx
-        ctypes.c_int64,  # turn_idx
-        ctypes.c_int,  # blank_prune_points
-        ctypes.c_void_p,  # out_moves (Move[cap])
-        ctypes.POINTER(ctypes.c_int32),  # out_equity_ranks
-        ctypes.c_int64,  # cap
-    ]
-
-    lib.scribblez_gcg_cross_checks.restype = ctypes.c_int
-    lib.scribblez_gcg_cross_checks.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # gcg text
-        ctypes.c_int,  # open_leaves
-        ctypes.c_void_p,  # moves
-        ctypes.c_int64,  # n
-        ctypes.POINTER(ctypes.c_int32),  # out_cells
-        ctypes.POINTER(ctypes.c_uint8),  # out_letters
-        ctypes.c_char_p,  # out_err
-        ctypes.c_int,  # err_cap
-    ]
-
-    lib.scribblez_move_set_cross_slots.restype = ctypes.c_int32
-    lib.scribblez_move_set_cross_slots.argtypes = []
-
-    lib.scribblez_move_set_encoding_version.restype = ctypes.c_int32
-    lib.scribblez_move_set_encoding_version.argtypes = []
-
-    lib.scribblez_score_diff_input_layout.restype = None
-    lib.scribblez_score_diff_input_layout.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.POINTER(ctypes.c_int32),  # scalar_index
-        ctypes.POINTER(ctypes.c_float),  # scale
-    ]
-
-    lib.scribblez_gcg_sim_evidence.restype = ctypes.c_int
-    lib.scribblez_gcg_sim_evidence.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_int,
-        ctypes.c_uint64,
-        ctypes.c_int,  # open_leaves
-        ctypes.c_int,  # solve_endgames
-        ctypes.POINTER(ctypes.c_char),
-        ctypes.POINTER(ctypes.c_int),
-    ]
-
-    lib.scribblez_encode_candidate_rows.restype = ctypes.c_int
-    lib.scribblez_encode_candidate_rows.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # .slog path
-        ctypes.POINTER(ctypes.c_int64),  # game_idx
-        ctypes.POINTER(ctypes.c_int64),  # turn_idx
-        ctypes.POINTER(ctypes.c_int64),  # move_counts
-        ctypes.c_int64,  # n_positions
-        ctypes.c_void_p,  # moves
-        ctypes.POINTER(ctypes.c_float),  # out
-    ]
-
-    lib.scribblez_probe_replay.restype = ctypes.c_int
-    lib.scribblez_probe_replay.argtypes = [
-        ctypes.c_char_p,  # .slog path
-        ctypes.c_char_p,  # .sprobe path
-        ctypes.c_int64,  # n_positions
-        ctypes.c_int64,  # n_candidates
-        ctypes.c_int64,  # n_records
-        ctypes.c_int64,  # n_turns
-        ctypes.c_void_p,  # out_roots
-        ctypes.c_void_p,  # out_candidates
-        ctypes.c_void_p,  # out_starts
-        ctypes.c_void_p,  # out_turns
-        ctypes.c_char_p,  # out_err
-        ctypes.c_int,  # err_cap
-    ]
-
-    lib.scribblez_reply_blocking.restype = ctypes.c_int
-    lib.scribblez_reply_blocking.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # .slog path
-        ctypes.c_char_p,  # .sprobe path
-        ctypes.c_int64,  # n_records
-        ctypes.c_int,  # stride
-        ctypes.POINTER(ctypes.c_uint8),  # out
         ctypes.c_char_p,  # out_err
         ctypes.c_int,  # err_cap
     ]
@@ -467,29 +283,6 @@ def _setup_lib(lib: ctypes.CDLL):
     lib.scribblez_format_layout_json.restype = ctypes.c_char_p
     lib.scribblez_format_layout_json.argtypes = []
 
-    lib.scribblez_gcg_position_inputs.restype = ctypes.c_int
-    lib.scribblez_gcg_position_inputs.argtypes = [
-        ctypes.c_void_p,  # session
-        ctypes.c_char_p,  # gcg text
-        ctypes.c_int,  # opp_leave_input
-        ctypes.POINTER(ctypes.c_float),  # out_input
-        ctypes.c_int,  # input_cap
-        ctypes.POINTER(ctypes.c_int32),  # out_score_diff
-        ctypes.c_void_p,  # out_moves
-        ctypes.c_int,  # moves_cap
-        ctypes.c_char_p,  # out_err
-        ctypes.c_int,  # err_cap
-    ]
-
-    lib.scribblez_gcg_position_board_json.restype = ctypes.c_int
-    lib.scribblez_gcg_position_board_json.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_char_p,
-        ctypes.c_int,
-        ctypes.c_char_p,
-        ctypes.c_int,
-    ]
-
 
 _SETUP_DONE = False
 
@@ -512,7 +305,7 @@ _STRUCT_DTYPES: dict[str, np.dtype] = {}
 
 
 def format_layout() -> dict:
-    """The engine's description of its binary formats (.slog / .sobs / .mset):
+    """The engine's description of its binary formats (.slog and its sidecars):
     each struct's field names, offsets and numpy dtype codes, plus magics,
     versions, flag bits, code tables and shared constants. The engine derives it
     from the packed C++ structs, so it cannot drift from them
@@ -602,10 +395,9 @@ def _read_shapes(ptr) -> list[ShapeInfo]:
 # codes (scribblez_ffi.h, scribblez_task_input_shapes).
 TASK_CODES = {
     "position_eval": 0,
-    "max_move_per_lane": 1,
-    "leave_inference": 2,
-    "public_leave_inference": 3,
-    "deep_bot_leaf_eval": 4,
+    "leave_inference": 1,
+    "public_leave_inference": 2,
+    "deep_bot_leaf_eval": 3,
 }
 
 
@@ -649,8 +441,8 @@ def decode_rows(
 
     Rows are encoded exactly as the DataLoader encodes them, without symmetry
     augmentation: (n, task_row_floats(task)) float32. For consumers that pair
-    rows with per-position data such as .sobs sim observations. The
-    max-move-per-lane and leave inference tasks are always pre-move.
+    rows with per-position data, such as a held-out set's cached results. The
+    leave inference tasks are always pre-move.
     `hide_private` hides a leave inference row's observer's private history
     (the engine's LeaveHistory::hide_private).
     """
@@ -778,33 +570,6 @@ class LeaveValueArrays:
             raise ValueError(err.value.decode())
         return log_z.value, log_probs, samples
 
-    def opp_rack_summary(
-        self, unseen: np.ndarray, params: np.ndarray | None, length: int, leave_pool: np.ndarray
-    ) -> np.void:
-        """The PoolOppRack record of the opponent-rack summary
-        (belief/opp_rack_summary.h) for a chooser whose unseen pool is the 27
-        tile counts `unseen`: the length-`length` leave a sampler query on
-        `params` draws from `leave_pool` plus a uniform refill, or with
-        `params` None a uniform full rack."""
-        out = np.zeros(1, dtype=struct_dtype("PoolOppRack"))
-        u = np.ascontiguousarray(unseen, dtype=np.int32)
-        p = None if params is None else np.ascontiguousarray(params, dtype=np.float32)
-        pool = np.ascontiguousarray(leave_pool, dtype=np.int32)
-        err = ctypes.create_string_buffer(_ERR_CAP)
-        rc = self._lib.scribblez_opp_rack_summary(
-            self._handle,
-            None if p is None else p.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-            length,
-            pool.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            u.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            out.ctypes.data_as(ctypes.c_void_p),
-            err,
-            _ERR_CAP,
-        )
-        if rc != 0:
-            raise ValueError(err.value.decode())
-        return out[0]
-
 
 def win_table_write(path: str | Path, grid: np.ndarray, header: dict[str, object]):
     """Write a win table (engine sim/win_pct_table.h, which owns the format)
@@ -845,495 +610,6 @@ def win_table_eval(
     if rc != 0:
         raise ValueError(err.value.decode())
     return out
-
-
-def move_encoding_dims() -> tuple[int, int, int, int]:
-    """The move set model's move-encoder dims (engine
-    training/move_set_encoder.h): (max_placed, num_scalars, letter_vocab,
-    cells)."""
-    max_placed = ctypes.c_int32()
-    num_scalars = ctypes.c_int32()
-    letter_vocab = ctypes.c_int32()
-    cells = ctypes.c_int32()
-    _lib().scribblez_move_set_move_dims(
-        ctypes.byref(max_placed),
-        ctypes.byref(num_scalars),
-        ctypes.byref(letter_vocab),
-        ctypes.byref(cells),
-    )
-    return max_placed.value, num_scalars.value, letter_vocab.value, cells.value
-
-
-def move_encoding_version() -> int:
-    """The engine's move-encoding version (training/move_set_encoder.h
-    kMoveEncodingVersion), recorded in move set checkpoints and ONNX metadata so
-    a model is never run under a different encoding than it was trained on."""
-    return int(_lib().scribblez_move_set_encoding_version())
-
-
-def score_diff_input_layout() -> tuple[int, float]:
-    """(scalar_index, scale) such that input_scalar[scalar_index] * scale is
-    the position's score differential in points, under the session's arm."""
-    index = ctypes.c_int32()
-    scale = ctypes.c_float()
-    _lib().scribblez_score_diff_input_layout(_session(), ctypes.byref(index), ctypes.byref(scale))
-    return index.value, scale.value
-
-
-def encode_moves(moves: np.ndarray, pre_move_score_diffs: np.ndarray) -> dict[str, np.ndarray]:
-    """Encode (M,) Move records (sim_evidence.sobs.MOVE_DTYPE) into the move
-    set model's move-encoder inputs, using the same engine encoder the move set
-    agent uses.
-
-    `pre_move_score_diffs` (M,) is the mover's score advantage in points before
-    each move; the encoder derives the post-move differential from it. Returns
-    letters and squares (M, max_placed) int64, blanks and tile_mask
-    (M, max_placed) bool, scalars (M, num_scalars) float32.
-    """
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
-    pre_diffs = np.ascontiguousarray(pre_move_score_diffs, dtype=np.int32)
-    n = len(moves)
-    if len(pre_diffs) != n:
-        raise ValueError(f"pre_move_score_diffs length {len(pre_diffs)} != moves length {n}")
-    max_placed, num_scalars, _, _ = move_encoding_dims()
-    letters = np.zeros((n, max_placed), dtype=np.int32)
-    blanks = np.zeros((n, max_placed), dtype=np.uint8)
-    squares = np.zeros((n, max_placed), dtype=np.int32)
-    tile_mask = np.zeros((n, max_placed), dtype=np.uint8)
-    scalars = np.zeros((n, num_scalars), dtype=np.float32)
-    if n:
-        _lib().scribblez_move_set_encode_moves(
-            moves.ctypes.data_as(ctypes.c_void_p),
-            n,
-            pre_diffs.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            letters.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            blanks.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-            squares.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            tile_mask.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-            scalars.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-        )
-    return {
-        "letters": letters.astype(np.int64),
-        "blanks": blanks.astype(bool),
-        "squares": squares.astype(np.int64),
-        "tile_mask": tile_mask.astype(bool),
-        "scalars": scalars,
-    }
-
-
-def move_cross_slots() -> int:
-    """Cross-check slots per move (engine move_set_encoder.h kMoveCrossSlots);
-    cross_letters carries 26 flags per slot."""
-    return _lib().scribblez_move_set_cross_slots()
-
-
-def _cross_check_arrays(n: int) -> tuple[np.ndarray, np.ndarray]:
-    slots = move_cross_slots()
-    return np.zeros((n, slots), dtype=np.int32), np.zeros((n, slots * 26), dtype=np.uint8)
-
-
-def _cross_check_result(cells: np.ndarray, letters: np.ndarray) -> dict[str, np.ndarray]:
-    return {"cells": cells.astype(np.int64), "letters": letters}
-
-
-def move_set_positions(
-    path: str | Path,
-    game_idx: np.ndarray,
-    turn_idx: np.ndarray,
-    move_counts: np.ndarray,
-    moves: np.ndarray,
-    transposes: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    """A move set batch's inputs from one .slog, one replay per position: each
-    position's pre-move training row, and the cross-check features of its
-    candidate moves on that board in the move set model's layout (engine
-    move_set_encoder.h encode_moves_cross_checks).
-
-    Position j is the pre-move decision point (game_idx[j], turn_idx[j]) of the
-    .slog at `path`; its candidates are the next move_counts[j] records of the
-    (M,) MOVE_DTYPE array `moves`, M = sum(move_counts). Returns "rows"
-    (P, task_row_floats()) float32, as decode_rows(post_move=False) decodes
-    them; "cells" (M, slots) int64 -- 1 + axis * 225 + square per entry, 0 in
-    empty slots; and "letters" (M, slots * 26) uint8, each entry's post-move
-    legal letters. With `transposes` (P,) bool, position j where it is set is
-    encoded as the transposed position (the board's diagonal symmetry),
-    cross-checks included, and "moves" (M,) MOVE_DTYPE returns every candidate in its
-    position's frame: transposed there, as given elsewhere.
-    """
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    games = np.ascontiguousarray(game_idx, dtype=np.int64)
-    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
-    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
-    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
-    if not (games.shape == turns.shape == counts.shape) or games.ndim != 1:
-        raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
-    if counts.sum() != len(moves):
-        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    rows = np.empty((len(games), task_row_floats()), dtype=np.float32)
-    cells, letters = _cross_check_arrays(len(moves))
-    flips = None if transposes is None else np.ascontiguousarray(transposes, dtype=np.uint8)
-    if flips is not None and flips.shape != games.shape:
-        raise ValueError(f"transposes shape {flips.shape} != positions {games.shape}")
-    framed = None if flips is None else np.empty_like(moves)
-    rc = _lib().scribblez_move_set_positions(
-        _session(),
-        str(path).encode("utf-8"),
-        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        len(games),
-        moves.ctypes.data_as(ctypes.c_void_p),
-        rows.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-        cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-        letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        None if flips is None else flips.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        None if framed is None else framed.ctypes.data_as(ctypes.c_void_p),
-    )
-    if rc != 0:
-        raise OSError(f"move_set_positions failed (rc={rc}) for {path}")
-    out = {"rows": rows, **_cross_check_result(cells, letters)}
-    if framed is not None:
-        out["moves"] = framed
-    return out
-
-
-def policy_set_positions(
-    path: str | Path,
-    game_idx: np.ndarray,
-    turn_idx: np.ndarray,
-    move_counts: np.ndarray,
-    moves: np.ndarray,
-    opp_racks: np.ndarray,
-    transposes: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
-    """The policy-set model's inputs at pool positions of one .slog, from the
-    engine code PolicyBot computes them with at play (training/
-    policy_set_inputs.h). Positions, moves and `transposes` are addressed as in
-    move_set_positions; `opp_racks` (P,) is each position's PoolOppRack record.
-    The session must be in the hidden-leaves arm. Returns "rows" (P,
-    task_row_floats()) and "opp_rack" (P, opp_rack_floats) float32, and per
-    candidate, in its position's frame, encode_moves' arrays (letters,
-    blanks, squares, tile_mask, scalars), "cells" and "letters_cross" as
-    move_set_positions' "cells" and "letters", and "equity" (M,) float32; and
-    per position the game record's continuation targets after the move it
-    played there (engine training/played_continuation.h), in the position's
-    frame: "played" (P,) int32, the move's index among the position's
-    candidates or -1; "ownership" (P, 225) int8 and "square_points" (P, 225)
-    int16, each square's fate class (-1 filled) and signed points; "going_out"
-    (P,) int8, the class or -1 for a game cut short; "end_points" (P,) int16.
-    """
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    games = np.ascontiguousarray(game_idx, dtype=np.int64)
-    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
-    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
-    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
-    racks = np.ascontiguousarray(opp_racks, dtype=struct_dtype("PoolOppRack"))
-    if not (games.shape == turns.shape == counts.shape == racks.shape) or games.ndim != 1:
-        raise ValueError(
-            f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape} {racks.shape}"
-        )
-    if counts.sum() != len(moves):
-        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    flips = None if transposes is None else np.ascontiguousarray(transposes, dtype=np.uint8)
-    if flips is not None and flips.shape != games.shape:
-        raise ValueError(f"transposes shape {flips.shape} != positions {games.shape}")
-    n = len(moves)
-    max_placed, num_scalars, _, _ = move_encoding_dims()
-    cells, cross_letters = _cross_check_arrays(n)
-    out = {
-        "rows": np.empty((len(games), task_row_floats()), dtype=np.float32),
-        "opp_rack": np.empty(
-            (len(games), format_layout()["constants"]["policy_set"]["opp_rack_floats"]),
-            dtype=np.float32,
-        ),
-        "letters": np.zeros((n, max_placed), dtype=np.int32),
-        "blanks": np.zeros((n, max_placed), dtype=np.uint8),
-        "squares": np.zeros((n, max_placed), dtype=np.int32),
-        "tile_mask": np.zeros((n, max_placed), dtype=np.uint8),
-        "scalars": np.zeros((n, num_scalars), dtype=np.float32),
-        "equity": np.zeros(n, dtype=np.float32),
-        "played": np.zeros(len(games), dtype=np.int32),
-        "ownership": np.zeros((len(games), BOARD_CELLS), dtype=np.int8),
-        "square_points": np.zeros((len(games), BOARD_CELLS), dtype=np.int16),
-        "going_out": np.zeros(len(games), dtype=np.int8),
-        "end_points": np.zeros(len(games), dtype=np.int16),
-    }
-    c_float, c_int32, c_uint8 = ctypes.c_float, ctypes.c_int32, ctypes.c_uint8
-    targets = _PolicySetOutputs(
-        rows=_pointer(out["rows"], c_float),
-        opp_rack=_pointer(out["opp_rack"], c_float),
-        letters=_pointer(out["letters"], c_int32),
-        blanks=_pointer(out["blanks"], c_uint8),
-        squares=_pointer(out["squares"], c_int32),
-        tile_mask=_pointer(out["tile_mask"], c_uint8),
-        scalars=_pointer(out["scalars"], c_float),
-        cross_cells=_pointer(cells, c_int32),
-        cross_letters=_pointer(cross_letters, c_uint8),
-        equity=_pointer(out["equity"], c_float),
-        played=_pointer(out["played"], c_int32),
-        ownership=_pointer(out["ownership"], ctypes.c_int8),
-        square_points=_pointer(out["square_points"], ctypes.c_int16),
-        going_out=_pointer(out["going_out"], ctypes.c_int8),
-        end_points=_pointer(out["end_points"], ctypes.c_int16),
-    )
-    rc = _lib().scribblez_policy_set_positions(
-        _session(),
-        str(path).encode("utf-8"),
-        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        len(games),
-        moves.ctypes.data_as(ctypes.c_void_p),
-        racks.ctypes.data_as(ctypes.c_void_p),
-        None if flips is None else flips.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        ctypes.byref(targets),
-    )
-    if rc != 0:
-        raise OSError(f"policy_set_positions failed (rc={rc}) for {path}")
-    cross = _cross_check_result(cells, cross_letters)
-    return {
-        **out,
-        # encode_moves' dtypes.
-        "letters": out["letters"].astype(np.int64),
-        "blanks": out["blanks"].astype(bool),
-        "squares": out["squares"].astype(np.int64),
-        "tile_mask": out["tile_mask"].astype(bool),
-        "cells": cross["cells"],
-        "letters_cross": cross["letters"],
-    }
-
-
-# First-try capacity of policy_candidates' buffers; a larger pool retries at
-# the reported count.
-_POLICY_CANDIDATES_FIRST_CAP = 1024
-
-
-def policy_candidates(
-    path: str | Path, game: int, turn: int, blank_prune_points: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """The candidates PolicyBot chooses among at (game, turn) of a .slog, before
-    the move (training/policy_set_inputs.h pool_candidates): MOVE_DTYPE moves
-    (M,) and their static-equity ranks (M,) int32, -1 for a pass outside the
-    ranking. The session must be in the hidden-leaves arm."""
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    cap = _POLICY_CANDIDATES_FIRST_CAP
-    while True:
-        moves = np.zeros(cap, dtype=MOVE_DTYPE)
-        ranks = np.zeros(cap, dtype=np.int32)
-        n = _lib().scribblez_policy_candidates(
-            _session(),
-            str(path).encode("utf-8"),
-            game,
-            turn,
-            blank_prune_points,
-            moves.ctypes.data_as(ctypes.c_void_p),
-            ranks.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-            cap,
-        )
-        if n < 0:
-            raise OSError(f"policy_candidates failed for {path} game {game} turn {turn}")
-        if n <= cap:
-            return moves[:n].copy(), ranks[:n].copy()
-        cap = n
-
-
-def gcg_cross_checks(
-    gcg_text: str, moves: np.ndarray, *, open_leaves: bool
-) -> dict[str, np.ndarray]:
-    """move_set_positions' cross-check features for moves of a position-set
-    GCG's decision point, read as gcg_position_inputs reads it. Raises
-    ValueError on an unparseable GCG."""
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
-    cells, letters = _cross_check_arrays(len(moves))
-    err = ctypes.create_string_buffer(512)
-    rc = _lib().scribblez_gcg_cross_checks(
-        _session(),
-        gcg_text.encode("utf-8"),
-        int(open_leaves),
-        moves.ctypes.data_as(ctypes.c_void_p),
-        len(moves),
-        cells.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)),
-        letters.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        err,
-        len(err),
-    )
-    if rc != 0:
-        raise ValueError(err.value.decode("utf-8") or "gcg_cross_checks failed")
-    return _cross_check_result(cells, letters)
-
-
-def encode_candidate_rows(
-    path: str | Path,
-    game_idx: np.ndarray,
-    turn_idx: np.ndarray,
-    move_counts: np.ndarray,
-    moves: np.ndarray,
-) -> np.ndarray:
-    """Post-move input rows for candidate moves, as a position-evaluation model
-    scores them: per candidate, the position after it and before the refill,
-    from the mover's point of view, under the session's arm.
-
-    Positions and moves are addressed as in move_set_positions. Returns
-    (M, task_input_floats()) float32, the spatial planes then the scalars.
-    """
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    games = np.ascontiguousarray(game_idx, dtype=np.int64)
-    turns = np.ascontiguousarray(turn_idx, dtype=np.int64)
-    counts = np.ascontiguousarray(move_counts, dtype=np.int64)
-    moves = np.ascontiguousarray(moves, dtype=MOVE_DTYPE)
-    if not (games.shape == turns.shape == counts.shape) or games.ndim != 1:
-        raise ValueError(f"per-position shapes differ: {games.shape} {turns.shape} {counts.shape}")
-    if counts.sum() != len(moves):
-        raise ValueError(f"move_counts sum {counts.sum()} != moves length {len(moves)}")
-    out = np.empty((len(moves), task_input_floats()), dtype=np.float32)
-    rc = _lib().scribblez_encode_candidate_rows(
-        _session(),
-        str(path).encode("utf-8"),
-        games.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        turns.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        counts.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
-        len(games),
-        moves.ctypes.data_as(ctypes.c_void_p),
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-    )
-    if rc != 0:
-        raise OSError(f"encode_candidate_rows failed (rc={rc}) for {path}")
-    return out
-
-
-def probe_replay(
-    slog_path: str | Path,
-    sprobe_path: str | Path,
-    n_positions: int,
-    n_candidates: int,
-    n_records: int,
-    n_turns: int,
-) -> dict[str, np.ndarray]:
-    """The game state along every probe of a .sprobe file, replayed against its
-    companion .slog (engine data/probe_replay.h). The counts are the file's
-    totals, which size the outputs. Returns structured arrays keyed "roots"
-    (ProbeRootState), "candidates" (ProbeCandidateState), "starts"
-    (ProbeStartState) and "turns" (ProbeTurnState)."""
-    out = {
-        "roots": np.zeros(n_positions, dtype=struct_dtype("ProbeRootState")),
-        "candidates": np.zeros(n_candidates, dtype=struct_dtype("ProbeCandidateState")),
-        "starts": np.zeros(n_records, dtype=struct_dtype("ProbeStartState")),
-        "turns": np.zeros(n_turns, dtype=struct_dtype("ProbeTurnState")),
-    }
-    err = ctypes.create_string_buffer(512)
-    rc = _lib().scribblez_probe_replay(
-        str(slog_path).encode("utf-8"),
-        str(sprobe_path).encode("utf-8"),
-        n_positions,
-        n_candidates,
-        n_records,
-        n_turns,
-        *(a.ctypes.data_as(ctypes.c_void_p) for a in out.values()),
-        err,
-        len(err),
-    )
-    if rc != 0:
-        raise OSError(f"probe_replay failed for {sprobe_path}: {err.value.decode('utf-8')}")
-    return out
-
-
-def reply_blocking(
-    slog_path: str | Path, sprobe_path: str | Path, n_records: int, stride: int
-) -> np.ndarray:
-    """(n_records, stride) uint8: for each record of a .sprobe file and each
-    candidate of its position, 1 when the candidate blocks the record's
-    opponent reply (engine sim/reply_blocking.h)."""
-    out = np.zeros((n_records, stride), dtype=np.uint8)
-    err = ctypes.create_string_buffer(512)
-    rc = _lib().scribblez_reply_blocking(
-        _session(),
-        str(slog_path).encode("utf-8"),
-        str(sprobe_path).encode("utf-8"),
-        n_records,
-        stride,
-        out.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-        err,
-        len(err),
-    )
-    if rc != 0:
-        raise OSError(f"reply_blocking failed for {sprobe_path}: {err.value.decode('utf-8')}")
-    return out
-
-
-def gcg_sim_evidence(
-    gcg_text: str,
-    top_k: int = 10,
-    rollouts: int = 200,
-    seed: int = 0,
-    open_leaves: bool = False,
-    solve_endgames: bool = False,
-) -> tuple[np.ndarray, int]:
-    """Sim the top-K moves by HastyBot equity at the decision point before a
-    GCG's final recorded move, with common random numbers.
-
-    With `open_leaves`, each rollout's opponent starts from the leave their last
-    recorded move kept, with draws still sampled. With `solve_endgames`, rollouts
-    solve their endgames rather than play them greedily. Returns (records,
-    played_rank): .sobs records (sim_evidence.sobs.RECORD_DTYPE) and the index
-    of the GCG's final move among them, or -1 if it is outside the top K.
-    Raises on a parse error or an endgame decision point.
-    """
-    from scribblez.sim_evidence.sobs import RECORD_DTYPE
-
-    buf = ctypes.create_string_buffer(top_k * RECORD_DTYPE.itemsize)
-    played_rank = ctypes.c_int(-1)
-    n = _lib().scribblez_gcg_sim_evidence(
-        _session(),
-        gcg_text.encode("utf-8"),
-        int(top_k),
-        int(rollouts),
-        int(seed),
-        int(open_leaves),
-        int(solve_endgames),
-        buf,
-        ctypes.byref(played_rank),
-    )
-    if n < 0:
-        raise OSError("gcg_sim_evidence failed (parse error or endgame decision point)")
-    # Copy via bytes rather than a structured-array .copy(), which copies field
-    # by field and leaves padding bytes uninitialized, breaking byte-level
-    # comparisons of the records.
-    records = np.frombuffer(bytes(buf.raw[: n * RECORD_DTYPE.itemsize]), dtype=RECORD_DTYPE)
-    return records, int(played_rank.value)
-
-
-def analyze_gcg(gcg_text: str) -> tuple[dict, np.ndarray]:
-    """The max-move-per-lane analysis of the position after a GCG's last move.
-
-    Returns (bundle, model_input): `bundle` is the dashboard's lane-analysis
-    JSON (board, rack, per-lane ground truth and maximal plays) and
-    `model_input` the flat float32 model input, with the side to move's rack.
-    Raises OSError on a parse error.
-    """
-    lib = _lib()
-    fn = lib.scribblez_max_move_per_lane_analyze_gcg
-    encoded = gcg_text.encode("utf-8")
-    inp = np.zeros(task_input_floats("max_move_per_lane"), dtype=np.float32)
-    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-
-    cap = 1 << 16
-    out = ctypes.create_string_buffer(cap)
-    n = fn(_session(), encoded, out, cap, inp_ptr)
-    if n < 0:
-        raise OSError("analyze_gcg failed (GCG parse error)")
-    if n >= cap:  # JSON was truncated; retry once at the exact size
-        cap = n + 1
-        out = ctypes.create_string_buffer(cap)
-        n = fn(_session(), encoded, out, cap, inp_ptr)
-    return json.loads(out.value.decode("utf-8")), inp
 
 
 @dataclass(frozen=True)
@@ -1401,7 +677,7 @@ def collapse_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarr
 
     The plays heads give Pr[the next move covers the cell]; the win heads give
     Pr[covers the cell and that seat wins]. Uses the same legality mask, softmax
-    and scatter the engine applies to the .mset teacher planes. `raw` is
+    and scatter the engine's training targets use. `raw` is
     (4, num_classes) or flat. Raises OSError on a parse error or a non-PLAY
     final move.
     """
@@ -1432,7 +708,7 @@ def masked_position_eval_placement(gcg_text: str, raw: np.ndarray) -> np.ndarray
     after the engine's legality mask and masked softmax: (4, num_classes), with
     illegal footprints at zero.
 
-    This is the exact .mset distillation target, before collapsing to cells,
+    This is the exact masked distribution over footprints, before collapsing to cells,
     exposed for measuring its sparsity. `raw` is (4, num_classes) or flat.
     Raises OSError on a parse error or a non-PLAY final move.
     """
@@ -1545,91 +821,9 @@ def position_eval_board_json(gcg_text: str) -> dict:
     return json.loads(out.value.decode("utf-8"))
 
 
-@dataclass(frozen=True)
-class GcgPositionInputs:
-    """A position-set GCG's decision point as move set model inputs
-    (see gcg_position_inputs)."""
-
-    input_spatial: np.ndarray  # (planes, 15, 15) float32
-    input_scalar: np.ndarray  # (scalars,) float32
-    score_diff: int  # the mover's pre-move score differential (points)
-    moves: np.ndarray  # (N,) MOVE_DTYPE: the full legal move list, equity-ranked
-
-
 # First-try capacity of the legal-move buffer; a larger position retries at the
 # reported count.
 _GCG_MOVES_FIRST_CAP = 4096
-
-
-def gcg_position_inputs(
-    gcg_text: str,
-    *,
-    opp_leave_input: bool,
-    spatial_planes: int,
-    scalar_size: int,
-) -> GcgPositionInputs:
-    """Encode a position-set GCG's decision point for the move set model.
-
-    The decision point is the state after the last recorded move, with the side
-    to move's rack taken from its #RackN pragma. Returns the board row under the
-    given arm (a checkpoint's own, not the session's), the score differential,
-    and every legal move in the equity order the trajectory generator draws
-    candidates from. The widths come from the model's checkpoint config.
-    Raises ValueError on a width the arm does not encode or an unparseable GCG.
-    """
-    from scribblez.sim_evidence.sobs import MOVE_DTYPE
-
-    lib = _lib()
-    inp = np.zeros(spatial_planes * BOARD_CELLS + scalar_size, dtype=np.float32)
-    inp_ptr = inp.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-    score_diff = ctypes.c_int32(0)
-    err = ctypes.create_string_buffer(512)
-    cap = _GCG_MOVES_FIRST_CAP
-    while True:
-        moves = np.zeros(cap, dtype=MOVE_DTYPE)
-        n = lib.scribblez_gcg_position_inputs(
-            _session(),
-            gcg_text.encode("utf-8"),
-            int(opp_leave_input),
-            inp_ptr,
-            len(inp),
-            ctypes.byref(score_diff),
-            moves.ctypes.data_as(ctypes.c_void_p),
-            cap,
-            err,
-            len(err),
-        )
-        if n < 0:
-            raise ValueError(err.value.decode("utf-8") or "gcg_position_inputs failed")
-        if n <= cap:
-            break
-        cap = n
-    return GcgPositionInputs(
-        input_spatial=inp[: spatial_planes * BOARD_CELLS].reshape(spatial_planes, 15, 15),
-        input_scalar=inp[spatial_planes * BOARD_CELLS :],
-        score_diff=int(score_diff.value),
-        moves=moves[:n].copy(),
-    )
-
-
-def gcg_position_board_json(gcg_text: str, open_leaves: bool) -> dict:
-    """The dashboard trajectory pane's bundle for a position-set GCG's decision
-    point: the mover's-POV GameState plus `mover`, `opp_leave`, `last_move`,
-    and `moves`, every legal move's GCG notation in gcg_position_inputs' order
-    (under the same `open_leaves`). Raises OSError on a parse error."""
-    lib = _lib()
-    fn = lib.scribblez_gcg_position_board_json
-    encoded = gcg_text.encode("utf-8")
-    cap = 1 << 16
-    out = ctypes.create_string_buffer(cap)
-    n = fn(_session(), encoded, int(open_leaves), out, cap)
-    if n < 0:
-        raise OSError("gcg_position_board_json failed (GCG parse error)")
-    if n >= cap:  # JSON was truncated; retry once at the exact size
-        cap = n + 1
-        out = ctypes.create_string_buffer(cap)
-        n = fn(_session(), encoded, int(open_leaves), out, cap)
-    return json.loads(out.value.decode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -1659,8 +853,7 @@ def read_file_header(path: str | Path) -> tuple[int, int]:
 class NativeDataLoader:
     """The C++ DataLoader (engine/include/data/data_loader.h).
 
-    `task` fixes which training row it decodes (TASK_CODES):
-    "max_move_per_lane" over every turn, the others over each game's
+    `task` fixes which training row it decodes (TASK_CODES), over each game's
     training-eligible turns.
     """
 

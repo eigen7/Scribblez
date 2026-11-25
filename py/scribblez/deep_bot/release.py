@@ -1,9 +1,8 @@
 """A release (docs/plans/deep_bot_generations.md, "Terms"): a tag's models'
 exports published together, under the tag at releases/release_<k>/<kind>.onnx,
 beside any files of the workload's own (a Layout names both), with a manifest
-written last. deep_bot's release holds its three models and their analysis of
-the known positions (positions.json, release_positions.py); leaf_bot_generation's
-holds the leave inference model and the leaf network.
+written last. leaf_bot_generation's holds the leave inference model and the
+leaf network.
 A release exists once its manifest does, so a reader never takes two models
 of different releases. Release 0 is the seeds'; release k has trained
 through generation k - 1.
@@ -21,12 +20,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from scribblez.deep_bot import KINDS
 from scribblez.paths import TagPaths
 
 MANIFEST = "manifest.json"
-# The exports' analysis of the known positions (release_positions.py).
-POSITIONS = "positions.json"
 
 # Where a remote trainer links each release for the controller to take.
 OUTBOX = "release_outbox"
@@ -98,11 +94,6 @@ class Layout:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.unlink(missing_ok=True)
             os.link(paths.root / rel, dest)
-
-
-# deep_bot's release: its three models and their analysis of the known
-# positions.
-DEEP_BOT = Layout(KINDS, (POSITIONS,))
 
 
 def read_manifest(paths: TagPaths, release: int) -> dict:

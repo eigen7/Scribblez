@@ -7,7 +7,6 @@
 #include "lexicon/hasty_equity.h"
 #include "sim/candidate_race.h"
 #include "sim/setup_plays.h"
-#include "training/policy_set_inputs.h"
 #include "util/exception.h"
 #include "util/work_pool.h"
 
@@ -268,16 +267,6 @@ SimCandidates select_all_plays(const SimPosition& pos, const Dictionary& dict,
   return out;
 }
 
-SimCandidates select_pool(const std::vector<Move>& ranked, int blank_prune_points) {
-  policy_set::PoolCandidates pool = policy_set::pool_candidates(ranked, blank_prune_points);
-  SimCandidates out;
-  out.num_legal_moves = ranked.size();
-  out.moves = std::move(pool.moves);
-  out.equity_ranks = std::move(pool.equity_ranks);
-  out.highlighted.assign(out.moves.size(), 0);
-  return out;
-}
-
 std::vector<SimmedPosition> run_job(const std::vector<char>& buf, const Dictionary& dict,
                                     const SlogSimConfig& config,
                                     const std::vector<binlog::GamePositionIndex>& work,
@@ -303,12 +292,6 @@ SimCandidateSelector all_plays_selector(const Dictionary& dict, int cut, int max
                                  const std::vector<Move>& ranked, const Move&, std::mt19937_64&) {
     return select_all_plays(pos, dict, ranked, cut, max_plays);
   };
-}
-
-SimCandidateSelector pool_selector(int blank_prune_points) {
-  return [blank_prune_points](const binlog::GamePositionIndex&, const SimPosition&,
-                              const std::vector<Move>& ranked, const Move&,
-                              std::mt19937_64&) { return select_pool(ranked, blank_prune_points); };
 }
 
 SimCandidateSelector chosen_selector(ChosenMoves chosen) {

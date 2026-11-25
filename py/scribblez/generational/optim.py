@@ -117,9 +117,7 @@ def build_optimizer(model, params, rows_per_step: int | None = None):
     that row-count warmup into the step count AdamWScheduleFree wants. It
     defaults to `params.batch_size` -- the rows-per-step of a trainer whose
     rows-clock counts the same unit its batches are sized in (position_eval). A
-    trainer whose clock counts a different unit passes its own conversion
-    (move_set_eval counts candidate moves but batches by position, so a step is
-    many rows)."""
+    trainer whose clock counts a different unit passes its own conversion."""
     lr = arm_lr(params)
     betas = (0.9, params.adam_beta2)
     if params.optimizer == OPTIMIZER_MUON:
@@ -191,8 +189,7 @@ class WindowedAdamWScheduleFree(AdamWScheduleFree):
 def _model_forward(model, spatial, scalar):
     """Default BatchNorm-exercising forward for recalibration: the whole model
     over one (spatial, scalar) board-input pair. A trainer whose BatchNorm sits
-    behind more than the plain board pass passes its own (move_set_eval's heads
-    take a candidate set the recalibration has no reason to build)."""
+    behind more than the plain board pass passes its own."""
     model(spatial, scalar)
 
 

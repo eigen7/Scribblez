@@ -59,12 +59,11 @@ class SyntheticEvalService : public EvalService<Spec> {
  private:
   SyntheticModel model_;
   // The hashed weights of each projection, back to back, over one row's
-  // inputs: the board row, then (move-set family) one candidate's features.
+  // inputs: the board row.
   std::vector<float> weights_;
 };
 
 extern template class SyntheticEvalService<PositionEvaluationSpec>;
-extern template class SyntheticEvalService<MoveSetEvaluationSpec>;
 
 }  // namespace nn
 }  // namespace scribblez
