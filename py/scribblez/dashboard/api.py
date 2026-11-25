@@ -116,11 +116,11 @@ def _leaf_eval_metrics(conn, params, mount_root):
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
-def _leaf_bot_generation_metrics(conn, params, mount_root):
-    """leaf_bot_generation's Training tab: each generation scored under the
+def _deep_bot_generation_metrics(conn, params, mount_root):
+    """deep_bot_generation's Training tab: each generation scored under the
     newest release and under release 0, and the two models' training
     curves."""
-    groups = plots.LEAF_BOT_GENERATION_QUALITY
+    groups = plots.DEEP_BOT_GENERATION_QUALITY
     return plots.series_grid(conn, groups) if _row_count(conn, "metrics") else None
 
 
@@ -145,7 +145,7 @@ FIGURES = {
     "training_metrics": _training_metrics,
     "leave_inference_metrics": _leave_inference_metrics,
     "leaf_eval_metrics": _leaf_eval_metrics,
-    "leaf_bot_generation_metrics": _leaf_bot_generation_metrics,
+    "deep_bot_generation_metrics": _deep_bot_generation_metrics,
     "match_eval": _match_eval,
     "release_matches": _release_matches,
     "match_arms": _match_arms,

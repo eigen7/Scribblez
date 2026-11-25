@@ -35,7 +35,7 @@ Stats are generic and come from the task view itself.
 | match_arms | Arms · Info |
 | leave_inference | Loss · Training · Controls · Info |
 | deep_bot_leaf_eval | Loss · Training · Match · Positions · Controls · Info |
-| leaf_bot_generation | Loss · Training · Matches · Positions · Controls · Info |
+| deep_bot_generation | Loss · Training · Matches · Positions · Controls · Info |
 
 Loss, Match, Matches, Training and Arms embed API figures and re-fetch when a cheap
 version token advances.

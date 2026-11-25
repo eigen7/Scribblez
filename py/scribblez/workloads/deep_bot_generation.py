@@ -1,4 +1,4 @@
-"""The leaf_bot_generation workload: one generation step of DeepBot, taken by
+"""The deep_bot_generation workload: one generation step of DeepBot, taken by
 hand. A tag starts from a leave inference model and a leaf network (its
 seeds), plays DeepBot on them against itself, and trains both models on
 those games, warm-started from the seeds. The next step is a new tag seeded
@@ -11,7 +11,7 @@ HastyBot. Creating the tag copies its seeds under it (`finalize`): either a
 previous tag of this workload (`seed_tag`), whose rolling checkpoint holds
 both models, or a leave_inference and a deep_bot_leaf_eval tag.
 
-The singleton trainer (scribblez/leaf_bot_generation/trainer.py) hosts the
+The singleton trainer (scribblez/deep_bot_generation/trainer.py) hosts the
 data home, scores each generation under its newest release and release 0,
 trains both models on it, and publishes them together as the next release
 (deep_bot/release.py).
@@ -19,7 +19,7 @@ trains both models on it, and publishes them together as the next release
 The measure role's slots, any number of them, play each due release as
 DeepBot against HastyBot and against release 0, and analyze the known
 positions under it for the Positions tab, one match to a slot at a time
-(scribblez/leaf_bot_generation/measure_dispatch.py). The backfill role adds
+(scribblez/deep_bot_generation/measure_dispatch.py). The backfill role adds
 the positions the manifest gains later to the analyses already made
 (workloads/positions_backfill.py).
 
@@ -34,9 +34,9 @@ from pathlib import Path
 from cloud.runtime_abi import RUNTIME_TORCH
 
 from scribblez.deep_bot import LEAF, LEAVE, release, seeds
+from scribblez.deep_bot_generation import KINDS, LAYOUT, WORKLOAD
 from scribblez.deep_bot_leaf_eval import positions as leaf_positions
 from scribblez.generational.scheduler import TICK_FOR_TASK
-from scribblez.leaf_bot_generation import KINDS, LAYOUT, WORKLOAD
 from scribblez.params import ParamsError, param
 from scribblez.paths import MATCH_RESULTS_DIR, TagPaths
 from scribblez.workloads import known_position_inputs, positions_backfill
@@ -53,11 +53,11 @@ from scribblez.workloads.selfplay_gen import GENERATOR_STATS, STAGING_DIR, gener
 
 
 @dataclass(frozen=True)
-class LeafBotGenerationParams:
+class DeepBotGenerationParams:
     # The seeds.
     seed_tag: str = param(
         "",
-        "leaf_bot_generation tag whose rolling checkpoint seeds both models: the previous "
+        "deep_bot_generation tag whose rolling checkpoint seeds both models: the previous "
         "generation. Empty: seed from seed_leave_tag and seed_leaf_tag",
     )
     seed_leave_tag: str = param(
@@ -192,7 +192,7 @@ def seed_sources(params, mount_root: Path) -> dict[str, Path]:
     return {kind: seeds.source(params, kind, mount_root) for kind in KINDS}
 
 
-def finalize(spec, paths: TagPaths, params: LeafBotGenerationParams) -> LeafBotGenerationParams:
+def finalize(spec, paths: TagPaths, params: DeepBotGenerationParams) -> DeepBotGenerationParams:
     """Copy the seeds under the new tag, failing here, where the operator
     sees it and before anything is copied, if a seed is missing."""
     seeds.install(paths, seed_sources(params, paths.mount_root))
@@ -223,24 +223,24 @@ def inputs(params, mount_root: Path) -> dict[str, Path]:
 SPEC = WorkloadSpec(
     name=WORKLOAD,
     title="Advance DeepBot a generation",
-    params_cls=LeafBotGenerationParams,
+    params_cls=DeepBotGenerationParams,
     roles=(
         RoleSpec(
             name="generate",
             title="Generator (GPU)",
-            runner="scribblez.workloads.leaf_bot_generation:run_generate",
-            tag_files="scribblez.workloads.leaf_bot_generation:seed_release_files",
+            runner="scribblez.workloads.deep_bot_generation:run_generate",
+            tag_files="scribblez.workloads.deep_bot_generation:seed_release_files",
             gpu=True,
             stats=GENERATOR_STATS,
         ),
         RoleSpec(
             name="train",
             title="Trainer (GPU)",
-            runner="scribblez.leaf_bot_generation.trainer:run",
+            runner="scribblez.deep_bot_generation.trainer:run",
             runtime=RUNTIME_TORCH,
             ingest="scribblez.generational.train_ingest:tick",
             singleton=True,
-            tag_files="scribblez.workloads.leaf_bot_generation:seed_files",
+            tag_files="scribblez.workloads.deep_bot_generation:seed_files",
             delivered_sets=(
                 DeliveredSet(
                     outbox=release.OUTBOX,
@@ -258,9 +258,9 @@ SPEC = WorkloadSpec(
         RoleSpec(
             name="measure",
             title="Matches (GPU)",
-            runner="scribblez.leaf_bot_generation.measure:run",
-            dispatch="scribblez.leaf_bot_generation.measure_dispatch:tick",
-            inputs="scribblez.workloads.leaf_bot_generation:inputs",
+            runner="scribblez.deep_bot_generation.measure:run",
+            dispatch="scribblez.deep_bot_generation.measure_dispatch:tick",
+            inputs="scribblez.workloads.deep_bot_generation:inputs",
             gpu=True,
             stats=StatsSpec(
                 unit="games", phases={"match_s": "match", "positions_s": "known positions"}
@@ -269,7 +269,7 @@ SPEC = WorkloadSpec(
         RoleSpec(
             name=positions_backfill.ROLE,
             title="Positions backfill (GPU)",
-            runner="scribblez.workloads.leaf_bot_generation:run_backfill",
+            runner="scribblez.workloads.deep_bot_generation:run_backfill",
             singleton=True,
             kinds=("local",),
             gpu=True,
@@ -279,7 +279,7 @@ SPEC = WorkloadSpec(
     scheduler=TICK_FOR_TASK,
     progress="scribblez.workloads.deep_bot:progress",
     complete="scribblez.workloads.deep_bot:complete",
-    finalize="scribblez.workloads.leaf_bot_generation:finalize",
+    finalize="scribblez.workloads.deep_bot_generation:finalize",
     pace_role="train",
     collected_dirs=(STAGING_DIR, MATCH_RESULTS_DIR, leaf_positions.POSITIONS_DIR),
     primary_params=(

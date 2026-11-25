@@ -8,8 +8,8 @@ runs.
 
 from scribblez.workloads import (
     blind_spots,
+    deep_bot_generation,
     deep_bot_leaf_eval,
-    leaf_bot_generation,
     leaf_eval_hasty_rollouts,
     leave_inference,
     match_arms,
@@ -33,7 +33,7 @@ WORKLOADS = {
         leave_inference.SPEC,
         deep_bot_leaf_eval.SPEC,
         leaf_eval_hasty_rollouts.SPEC,
-        leaf_bot_generation.SPEC,
+        deep_bot_generation.SPEC,
     )
 }
 

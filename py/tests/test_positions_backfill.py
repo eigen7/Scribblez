@@ -11,7 +11,7 @@ import pytest
 from cloud.sinks import LocalSink
 from scribblez.deep_bot import LEAF, LEAVE, known_positions, release
 from scribblez.deep_bot_leaf_eval import positions as lp
-from scribblez.workloads import deep_bot_leaf_eval, leaf_bot_generation, positions_backfill
+from scribblez.workloads import deep_bot_generation, deep_bot_leaf_eval, positions_backfill
 from scribblez.workloads.base import WorkerContext
 
 MANIFEST = [p.id for p in known_positions.load()]
@@ -62,9 +62,9 @@ def _read(ctx: WorkerContext, generation: int) -> dict:
 
 def _release_ctx(tmp_path: Path, max_cycles: int = 0) -> WorkerContext:
     return _ctx(
-        leaf_bot_generation.SPEC,
+        deep_bot_generation.SPEC,
         tmp_path,
-        leaf_bot_generation.LeafBotGenerationParams(seed_leave_tag="a", seed_leaf_tag="b"),
+        deep_bot_generation.DeepBotGenerationParams(seed_leave_tag="a", seed_leaf_tag="b"),
         max_cycles,
     )
 
@@ -72,7 +72,7 @@ def _release_ctx(tmp_path: Path, max_cycles: int = 0) -> WorkerContext:
 def test_an_analysis_gains_the_positions_it_lacks_and_keeps_the_rest(tmp_path, asked):
     ctx = _release_ctx(tmp_path)
     _write(ctx, 0, OLD)
-    assert leaf_bot_generation.run_backfill(ctx) == 0
+    assert deep_bot_generation.run_backfill(ctx) == 0
     paths = ctx.tag_paths()
     ((ids, player),) = asked
     assert ids == MANIFEST[-2:]
@@ -92,13 +92,13 @@ def test_the_newest_generation_goes_first_and_complete_ones_are_left_alone(tmp_p
     _write(ctx, 10, MANIFEST)
     _write(ctx, 20, OLD)
     complete = (ctx.tag_paths().data_dir / lp.rel(10)).stat().st_mtime_ns
-    leaf_bot_generation.run_backfill(ctx)
+    deep_bot_generation.run_backfill(ctx)
     assert len(asked) == 1 and MANIFEST[-1] in _read(ctx, 20)["positions"]
     assert MANIFEST[-1] not in _read(ctx, 0)["positions"]  # the cycle budget is spent
-    leaf_bot_generation.run_backfill(ctx)
+    deep_bot_generation.run_backfill(ctx)
     assert len(asked) == 2 and MANIFEST[-1] in _read(ctx, 0)["positions"]
     assert (ctx.tag_paths().data_dir / lp.rel(10)).stat().st_mtime_ns == complete
-    leaf_bot_generation.run_backfill(ctx)
+    deep_bot_generation.run_backfill(ctx)
     assert len(asked) == 2  # nothing left
 
 
@@ -106,7 +106,7 @@ def test_only_the_chosen_generations_are_backfilled(tmp_path, asked):
     ctx = _release_ctx(tmp_path)
     for g in (0, 10, 20):
         _write(ctx, g, OLD)
-    list(positions_backfill.backfill_all(ctx, leaf_bot_generation.backfill_exports, [10]))
+    list(positions_backfill.backfill_all(ctx, deep_bot_generation.backfill_exports, [10]))
     assert len(asked) == 1
     assert [MANIFEST[-1] in _read(ctx, g)["positions"] for g in (0, 10, 20)] == [
         False,
@@ -128,7 +128,7 @@ def test_a_deep_bot_leaf_eval_analysis_uses_its_export_and_the_pinned_leave_mode
 
 
 def test_the_role_is_a_local_singleton_in_both_workloads():
-    for spec in (deep_bot_leaf_eval.SPEC, leaf_bot_generation.SPEC):
+    for spec in (deep_bot_leaf_eval.SPEC, deep_bot_generation.SPEC):
         role = spec.role(positions_backfill.ROLE)
         assert role.singleton and role.kinds == ("local",) and role.gpu
     gpu = deep_bot_leaf_eval.gpu_need(
@@ -144,6 +144,6 @@ def test_the_role_records_a_cycle_per_generation_backfilled(tmp_path, asked):
     for g in (0, 10):
         _write(ctx, g, OLD)
     _write(ctx, 20, MANIFEST)
-    leaf_bot_generation.run_backfill(ctx)
+    deep_bot_generation.run_backfill(ctx)
     record = ctx.sink.read_json("stats/local-0.json")
     assert (record["cycles_total"], record["units_total"]) == (2, 4)

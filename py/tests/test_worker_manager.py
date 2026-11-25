@@ -34,8 +34,8 @@ from scribblez.dashboard.workers import (
     _key,
 )
 from scribblez.deep_bot import release, seeds
+from scribblez.deep_bot_generation import LAYOUT
 from scribblez.generational import lifecycle
-from scribblez.leaf_bot_generation import LAYOUT
 from scribblez.paths import TagPaths
 from scribblez.workloads.position_eval import SPEC as POSITION_EVAL_SPEC
 from scribblez.workloads.position_eval import PositionEvalParams
@@ -2273,12 +2273,12 @@ def test_an_ssh_trainers_controls_go_into_its_container_once_per_change(
     assert pushed == [("scz-position_eval-t-tr", "controls.json")]
 
 
-def _leaf_bot_fleet(manager, monkeypatch, tmp_path, trainer_kind: str):
-    """A leaf_bot_generation task with a trainer of `trainer_kind` on machine
+def _deep_bot_fleet(manager, monkeypatch, tmp_path, trainer_kind: str):
+    """A deep_bot_generation task with a trainer of `trainer_kind` on machine
     "u@home", a generator beside it and one on "u@far", all running; and what
     is pushed into which container, with each container's files as a listing
     shows them."""
-    spec = workloads.get("leaf_bot_generation")
+    spec = workloads.get("deep_bot_generation")
     task = tasks.TaskRecord(workload=spec.name, tag="t", params={}, created_at=0.0)
     for wid, role, kind, host in (
         ("tr", "train", trainer_kind, "u@home"),
@@ -2327,7 +2327,7 @@ def test_release_0_is_pushed_once_to_each_generator_on_another_machine(
     manager, monkeypatch, tmp_path
 ):
     """With the trainer here, every ssh generator reads a pushed copy."""
-    spec, task, status, pushed, held = _leaf_bot_fleet(manager, monkeypatch, tmp_path, "local")
+    spec, task, status, pushed, held = _deep_bot_fleet(manager, monkeypatch, tmp_path, "local")
     paths = manager.tasks.paths(spec, "t")
     manager._push_tag_files(spec, task, status)
     assert pushed == []  # no release yet
@@ -2344,7 +2344,7 @@ def test_release_0_is_pushed_once_to_each_generator_on_another_machine(
     assert pushed == []
 
     # A container made anew holds nothing, whatever the old one did.
-    del held["scz-leaf_bot_generation-t-far"]
+    del held["scz-deep_bot_generation-t-far"]
     manager._tag_files_held.pop(_key(spec, "t", "far"))  # as _run_ssh_container does
     manager._push_tag_files(spec, task, status)
     assert pushed == [("far", rel) for rel in RELEASE_0]
@@ -2356,7 +2356,7 @@ def test_a_remote_trainer_gets_the_seeds_and_the_generator_beside_it_nothing(
     """A generator on the trainer's machine reads the releases the trainer
     writes into the tree they share; the one elsewhere gets the copy the
     controller pulled."""
-    spec, task, status, pushed, _ = _leaf_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
+    spec, task, status, pushed, _ = _deep_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
     paths = manager.tasks.paths(spec, "t")
     for kind in ("leave", "leaf"):
         seeds.seed_path(paths, kind).parent.mkdir(parents=True, exist_ok=True)
@@ -2370,7 +2370,7 @@ def test_a_remote_trainer_gets_the_seeds_and_the_generator_beside_it_nothing(
 
 
 def test_a_push_that_fails_is_retried_from_the_file_it_stopped_at(manager, monkeypatch, tmp_path):
-    spec, task, status, pushed, held = _leaf_bot_fleet(manager, monkeypatch, tmp_path, "local")
+    spec, task, status, pushed, held = _deep_bot_fleet(manager, monkeypatch, tmp_path, "local")
     _write_release(manager.tasks.paths(spec, "t"), 0)
     push = workers_mod.push_file
 
@@ -2392,7 +2392,7 @@ def test_a_push_that_fails_is_retried_from_the_file_it_stopped_at(manager, monke
 
 
 def test_a_remote_trainers_collection_installs_its_releases(manager, monkeypatch, tmp_path):
-    spec, task, _, _, _ = _leaf_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
+    spec, task, _, _, _ = _deep_bot_fleet(manager, monkeypatch, tmp_path, "ssh")
     assert manager._transfer_target(spec, task, task.worker("tr"))["pair_dirs"] == {
         "state": "train_state.json",
         "release_outbox": "manifest.json",

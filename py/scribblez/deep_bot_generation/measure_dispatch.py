@@ -1,4 +1,4 @@
-"""Controller-side measuring of a leaf_bot_generation tag's releases: spreading
+"""Controller-side measuring of a deep_bot_generation tag's releases: spreading
 their matches over the measure slots and recording what the slots deliver
 (the RoleSpec.dispatch tick; measure.py is the worker's half).
 
@@ -21,8 +21,8 @@ from pathlib import Path
 
 from scribblez.dashboard import db
 from scribblez.deep_bot import matches, release
+from scribblez.deep_bot_generation import LAYOUT, measure
 from scribblez.generational import lifecycle
-from scribblez.leaf_bot_generation import LAYOUT, measure
 from scribblez.paths import DONE_SUFFIX, TagPaths
 
 # A match: (release, opponent).

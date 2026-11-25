@@ -5,7 +5,7 @@ every analysis made before. The backfill analyzes what each one lacks under
 that generation's own exports, newest generation first, and rewrites the
 file with the entries already there unchanged.
 
-It is the `backfill` role of deep_bot_leaf_eval and of leaf_bot_generation,
+It is the `backfill` role of deep_bot_leaf_eval and of deep_bot_generation,
 which the operator adds, pauses and resumes in the dashboard, and whose
 slot finishes once every analysis holds every position.
 py/scripts/deep_bot_leaf_eval/backfill_positions.py runs the same runner on

@@ -105,7 +105,7 @@ describe('LeafEvalPositions', () => {
   });
 
   it("shows the opponent's rack under the tag's fixed leave inference model", async () => {
-    render(<LeafEvalPositions task="leaf_bot_generation" tag="release1" />);
+    render(<LeafEvalPositions task="deep_bot_generation" tag="release1" />);
     await waitFor(() => expect(screen.getByText("leave inference release 0, the self-play's")).toBeTruthy());
     expect(screen.getByText('inferred +4.0 ± 6.0 · uniform +1.0 ± 8.0')).toBeTruthy();
   });

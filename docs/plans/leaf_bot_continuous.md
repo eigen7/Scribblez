@@ -3,7 +3,7 @@
 **Status: proposed 2026-11-24, not built.** What each phase measures shapes
 the next one. No pass or kill thresholds are fixed in advance.
 
-**Decision.** Replace leaf_bot_generation's recipe with an AlphaZero-like one,
+**Decision.** Replace deep_bot_generation's recipe with an AlphaZero-like one,
 in four parts:
 
 - **The leaf takes the opponent's leave as a belief**, the leave inference
@@ -279,7 +279,7 @@ for the tag's life. The
 trainer's window spans the recent generations whatever release produced
 them, and each row records its release.
 
-This is a new workload: leaf_bot_generation's definition is a fixed policy.
+This is a new workload: deep_bot_generation's definition is a fixed policy.
 
 ## The Positions tab
 
@@ -287,7 +287,7 @@ This is a new workload: leaf_bot_generation's definition is a fixed policy.
 inference model, because that model is what played generation `N`'s games.
 The charts go in `dashboard.db` keyed by (generation, position).
 - scz#544 charts the fixed release 0 model. That is right for
-  leaf_bot_generation, whose policy is fixed, and it can merge as is.
+  deep_bot_generation, whose policy is fixed, and it can merge as is.
 - The new workload's panel keys by release.
 
 **The value table's rollout columns** become the labeled-turn search run at

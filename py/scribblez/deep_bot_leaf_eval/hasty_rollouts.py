@@ -7,7 +7,7 @@ drawn from the leave inference model's belief.
 They are what a deep_bot_leaf_eval leaf would value the moves at if it
 learned its targets, HastyBot's self-play, perfectly. They are not the moves'
 true values: another continuation would value them otherwise, and a leaf
-trained on other games (leaf_bot_generation's, DeepBot's own) targets that
+trained on other games (deep_bot_generation's, DeepBot's own) targets that
 continuation instead. They value a move over the whole belief, where the
 network's analysis (positions.py) values it over a few draws; their leaves
 are drawn as the analysis draws them (the same model and ANALYSIS_SEED),

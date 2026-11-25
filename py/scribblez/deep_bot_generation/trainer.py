@@ -1,4 +1,4 @@
-"""The leaf_bot_generation train role: one process over the leave inference
+"""The deep_bot_generation train role: one process over the leave inference
 model and the leaf network, hosting the tag's data home.
 
 It starts both units from the tag's seeds (deep_bot/units.py) and publishes
@@ -30,11 +30,11 @@ import torch
 from scribblez import params as params_mod
 from scribblez.deep_bot import LEAF, LEAVE, release, unit_set, units
 from scribblez.deep_bot.seeds import seed_path
+from scribblez.deep_bot_generation import KINDS, LAYOUT
 from scribblez.generational import data_home, lifecycle, state_pair
 from scribblez.generational.checkpoint import GenerationalState
 from scribblez.generational.controls import CpuController, default_controls
 from scribblez.generational.records import TrainRecorder, read_controls
-from scribblez.leaf_bot_generation import KINDS, LAYOUT
 from scribblez.leave_inference import forgone
 from scribblez.paths import TagPaths
 from scribblez.position_eval.trainer import OutputDeliverer, ensure_window, wait_for_generation
@@ -47,7 +47,7 @@ BASELINE = "r0_"
 
 
 @dataclass
-class LeafBotGenerationState(GenerationalState):
+class DeepBotGenerationState(GenerationalState):
     """The cursor: `generation_index` is the next generation to train and the
     newest release's number; `rows_trained` counts the games trained on, the
     dashboard's clock; each model keeps its own rows-clock for its
@@ -208,7 +208,7 @@ def run(ctx: WorkerContext) -> int:
         "deliverer": OutputDeliverer(),
     }
     state_pair.install_seed(paths)
-    state = unit_set.resume(by_kind, paths, device, LeafBotGenerationState)
+    state = unit_set.resume(by_kind, paths, device, DeepBotGenerationState)
     # Release 0 before the data home's first heartbeat releases the generators.
     ensure_newest_release(by_kind, paths, ctx.tag, run_ctx["remote"], state)
     ensure_window(paths, ctx.sink, state.generation_index, params.window)

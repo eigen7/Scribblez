@@ -1,4 +1,4 @@
-"""What leaf_bot_generation's multi-model trainer shares with the known
+"""What deep_bot_generation's multi-model trainer shares with the known
 positions' tooling (docs/plans/subtree_bot_generations.md): the models' kinds,
 their releases and seeds, and the known positions."""
 
