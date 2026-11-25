@@ -12,10 +12,9 @@ decision, in [plans/](plans/README.md)).
   target architecture: a public belief system, a unified Q/V network, GADDAG
   move generation and Monte Carlo search.
 - **[roadmap.md](roadmap.md)**: the implementation plan. The direction
-  (SupremeBot, a learned search over a context of every probe, in standard
-  Scrabble), its build order and status, what is already built, the three
-  models that feed it, and the evidence-loop agent that preceded it, now on
-  hiatus.
+  (DeepBot: a belief-input leaf network, cheap self-play with searched labels,
+  continuous training), its phases' status, what is already built, the two
+  models it trains, and the earlier directions.
 - **[simulation_information_flow.md](simulation_information_flow.md)**: how
   far one simulation's information travels in the game tree. An idealized
   agent works through the Richards–Johnson exchange, then the vocabulary

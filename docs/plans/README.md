@@ -24,8 +24,8 @@ moved on. New plans go here, not in `docs/` proper.
   rollouts, outdated rollouts re-priced or re-run rather than discarded, and
   one acquisition rule over (candidate, rack indices). Built one layer at a
   time against an expert-labeled evaluation set.
-- **[supreme_bot.md](supreme_bot.md)**: *the project's direction;
-  plan-reviewed, not built.* The unconstrained form of the same goal: every step of every probe
+- **[supreme_bot.md](supreme_bot.md)**: *plan-reviewed, not built;
+  superseded by deep_bot.md.* The unconstrained form of the same goal: every step of every probe
   becomes a token in one context, and a causal transformer reads it to choose
   the moves and draws inside probes and the final pick. No per-node statistics
   or backup rule. Tokens describe content, not tree position, so any probe can
@@ -114,7 +114,7 @@ moved on. New plans go here, not in `docs/` proper.
   inside the network. The contingent-draw potential map was built and
   deleted; the post-move cross-check delta has an encoder and a diagnostic
   but is not yet a model input.
-- **[deep_bot.md](deep_bot.md)**: *proposed, not
+- **[deep_bot.md](deep_bot.md)**: *the project's direction; proposed, not
   built.* DeepBot trained AlphaZero-style. The leaf takes the opponent's leave
   as a belief or a concrete leave, with half its rows hiding the leave.
   Self-play plays the leaf's greedy move at most turns and searches a random
