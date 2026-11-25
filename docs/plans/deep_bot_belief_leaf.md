@@ -17,13 +17,12 @@ measures shapes the next; no pass or kill thresholds are fixed in advance.
 3. **Belief mode.** The decoder reads the sidecar and makes a fraction of the
    rows in belief mode. A held-out read compares belief mode against
    DeepBot's average over 16 drawn leaves.
-4. **The runs**: version 3 leaf networks with and without join planes, which
-   are DeepBot's generation 0.
+4. **The run**: a version 3 leaf network, DeepBot's generation 0.
 
 **Not in this phase:**
 - **Deleting the GPU hasty-rollout path.** It is what keeps a fast leaf fed
-  (see [Serving](#serving-why-the-device-encoder-stays)). Whether it goes
-  waits for phase 3's measurement of the greedy player's throughput.
+  (see [Serving](#serving-why-the-device-encoder-stays)), so this phase keeps
+  it.
 - **Beliefs for deep_bot_generation's games.** There DeepBot plays, and it
   records the belief it acted on (phase 3).
 
@@ -132,10 +131,12 @@ registers read them together:
   - the belief's `a` and `b`;
   - the opponent's leave length, the mode flag, the pool size, and the
     bag-after-refills buckets (9).
-- **Spatial**: the board, the cross-checks, and join planes for my leave and
-  the unseen tiles. The opponent's join planes are removed.
-  `DeepBotLeafEvalParams.join_planes` already drops the join planes from what
-  the model reads.
+- **Spatial**: the board and the cross-checks. The join planes are removed
+  (decided 2026-11-25, without an ablation). They made up for a conv trunk's
+  weakness at joining a square's cross-check letters with who holds them, and
+  the transformer can make that join from the cross-checks and the counts.
+  Removing them takes their code out of both encoders, and
+  `DeepBotLeafEvalParams.join_planes` goes with them.
 
 `kLeafEvalFormatVersion` becomes 3, and exports, checkpoints and the engine's
 gate follow it.
@@ -172,7 +173,8 @@ leaf_eval_hasty_rollouts tags read no leaf export and are unaffected.
 
 **The loader**: `DataFile` holds a set of sidecars, not `.forgone` alone. The
 decoder's per-task question becomes which sidecars a task reads (kLeafEval:
-`.belief`). `belief_fraction` (a trainer parameter, default 0.5) and the epoch
+`.belief`). `belief_fraction` (a trainer parameter, default 0.5, half and
+half as decided) and the epoch
 reach `decode_one` through `EpochConfig`. Each row is in belief mode with that
 probability, drawn from a seed fixed by the game, the turn and the epoch.
 
@@ -186,17 +188,14 @@ losses of the mover's expected score:
 
 Belief mode against that average is phase 2's main measurement.
 
-## 4. The runs
+## 4. The run
 
-Two deep_bot_leaf_eval tags on version 3, one with join planes and one
-without, under the same pinned leave inference model. Each reports PR 3's
-held-out read and the existing held-out metrics. The arm kept becomes
-DeepBot's generation 0 leaf. Phase 0's throughput measurement runs on it.
-David launches them.
+One deep_bot_leaf_eval tag on version 3, under the pinned leave inference
+model. It reports PR 3's held-out read and the existing held-out metrics, and
+becomes DeepBot's generation 0 leaf. Phase 0's throughput measurement runs on
+it. David launches it.
 
 ## Open questions
 
-- **`belief_fraction`**: whether half and half is right, or whether belief
-  mode, which play will use, deserves more.
 - **The sidecar's precision**: whether float16 and 8-bit fractions lose
   anything against float32 (checked in PR 1).

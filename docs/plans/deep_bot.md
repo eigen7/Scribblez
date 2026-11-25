@@ -88,17 +88,13 @@ sample from the belief, and DeepBot makes that pass every turn already. Its
 counts come from the same pass with a small extension. The belief is the same
 for every candidate at a turn, so the pass runs once per turn.
 
-**The join planes are ablated** in Phase 2: format version 3 is trained with
-them and without them, and they go if they don't earn their place. The
-encoder header makes the case for them as a conv trunk's weakness, joining a
-square's cross-check letters with who holds them. A transformer can make that
-join from the cross-checks and the counts. Release1's transformer leaf trained
-with them, and they have never been ablated on a transformer.
-
-If the ablation keeps them, only mine and the unseen tiles' stay. In belief
-mode the opponent's join planes would have to become the probability that the
-leave holds a fitting tile, which means inclusion–exclusion over the belief at
-every hook square.
+**The join planes go** in format version 3 (decided 2026-11-25, without an
+ablation). The encoder header makes the case for them as a conv trunk's
+weakness, joining a square's cross-check letters with who holds them. A
+transformer can make that join from the cross-checks and the counts. In belief
+mode the opponent's join planes would also have had to become the probability
+that the leave holds a fitting tile, which means inclusion–exclusion over the
+belief at every hook square.
 
 **Training rows.**
 - **Belief-mode rows** take a target averaged over the belief. A searched
@@ -337,7 +333,6 @@ represent any distribution of positions.
    - the format version 3 encoder, with the belief's summaries from
      `LeaveSampler`'s pass;
    - the trainer's two modes on game-result targets;
-   - the join plane ablation, with and without;
    - belief-mode loss against DeepBot's 16-draw average on held-out
      positions.
 3. **The greedy player:** DeepBot in belief mode, one evaluation per
