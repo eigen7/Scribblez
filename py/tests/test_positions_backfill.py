@@ -117,7 +117,7 @@ def test_only_the_chosen_generations_are_backfilled(tmp_path, asked):
 
 def test_a_deep_bot_leaf_eval_analysis_uses_its_export_and_the_pinned_leave_model(tmp_path, asked):
     params = deep_bot_leaf_eval.DeepBotLeafEvalParams(
-        match_leave_inference_tag="li", match_leave_inference_generation=292
+        leave_inference_tag="li", leave_inference_generation=292
     )
     ctx = _ctx(deep_bot_leaf_eval.SPEC, tmp_path, params)
     _write(ctx, 1270, OLD)

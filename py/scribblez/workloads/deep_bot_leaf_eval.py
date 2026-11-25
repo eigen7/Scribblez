@@ -14,7 +14,7 @@ The match_eval role (scribblez/match_eval) plays every
 `match_every_generations`th export as DeepBot (engine agent/deep_bot.h, the
 leaf network valuing HastyBot's best moves with no search) against a fixed
 opponent, its opponent leaves drawn from a leave inference model pinned at
-task creation (`match_leave_inference_tag`, `match_leave_inference_generation`).
+task creation (`leave_inference_tag`, `leave_inference_generation`).
 After each match the slot analyzes the known positions under the same export
 (deep_bot_leaf_eval/positions.py), which the Positions tab shows, over more
 opponent leaves (`analysis_opp_leaves`) than the matches can afford. The
@@ -146,14 +146,14 @@ class DeepBotLeafEvalParams:
         "base game seed for matches, fixed per tag so every generation faces identical deals; "
         "must be nonzero",
     )
-    match_leave_inference_tag: str = param(
+    leave_inference_tag: str = param(
         "",
         "the leave_inference tag whose model draws DeepBot's opponent leaves; required while "
         "matches are on",
     )
-    match_leave_inference_generation: int = param(
+    leave_inference_generation: int = param(
         -1,
-        "which generation of match_leave_inference_tag (-1: its latest export, pinned at task "
+        "which generation of leave_inference_tag (-1: its latest export, pinned at task "
         "creation), the same for every match of the tag",
     )
     match_candidates: int = param(10, "DeepBot's candidates: HastyBot's best by static equity")
@@ -223,7 +223,7 @@ def layout(params, vcpus: int, generator_threads: int | None) -> list[SlotPlan]:
 
 
 def _leave_paths(params, mount_root: Path) -> TagPaths:
-    return TagPaths(params.match_leave_inference_tag, LEAVE_INFERENCE, mount_root)
+    return TagPaths(params.leave_inference_tag, LEAVE_INFERENCE, mount_root)
 
 
 def finalize(spec, paths: TagPaths, params):
@@ -231,23 +231,23 @@ def finalize(spec, paths: TagPaths, params):
     creation, failing here, where the operator sees it, if it has no export."""
     if params.match_every_generations <= 0:
         return params
-    if not params.match_leave_inference_tag:
+    if not params.leave_inference_tag:
         raise params_mod.ParamsError(
-            "matches need match_leave_inference_tag (or match_every_generations=0)"
+            "matches need leave_inference_tag (or match_every_generations=0)"
         )
     leave = pinned_generation(
         _leave_paths(params, paths.mount_root),
-        params.match_leave_inference_generation,
-        "match_leave_inference",
+        params.leave_inference_generation,
+        "leave_inference",
     )
-    return replace(params, match_leave_inference_generation=leave)
+    return replace(params, leave_inference_generation=leave)
 
 
 def leave_model_path(params, mount_root: Path) -> Path:
     """The matches' leave inference model on the controller's mount."""
     paths = _leave_paths(params, mount_root)
     return paths.onnx_path(
-        export_generation(paths, params.match_leave_inference_generation, "match_leave_inference")
+        export_generation(paths, params.leave_inference_generation, "leave_inference")
     )
 
 
@@ -305,10 +305,7 @@ def backfill_exports(paths: TagPaths, params, gen: int) -> tuple[Path, Path]:
 def belief_model(paths: TagPaths, params) -> tuple[Path, str]:
     """The leave inference model the Positions tab charts the opponent's rack
     under, and its label: the matches' pinned one."""
-    label = (
-        f"{params.match_leave_inference_tag} gen {params.match_leave_inference_generation}, "
-        "the matches'"
-    )
+    label = f"{params.leave_inference_tag} gen {params.leave_inference_generation}, the matches'"
     return leave_model_path(params, paths.mount_root), label
 
 

@@ -48,7 +48,7 @@ class LeafEvalHastyRolloutsParams:
     leave_inference_tag: str = param(
         "",
         "the leave_inference tag whose model draws the opponent's leaves: the one the "
-        "deep_bot_leaf_eval tag's match_leave_inference_tag names, for the same belief",
+        "deep_bot_leaf_eval tag's leave_inference_tag names, for the same belief",
     )
     leave_inference_generation: int = param(
         -1, "which generation of leave_inference_tag (-1: its latest export, pinned at creation)"
